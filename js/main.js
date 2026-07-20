@@ -11,6 +11,7 @@ import {
 } from './contour.js';
 import { buildSolid, circleToPolygon } from './mesh.js';
 import { SCREW_STANDARDS, screwSpec, boreDiameter, recessDefaults } from './screws.js';
+import { parseLength, formatLength, formatLengthLabelled } from './units.js';
 import { toBinarySTL, toSVG, downloadBlob } from './exporters.js';
 import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
@@ -39,14 +40,28 @@ const state = {
   },
   meshData: null,
   step: 1,
+  units: 'mm', // display unit; inputs accept both (12.7 / 1/2" / 0.5 in)
 };
+
+const fmtDim = mm => formatLength(mm, state.units);
+const fmtDimL = mm => formatLengthLabelled(mm, state.units);
+const parseDim = str => parseLength(str, state.units);
 
 // ---------- widgets ----------
 
 const cornerEditor = new CornerEditor($('cornerCanvas'), () => { state.rectDirty = true; });
 const traceEditor = new TraceEditor($('traceCanvas'), {
   onChange: (throttled) => { updateTraceInfo(); if (!throttled) updateStepButtons(); },
-  onSelect: syncHolePanel,
+  onSelect: () => { syncHolePanel(); positionHoleTag(); },
+  onDraw: () => positionHoleTag(),
+  onHolePlaced: () => {
+    syncHolePanel();
+    positionHoleTag();
+    // Let the user type the diameter immediately, right at the hole.
+    const input = $('holeTagInput');
+    input.focus();
+    input.select();
+  },
 });
 let viewer = null; // created lazily on step 3
 
@@ -96,6 +111,7 @@ function goStep(n) {
     $('panel' + i).hidden = i !== n;
     $('stepBtn' + i).classList.toggle('active', i === n);
   }
+  positionHoleTag();
   if (n === 2) traceEditor.draw();
   if (n === 3) {
     if (!viewer) viewer = new Viewer3D($('stage3'));
@@ -267,8 +283,30 @@ function updateTraceInfo(msg) {
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
   el.textContent =
-    `Outline: ${outer.length} pts, ${(maxX - minX).toFixed(1)} × ${(maxY - minY).toFixed(1)} mm\n` +
+    `Outline: ${outer.length} pts, ${fmtDim(maxX - minX)} × ${fmtDimL(maxY - minY)}\n` +
     `Holes: ${holes.length} traced + ${circles.length} circles`;
+}
+
+// ---------- on-canvas hole tag (type the ⌀ right next to the hole) ----------
+
+function positionHoleTag() {
+  const tag = $('holeTag');
+  const sel = traceEditor.selection;
+  if (state.step !== 2 || !sel || sel.type !== 'circle') { tag.hidden = true; return; }
+  const pos = traceEditor.circleScreenPos(sel.idx);
+  if (!pos) { tag.hidden = true; return; }
+  const stage = $('stage2');
+  tag.hidden = false;
+  const x = Math.max(4, Math.min(stage.clientWidth - 130, pos.x + pos.r + 10));
+  const y = Math.max(4, Math.min(stage.clientHeight - 34, pos.y - 14));
+  tag.style.left = `${x}px`;
+  tag.style.top = `${y}px`;
+  const input = $('holeTagInput');
+  if (document.activeElement !== input) {
+    const c = traceEditor.circles[sel.idx];
+    input.value = fmtDim(c.d);
+  }
+  $('holeTagUnit').textContent = state.units;
 }
 
 // ---------- hole properties panel ----------
@@ -305,14 +343,15 @@ function screwFitNote(screw, d) {
   if (!screw || screw.std === 'custom') return '';
   const s = screwSpec(screw.std, screw.size);
   if (!s) return '';
+  const dStr = state.units === 'in' ? `${formatLength(d, 'in')}" (${d} mm)` : `${d} mm`;
   const nom = s.d.toFixed(2), halfP = (s.p / 2).toFixed(2);
   if (screw.fit === 'tap') {
     const tapDrill = (s.d - s.p).toFixed(2);
-    return `${screw.size} thread-into-print: ⌀${d} = ${nom} − ${halfP} (½ pitch). ` +
+    return `${screw.size} thread-into-print: ⌀${dStr} = ${nom} − ${halfP} mm (½ pitch). ` +
       `Looser on purpose than the ${tapDrill} tap drill — a screw self-threads ` +
       `into a print more easily than a tap cuts.`;
   }
-  return `${screw.size} clearance: ⌀${d} = ${nom} + ${halfP} (½ pitch).`;
+  return `${screw.size} clearance: ⌀${dStr} = ${nom} + ${halfP} mm (½ pitch).`;
 }
 
 function syncHolePanel() {
@@ -325,8 +364,8 @@ function syncHolePanel() {
   $('holePropsTitle').textContent = selected ? 'Selected hole' : 'New hole';
   $('holeXYRow').hidden = !selected;
   if (selected) {
-    $('circleX').value = c.cx.toFixed(1);
-    $('circleY').value = c.cy.toFixed(1);
+    $('circleX').value = fmtDim(c.cx);
+    $('circleY').value = fmtDim(c.cy);
   }
 
   const screw = c.screw || { std: 'custom', size: '', fit: 'clearance' };
@@ -334,7 +373,7 @@ function syncHolePanel() {
   populateScrewSizes(screw.std, screw.size);
   $('screwFitField').hidden = screw.std === 'custom';
   $('screwFit').value = screw.fit;
-  $('circleD').value = c.d;
+  $('circleD').value = fmtDim(c.d);
 
   $('holeType').value = c.type || 'through';
   $('holeSide').value = c.side || 'top';
@@ -342,9 +381,9 @@ function syncHolePanel() {
   $('holeDepthField').hidden = c.type !== 'blind';
   $('csRow').hidden = c.type !== 'cs';
   $('cbRow').hidden = c.type !== 'cb';
-  if (c.type === 'blind') $('holeDepth').value = c.depth;
-  if (c.type === 'cs') { $('csDia').value = c.csDia; $('csAngle').value = c.csAngle; }
-  if (c.type === 'cb') { $('cbDia').value = c.cbDia; $('cbDepth').value = c.cbDepth; }
+  if (c.type === 'blind') $('holeDepth').value = fmtDim(c.depth);
+  if (c.type === 'cs') { $('csDia').value = fmtDim(c.csDia); $('csAngle').value = c.csAngle; }
+  if (c.type === 'cb') { $('cbDia').value = fmtDim(c.cbDia); $('cbDepth').value = fmtDim(c.cbDepth); }
 
   // Rim treatments only apply where the hole actually opens, and a
   // countersink already breaks its own face's edge.
@@ -356,9 +395,9 @@ function syncHolePanel() {
   const eT = c.edgeTop || { mode: 'none', size: 0.5 };
   const eB = c.edgeBottom || { mode: 'none', size: 0.5 };
   $('holeEdgeTopMode').value = eT.mode;
-  $('holeEdgeTopSize').value = eT.size;
+  $('holeEdgeTopSize').value = fmtDim(eT.size);
   $('holeEdgeBottomMode').value = eB.mode;
-  $('holeEdgeBottomSize').value = eB.size;
+  $('holeEdgeBottomSize').value = fmtDim(eB.size);
 
   $('holeFitNote').textContent = screwFitNote(screw, c.d);
 }
@@ -428,12 +467,19 @@ function rebuildMesh(fit = false) {
     warns.push(...(mesh.stats.warnings || []));
     $('meshWarn').hidden = !warns.length;
     $('meshWarn').textContent = warns.join('\n');
-    $('meshInfo').textContent =
-      `Size: ${mesh.stats.sizeX.toFixed(1)} × ${mesh.stats.sizeY.toFixed(1)} × ${mesh.stats.sizeZ.toFixed(1)} mm\n` +
-      `Triangles: ${mesh.stats.triangles}` +
-      (mesh.stats.islands > 1 ? `\nParts: ${mesh.stats.islands}` : '');
+    renderMeshInfo();
     if (viewer) viewer.setMesh(mesh, fit);
   }, 120);
+}
+
+function renderMeshInfo() {
+  const mesh = state.meshData;
+  if (!mesh) { $('meshInfo').textContent = ''; return; }
+  const s = mesh.stats;
+  $('meshInfo').textContent =
+    `Size: ${fmtDim(s.sizeX)} × ${fmtDim(s.sizeY)} × ${fmtDimL(s.sizeZ)}\n` +
+    `Triangles: ${s.triangles}` +
+    (s.islands > 1 ? `\nParts: ${s.islands}` : '');
 }
 
 // ---------- wiring: step 1 ----------
@@ -457,11 +503,15 @@ $('paperOrient').addEventListener('change', e => {
   state.rectDirty = true;
 });
 $('customW').addEventListener('change', e => {
-  state.paper.customW = parseFloat(e.target.value) || 210;
+  const mm = parseDim(e.target.value);
+  if (mm > 10) state.paper.customW = mm;
+  e.target.value = fmtDim(state.paper.customW);
   state.rectDirty = true;
 });
 $('customH').addEventListener('change', e => {
-  state.paper.customH = parseFloat(e.target.value) || 297;
+  const mm = parseDim(e.target.value);
+  if (mm > 10) state.paper.customH = mm;
+  e.target.value = fmtDim(state.paper.customH);
   state.rectDirty = true;
 });
 
@@ -563,17 +613,26 @@ $('screwFit').addEventListener('change', applyScrewSelection);
 
 for (const [id, prop] of [['circleX', 'cx'], ['circleY', 'cy']]) {
   $(id).addEventListener('change', e => {
-    const v = parseFloat(e.target.value);
-    if (isFinite(v)) traceEditor.updateSelectedCircle({ [prop]: v });
+    const mm = parseDim(e.target.value);
+    if (mm !== null && isFinite(mm)) traceEditor.updateSelectedCircle({ [prop]: mm });
+    syncHolePanel();
   });
 }
 
-$('circleD').addEventListener('change', e => {
-  const v = parseFloat(e.target.value);
-  if (!(v > 0.1)) return;
-  // A hand-typed bore means the screw preset no longer applies.
-  applyHoleProps({ d: v, screw: { std: 'custom', size: '', fit: 'clearance' } });
+// Typing a bore ⌀ — in the sidebar or in the on-canvas tag. A hand-typed
+// value means the screw preset no longer applies.
+function applyTypedBore(raw) {
+  const mm = parseDim(raw);
+  if (!(mm > 0.1)) { syncHolePanel(); positionHoleTag(); return; }
+  applyHoleProps({ d: Math.round(mm * 20) / 20, screw: { std: 'custom', size: '', fit: 'clearance' } });
   syncHolePanel();
+  positionHoleTag();
+}
+$('circleD').addEventListener('change', e => applyTypedBore(e.target.value));
+$('holeTagInput').addEventListener('change', e => applyTypedBore(e.target.value));
+$('holeTagInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); applyTypedBore(e.target.value); e.target.blur(); }
+  e.stopPropagation(); // keep Delete/Backspace from hitting canvas shortcuts
 });
 
 $('holeType').addEventListener('change', e => {
@@ -604,23 +663,49 @@ for (const [face, modeId, sizeId] of [
   ['edgeBottom', 'holeEdgeBottomMode', 'holeEdgeBottomSize'],
 ]) {
   const apply = () => {
-    const size = parseFloat($(sizeId).value);
+    const size = parseDim($(sizeId).value);
     applyHoleProps({
-      [face]: { mode: $(modeId).value, size: isFinite(size) && size > 0 ? size : 0.5 },
+      [face]: { mode: $(modeId).value, size: size > 0 ? size : 0.5 },
     });
+    syncHolePanel();
   };
   $(modeId).addEventListener('change', apply);
   $(sizeId).addEventListener('change', apply);
 }
+
+$('showPoints').addEventListener('change', e => {
+  traceEditor.showPoints = e.target.checked;
+  traceEditor.draw();
+});
+
+$('normalizeBtn').addEventListener('click', () => {
+  const fit = traceEditor.convertSelectedToCircle();
+  if (fit) {
+    toast(`Hole normalized to ⌀${fmtDimL(fit.r * 2)} (fit ±${fit.rms.toFixed(2)} mm).`);
+  } else {
+    toast('Select a traced (photo-detected) hole first — click inside it or on one of its points.');
+  }
+});
+$('normalizeAllBtn').addEventListener('click', () => {
+  const n = traceEditor.convertAllRoundHoles();
+  toast(n ? `${n} traced hole${n > 1 ? 's' : ''} normalized to perfect circles.`
+          : 'No round-enough traced holes found.');
+});
 for (const [id, prop, min] of [
-  ['holeDepth', 'depth', 0.2], ['csDia', 'csDia', 0.5], ['csAngle', 'csAngle', 30],
+  ['holeDepth', 'depth', 0.2], ['csDia', 'csDia', 0.5],
   ['cbDia', 'cbDia', 0.5], ['cbDepth', 'cbDepth', 0.2],
 ]) {
   $(id).addEventListener('change', e => {
-    const v = parseFloat(e.target.value);
-    if (isFinite(v) && v >= min) applyHoleProps({ [prop]: v });
+    const mm = parseDim(e.target.value);
+    if (mm !== null && mm >= min) applyHoleProps({ [prop]: mm });
+    syncHolePanel();
   });
 }
+$('csAngle').addEventListener('change', e => {
+  const v = parseFloat(e.target.value); // degrees, not a length
+  if (isFinite(v) && v >= 30 && v <= 150) applyHoleProps({ csAngle: v });
+  syncHolePanel();
+});
 
 $('toModelBtn').addEventListener('click', () => goStep(3));
 
@@ -638,20 +723,29 @@ document.addEventListener('keydown', e => {
 
 // ---------- wiring: step 3 ----------
 
-$('thickness').addEventListener('input', e => {
-  const v = parseFloat(e.target.value);
-  if (v > 0) { state.model.thickness = v; rebuildMesh(); }
+function refreshModelFields() {
+  $('thickness').value = fmtDim(state.model.thickness);
+  $('topSize').value = fmtDim(state.model.top.size);
+  $('bottomSize').value = fmtDim(state.model.bottom.size);
+}
+$('thickness').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm > 0) { state.model.thickness = mm; rebuildMesh(); }
+  refreshModelFields();
 });
 $('topMode').addEventListener('change', e => { state.model.top.mode = e.target.value; rebuildMesh(); });
 $('bottomMode').addEventListener('change', e => { state.model.bottom.mode = e.target.value; rebuildMesh(); });
-$('topSize').addEventListener('input', e => {
-  const v = parseFloat(e.target.value);
-  if (v > 0) { state.model.top.size = v; rebuildMesh(); }
+$('topSize').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm > 0) { state.model.top.size = mm; rebuildMesh(); }
+  refreshModelFields();
 });
-$('bottomSize').addEventListener('input', e => {
-  const v = parseFloat(e.target.value);
-  if (v > 0) { state.model.bottom.size = v; rebuildMesh(); }
+$('bottomSize').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm > 0) { state.model.bottom.size = mm; rebuildMesh(); }
+  refreshModelFields();
 });
+refreshModelFields();
 bindSlider('arcSlider', 'arcVal', v => v.toFixed(0) + ' seg', v => {
   if (state.model.arcSegments !== v) { state.model.arcSegments = v; if (state.step === 3) rebuildMesh(); }
 });
@@ -675,11 +769,43 @@ for (const btn of document.querySelectorAll('.step-btn')) {
   btn.addEventListener('click', () => goStep(parseInt(btn.dataset.step, 10)));
 }
 
+// ---------- unit toggle (mm / inch) ----------
+// Relabel "(mm)"/"(in)" on labels attached to dimension fields only.
+function relabelUnits() {
+  const u = state.units;
+  for (const input of document.querySelectorAll('input[inputmode="decimal"]')) {
+    const field = input.closest('.field');
+    const label = field && field.querySelector('label');
+    if (!label) continue;
+    for (const node of label.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE && /\((mm|in)\)/.test(node.nodeValue)) {
+        node.nodeValue = node.nodeValue.replace(/\((mm|in)\)/, `(${u})`);
+      }
+    }
+  }
+}
+
+for (const btn of document.querySelectorAll('#unitToggle button')) {
+  btn.addEventListener('click', () => {
+    state.units = btn.dataset.unit;
+    document.querySelectorAll('#unitToggle button')
+      .forEach(b => b.classList.toggle('active', b === btn));
+    relabelUnits();
+    $('customW').value = fmtDim(state.paper.customW);
+    $('customH').value = fmtDim(state.paper.customH);
+    refreshModelFields();
+    updateTraceInfo();
+    renderMeshInfo();
+    syncHolePanel();
+    positionHoleTag();
+  });
+}
+
 updateStepButtons();
 
 // Test hook (used by the headless test-suite; harmless in normal use).
 window.__app = {
   state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect,
-  cornerEditor, traceEditor,
+  cornerEditor, traceEditor, syncHolePanel,
   get viewer() { return viewer; },
 };

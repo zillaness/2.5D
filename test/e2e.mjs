@@ -486,6 +486,120 @@ if (screwRes.ok) {
     screwRes.warnings.some(w => /too close|outside/.test(w)), screwRes.warnings.join(' | '));
 }
 
+// ---------- 6. Editor interactions: drag-to-size, on-canvas ⌀, units, normalize ----------
+
+const unitRes = await page.evaluate(async () => {
+  const { parseLength } = await import('./js/units.js');
+  return {
+    half_quote: parseLength('.5"', 'mm'),
+    half_frac: parseLength('1/2 in', 'mm'),
+    mixed: parseLength('1 1/2"', 'mm'),
+    bare_mm: parseLength('12.7', 'mm'),
+    bare_in_mode: parseLength('0.5', 'in'),
+    three_eighths: parseLength('3/8"', 'mm'),
+    mm_suffix_in_mode: parseLength('12mm', 'in'),
+  };
+});
+
+console.log('\nEditor interactions — units, drag-to-size, on-canvas ⌀, normalize');
+check('unit parsing: .5" = 1/2 in = 12.7 mm',
+  near(unitRes.half_quote, 12.7, 1e-9) && near(unitRes.half_frac, 12.7, 1e-9),
+  `${unitRes.half_quote}, ${unitRes.half_frac}`);
+check('unit parsing: 1 1/2" = 38.1, 3/8" = 9.525, bare-in-inch-mode 0.5 = 12.7',
+  near(unitRes.mixed, 38.1, 1e-9) && near(unitRes.three_eighths, 9.525, 1e-9) &&
+  near(unitRes.bare_in_mode, 12.7, 1e-9),
+  `${unitRes.mixed}, ${unitRes.three_eighths}, ${unitRes.bare_in_mode}`);
+check('unit parsing: bare mm + explicit mm-in-inch-mode',
+  near(unitRes.bare_mm, 12.7, 1e-9) && near(unitRes.mm_suffix_in_mode, 12, 1e-9),
+  `${unitRes.bare_mm}, ${unitRes.mm_suffix_in_mode}`);
+
+// Drag-to-size: place a hole at (90, 145) mm and drag 4 mm outward.
+await page.evaluate(() => window.__app.goStep(2));
+const dragPos = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const rect = te.canvas.getBoundingClientRect();
+  const p = te._mmToScreen({ x: 90, y: 145 });
+  const q = te._mmToScreen({ x: 94, y: 145 });
+  return { x1: rect.left + p.x, y1: rect.top + p.y, x2: rect.left + q.x, y2: rect.top + q.y };
+});
+await page.click('[data-tool="addhole"]');
+await page.mouse.move(dragPos.x1, dragPos.y1);
+await page.mouse.down();
+await page.mouse.move(dragPos.x2, dragPos.y2, { steps: 6 });
+await page.mouse.up();
+
+const placed = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const c = te.circles[te.circles.length - 1];
+  return {
+    cx: c.cx, cy: c.cy, d: c.d,
+    tagVisible: !document.getElementById('holeTag').hidden,
+    tagFocused: document.activeElement === document.getElementById('holeTagInput'),
+    tagValue: document.getElementById('holeTagInput').value,
+  };
+});
+check('drag-to-size places hole at press point with dragged ⌀',
+  near(placed.cx, 90, 0.4) && near(placed.cy, 145, 0.4) && near(placed.d, 8, 0.4),
+  `(${placed.cx.toFixed(1)}, ${placed.cy.toFixed(1)}) ⌀${placed.d}`);
+check('on-canvas ⌀ tag appears focused after placing',
+  placed.tagVisible && placed.tagFocused, `value ${placed.tagValue}`);
+
+// Type an inch value straight into the on-canvas tag.
+await page.fill('#holeTagInput', '1/4"');
+await page.keyboard.press('Enter');
+const typed = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  return te.circles[te.circles.length - 1].d;
+});
+check('typing 1/4" into the tag sets ⌀6.35 mm', near(typed, 6.35, 0.01), `${typed}`);
+
+// Normalize the traced hole (explicit button, never automatic).
+const norm = await page.evaluate(() => {
+  const app = window.__app;
+  const before = { holes: app.traceEditor.holes.length, circles: app.traceEditor.circles.length };
+  document.getElementById('normalizeAllBtn').click();
+  const te = app.traceEditor;
+  const c = te.circles[te.circles.length - 1];
+  return {
+    before,
+    after: { holes: te.holes.length, circles: te.circles.length },
+    circle: { cx: c.cx, cy: c.cy, d: c.d },
+  };
+});
+check('normalize converts the traced hole to a perfect circle',
+  norm.before.holes === 1 && norm.after.holes === 0 &&
+  norm.after.circles === norm.before.circles + 1 &&
+  near(norm.circle.cx, 105, 0.5) && near(norm.circle.cy, 145, 0.5) && near(norm.circle.d, 11.9, 0.5),
+  `⌀${norm.circle.d} at (${norm.circle.cx.toFixed(1)}, ${norm.circle.cy.toFixed(1)})`);
+
+// The normalized hole must still build a watertight solid.
+const normMesh = await page.evaluate(async () => {
+  const { buildSolid } = await import('./js/mesh.js');
+  const app = window.__app;
+  const { outer, holes, circles } = app.traceEditor.getTrace();
+  const mesh = buildSolid(outer, holes, circles, {
+    thickness: 5, top: { mode: 'none', size: 0 }, bottom: { mode: 'none', size: 0 }, arcSegments: 6,
+  });
+  if (!mesh) return { ok: false };
+  const { positions, indices } = mesh;
+  const edgeUse = new Map();
+  const vkey = i => `${positions[i * 3].toFixed(4)},${positions[i * 3 + 1].toFixed(4)},${positions[i * 3 + 2].toFixed(4)}`;
+  for (let t = 0; t < indices.length; t += 3) {
+    const ks = [vkey(indices[t]), vkey(indices[t + 1]), vkey(indices[t + 2])];
+    if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+    for (let e = 0; e < 3; e++) {
+      const a = ks[e], b = ks[(e + 1) % 3];
+      const key = a < b ? a + '|' + b : b + '|' + a;
+      edgeUse.set(key, (edgeUse.get(key) || 0) + 1);
+    }
+  }
+  let bad = 0;
+  for (const n of edgeUse.values()) if (n !== 2) bad++;
+  return { ok: true, bad, tris: mesh.stats.triangles };
+});
+check('solid with normalized + placed holes is watertight',
+  normMesh.ok && normMesh.bad === 0, `${normMesh.tris} tris, ${normMesh.bad} bad`);
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 

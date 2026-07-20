@@ -193,6 +193,48 @@ export function resampleClosed(pts, n, alignTo = null) {
   return out;
 }
 
+// Least-squares circle fit (Kåsa method): x² + y² = Ax + By + C.
+// Returns { cx, cy, r, rms } — rms is the radial fit error.
+export function fitCircle(pts) {
+  let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, sxz = 0, syz = 0, sz = 0;
+  const n = pts.length;
+  if (n < 3) return null;
+  for (const p of pts) {
+    const z = p.x * p.x + p.y * p.y;
+    sx += p.x; sy += p.y;
+    sxx += p.x * p.x; syy += p.y * p.y; sxy += p.x * p.y;
+    sxz += p.x * z; syz += p.y * z; sz += z;
+  }
+  // Normal equations: [sxx sxy sx; sxy syy sy; sx sy n] · [A B C]ᵀ = [sxz syz sz]
+  const M = [
+    [sxx, sxy, sx, sxz],
+    [sxy, syy, sy, syz],
+    [sx, sy, n, sz],
+  ];
+  for (let col = 0; col < 3; col++) {
+    let piv = col;
+    for (let r = col + 1; r < 3; r++) if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+    if (Math.abs(M[piv][col]) < 1e-12) return null;
+    if (piv !== col) [M[col], M[piv]] = [M[piv], M[col]];
+    for (let r = 0; r < 3; r++) {
+      if (r === col) continue;
+      const f = M[r][col] / M[col][col];
+      for (let c = col; c < 4; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+  const A = M[0][3] / M[0][0], B = M[1][3] / M[1][1], C = M[2][3] / M[2][2];
+  const cx = A / 2, cy = B / 2;
+  const r2 = C + cx * cx + cy * cy;
+  if (r2 <= 0) return null;
+  const r = Math.sqrt(r2);
+  let err = 0;
+  for (const p of pts) {
+    const d = Math.hypot(p.x - cx, p.y - cy) - r;
+    err += d * d;
+  }
+  return { cx, cy, r, rms: Math.sqrt(err / n) };
+}
+
 // Point-in-polygon (ray casting).
 export function pointInPolygon(pt, poly) {
   let inside = false;

@@ -35,7 +35,49 @@ header {
 h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.5px; }
 .tagline { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 8px; }
 
-#steps { display: flex; gap: 6px; margin-left: auto; }
+#steps { display: flex; gap: 6px; }
+
+.unit-toggle {
+  display: flex;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.unit-toggle button {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.unit-toggle button.active { background: var(--accent); color: #0c1015; font-weight: 700; }
+
+.hole-tag {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg3);
+  border: 1px solid var(--accent2);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  z-index: 10;
+}
+#holeTag input { /* id-level so the global input width:100% can't override */
+  width: 58px;
+  background: var(--bg2);
+  color: var(--accent2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 5px;
+  font-size: 12px;
+  font-weight: 700;
+}
 .step-btn {
   display: flex; align-items: center; gap: 8px;
   background: transparent;

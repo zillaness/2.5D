@@ -76,7 +76,14 @@ the object is segmented against the paper colour. You get:
 - **Trace correction** — drag any vertex, click an edge to insert one,
   right/Alt-click (or Delete) to remove one, delete whole holes, and undo with
   Ctrl+Z.
-- **Screw holes** — click to place round holes, then give each one a type:
+- **Normalize traced holes** — an explicit button (never automatic) replaces a
+  photo-detected hole with a least-squares fitted perfect circle, which is then
+  draggable and editable like any placed hole; "All round holes" converts every
+  round-ish one at once. Traced hole loops can also be dragged whole, and the
+  vertex control points can be toggled on/off.
+- **Screw holes** — click to place round holes (or **click-drag to size one on
+  the spot**; a floating ⌀ box appears right at the hole for typing the exact
+  value), then give each one a type:
   - **Through**, **blind** (flat-bottom pocket with a depth), **countersunk**
     (cone for flat-head screws) or **counterbored** (cylindrical recess for
     socket-head screws), each from the **top or bottom** face.
@@ -98,6 +105,11 @@ the object is segmented against the paper colour. You get:
   - Newly placed holes copy the last one you edited, so a row of identical
     screw holes takes one setup. Position and every dimension can also be
     typed exactly in mm.
+
+**Units** — display defaults to millimetres with an mm/in toggle in the
+header, and every dimension field understands both notations regardless of the
+toggle: `12.7`, `.5"`, `1/2 in`, `1 1/2"`, `3/8"`, or `12mm` all parse and
+convert.
 
 **3 — Model & export.** Enter the thickness, choose an edge style for the top
 and bottom edges — square, chamfer (45°) or fillet (quarter-round) with a size
@@ -167,6 +179,20 @@ npm run build        # regenerate dist/2.5d-local.html
   diameter (per-series tables, e.g. M3 × ⌀4.0 inserts), typically a blind
   pocket with a slight interference for the melt-in. The hole model already
   supports the geometry; what's missing is the insert dimension table and UI.
+- **Surface textures** — knurling / grip ridges on selected faces, with a
+  second detection threshold to segment sub-regions of the object from the
+  photo ("3D-printed painting": what's connected at one level vs. raised
+  detail at another).
+- **STL export quality presets** — x-fine / fine / medium / coarse, bundling
+  trace simplification, circle segment counts and curve quality into one
+  choice at export time.
+- **Gridfinity & tool-foam exports** — flip the trace into a negative: a
+  Gridfinity bin with the object's outline as a cutout, or a shadow-foam
+  layout for tool drawers (there's good open source in this space to build
+  on — e.g. the Gridfinity ecosystem and TraceFinity-style tracers).
+- **Container outline library** — save tool-drawer and toolbox outlines for
+  reuse across projects, for both Gridfinity and plain foam workflows.
+- **Custom Gridfinity baseplates** shaped to a saved drawer/toolbox outline.
 - Radial lens-distortion estimation from the paper's edges (they should be
   straight — their curvature measures the distortion).
 - DXF export of the outline alongside SVG.
