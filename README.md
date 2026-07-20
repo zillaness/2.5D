@@ -182,53 +182,66 @@ npm run build        # regenerate dist/2.5d-local.html
 
 ## Roadmap
 
-- **Everyday calibration objects** — use a credit/bank card (ISO ID-1:
-  85.60 × 53.98 mm), US dollar bill (156.1 × 66.3 mm), or a coin (US quarter
-  ⌀24.26 mm) instead of a sheet of paper. Cards and bills are rectangles, so
-  they calibrate perspective exactly like paper (just smaller); a coin only
-  sets scale and needs a straight-down shot.
-- **Rotate view 90° left/right** — turn the photo/rectified view in quarter
-  steps to reorient the work (e.g. paper shot sideways, or just a more
-  comfortable editing angle) without retaking the photo or re-dragging
-  corners.
-- **Normalize radiuses & curves** — like hole normalization, but for the
-  outline: select a run of points (a traced rounded corner, an arc-ish edge)
-  and replace it with a perfect fitted arc of an editable radius; snap
-  near-straight runs to true lines. Turns a noisy trace into clean
-  CAD-quality geometry piece by piece.
-- **Point editing upgrades** — densify/decimate locally (add detail where the
-  trace needs it, thin out over-traced runs), Ctrl+click to build a
-  multi-selection of points, and Shift+drag marquee selection — then move or
-  delete the group together. (Single-point insert on an edge and delete
-  already exist.)
+Ordered by value-per-effort within each tier.
+
+### Tier 1 — quick wins (high value ÷ low effort)
+
 - **Hole drag interaction rework** — move by dragging the centre (move/hand
   cursor), resize by dragging the rim (double-headed arrow cursor), for
   existing holes as well as new ones. Today resize-by-drag only works while
   first placing a hole in Add-hole mode; dragging an existing hole always
   moves it.
+- **Credit card / dollar bill calibration** — a card (ISO ID-1:
+  85.60 × 53.98 mm) or US bill (156.1 × 66.3 mm) is a rectangle, so it
+  calibrates perspective exactly like paper — just new size presets, and you
+  always have one in a wallet.
 - **Heat-set threaded inserts** — a hole preset sized to an insert's outer
   diameter (per-series tables, e.g. M3 × ⌀4.0 inserts), typically a blind
   pocket with a slight interference for the melt-in. The hole model already
   supports the geometry; what's missing is the insert dimension table and UI.
+- **DXF export** of the outline alongside SVG (better CAD interop).
+- **STL export quality presets** — x-fine / fine / medium / coarse, bundling
+  trace simplification, circle segment counts and curve quality into one
+  choice at export time.
+
+### Tier 2 — solid middles (worth it, more work)
+
+- **Point multi-select** — Ctrl+click to build a selection, Shift+drag
+  marquee — then move or delete the group together. Build together with:
+- **Normalize radiuses & curves** — select a run of points (a traced rounded
+  corner, an arc-ish edge) and replace it with a perfect fitted arc of an
+  editable radius; snap near-straight runs to true lines. Shares the
+  selection model and the least-squares fit machinery with hole
+  normalization.
+- **Local densify/decimate** — add detail where the trace needs it, thin out
+  over-traced runs. (Single-point insert on an edge and delete already
+  exist.)
+- **Coin calibration (scale only)** — drag a circle over a known coin (US
+  quarter ⌀24.26 mm); needs a straight-down shot since a coin can't correct
+  perspective.
+- **Container outline library** — save tool-drawer and toolbox outlines for
+  reuse across projects (builds on the project-JSON format).
+- **Rotate view 90° left/right** — reorient photo, rectified view and all
+  traced geometry in quarter turns without re-dragging corners.
+
+### Tier 3 — big bets (high value, real effort)
+
+- **Tool-foam negative export** — shadow-foam drawer layout: a block minus
+  the offset outline. The simplest of the organization features; start here.
+- **Gridfinity bin export** — a bin with the object's outline as a cutout
+  (build on the open Gridfinity spec; TraceFinity-style tracers are prior
+  art).
+- **Custom Gridfinity baseplates** shaped to a saved drawer/toolbox outline.
 - **Surface textures** — knurling / grip ridges on selected faces, with a
   second detection threshold to segment sub-regions of the object from the
   photo ("3D-printed painting": what's connected at one level vs. raised
   detail at another).
-- **STL export quality presets** — x-fine / fine / medium / coarse, bundling
-  trace simplification, circle segment counts and curve quality into one
-  choice at export time.
-- **Gridfinity & tool-foam exports** — flip the trace into a negative: a
-  Gridfinity bin with the object's outline as a cutout, or a shadow-foam
-  layout for tool drawers (there's good open source in this space to build
-  on — e.g. the Gridfinity ecosystem and TraceFinity-style tracers).
-- **Container outline library** — save tool-drawer and toolbox outlines for
-  reuse across projects, for both Gridfinity and plain foam workflows.
-- **Custom Gridfinity baseplates** shaped to a saved drawer/toolbox outline.
-- Radial lens-distortion estimation from the paper's edges (they should be
-  straight — their curvature measures the distortion).
-- DXF export of the outline alongside SVG.
-- **Beyond 2.5D: photogrammetry** (long-term) — multiple photos around the
-  object reconstructed into a full 3D mesh (structure-from-motion +
-  multi-view stereo). A different order of machinery than the current
-  single-shot pipeline; the paper would still serve as the scale/ground
-  reference.
+- **Radial lens-distortion estimation** from the paper's edges (they should
+  be straight — their curvature measures the distortion).
+
+### Horizon
+
+- **Beyond 2.5D: photogrammetry** — multiple photos around the object
+  reconstructed into a full 3D mesh (structure-from-motion + multi-view
+  stereo). A different order of machinery than the current single-shot
+  pipeline; the paper would still serve as the scale/ground reference.
