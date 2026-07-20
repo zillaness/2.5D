@@ -175,6 +175,11 @@ npm run build        # regenerate dist/2.5d-local.html
 
 ## Roadmap
 
+- **Normalize radiuses & curves** — like hole normalization, but for the
+  outline: select a run of points (a traced rounded corner, an arc-ish edge)
+  and replace it with a perfect fitted arc of an editable radius; snap
+  near-straight runs to true lines. Turns a noisy trace into clean
+  CAD-quality geometry piece by piece.
 - **Point editing upgrades** — densify/decimate locally (add detail where the
   trace needs it, thin out over-traced runs), Ctrl+click to build a
   multi-selection of points, and Shift+drag marquee selection — then move or
