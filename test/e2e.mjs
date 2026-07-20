@@ -302,6 +302,42 @@ if (meshRes.ok) {
 }
 await page.screenshot({ path: path.join(shotDir, 'step3-model.png') });
 
+// ---------- 3b. Export buttons deliver real downloads ----------
+
+console.log('\nExports — real download events');
+{
+  const [stlDl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#exportStlBtn'),
+  ]);
+  const stlPath = stlDl ? await stlDl.path().catch(() => null) : null;
+  const expected = 84 + 50 * (await page.evaluate(() => window.__app.state.meshData.stats.triangles));
+  const stlSize = stlPath ? fs.statSync(stlPath).size : -1;
+  check('Export STL fires a download with the right name and size',
+    !!stlDl && /-2p5d\.stl$/.test(stlDl.suggestedFilename()) && stlSize === expected,
+    stlDl ? `${stlDl.suggestedFilename()}, ${stlSize} bytes (expected ${expected})` : 'no download event');
+
+  const [svgDl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#exportSvgBtn'),
+  ]);
+  const svgPath = svgDl ? await svgDl.path().catch(() => null) : null;
+  const svgTxt = svgPath ? fs.readFileSync(svgPath, 'utf8') : '';
+  check('Export SVG fires a download with valid SVG content',
+    !!svgDl && /-outline\.svg$/.test(svgDl.suggestedFilename()) &&
+    svgTxt.includes('<svg') && svgTxt.includes('width="210mm"'),
+    svgDl ? `${svgDl.suggestedFilename()}, ${svgTxt.length} chars` : 'no download event');
+
+  const fallback = await page.evaluate(() => ({
+    visible: !document.getElementById('exportFallback').hidden,
+    name: document.getElementById('exportFallbackName').textContent,
+    href: document.getElementById('exportFallbackLink').href.startsWith('blob:'),
+  }));
+  check('fallback save link is offered after export',
+    fallback.visible && fallback.href && /-outline\.svg$/.test(fallback.name),
+    fallback.name);
+}
+
 // ---------- 4. Stress: extreme edge treatments must stay watertight ----------
 
 const stressRes = await page.evaluate(async () => {
@@ -599,6 +635,49 @@ const normMesh = await page.evaluate(async () => {
 });
 check('solid with normalized + placed holes is watertight',
   normMesh.ok && normMesh.bad === 0, `${normMesh.tris} tris, ${normMesh.bad} bad`);
+
+// ---------- 7. Project save -> fresh page -> load (the artifact escape hatch) ----------
+
+const savedProject = await page.evaluate(() => {
+  document.getElementById('projectBtn').click();
+  const app = window.__app;
+  return {
+    text: document.getElementById('projText').value,
+    outerPts: app.traceEditor.outer.length,
+    circles: app.traceEditor.circles.length,
+  };
+});
+
+await page.reload();
+await page.waitForFunction(() => window.__app && window.ClipperLib);
+await page.evaluate(text => {
+  document.getElementById('projectBtn').click();
+  document.getElementById('projText').value = text;
+  document.getElementById('projLoadTextBtn').click();
+}, savedProject.text);
+await page.waitForFunction(() =>
+  window.__app.state.rect && window.__app.traceEditor.outer.length >= 3, null, { timeout: 10000 });
+
+const restored = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 700));
+  return {
+    outerPts: app.traceEditor.outer.length,
+    circles: app.traceEditor.circles.length,
+    hasRect: !!app.state.rect,
+    meshTris: app.state.meshData ? app.state.meshData.stats.triangles : 0,
+    paper: app.state.paper.size,
+  };
+});
+
+console.log('\nProject transfer — save, reload, load, export-ready');
+check('project JSON round-trips the full trace after a fresh page load',
+  restored.outerPts === savedProject.outerPts && restored.circles === savedProject.circles &&
+  restored.hasRect && restored.paper === 'A4',
+  `${restored.outerPts} pts, ${restored.circles} circles, rect ${restored.hasRect}`);
+check('restored project builds a mesh (export-ready with no photo re-trace)',
+  restored.meshTris > 100, `${restored.meshTris} tris`);
 
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;

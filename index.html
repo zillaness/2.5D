@@ -18,6 +18,7 @@
 <body>
 <header>
   <h1>2.5D <span class="tagline">photo → traced outline → printable solid</span></h1>
+  <button id="projectBtn" class="btn small" title="Save, copy, or load the whole project (corners, trace, holes, settings)">💾 Project</button>
   <div id="unitToggle" class="unit-toggle" title="Display unit — you can always type either (e.g. 12.7, 1/2&quot;, 0.5 in)">
     <button data-unit="mm" class="active">mm</button>
     <button data-unit="in">in</button>
@@ -267,6 +268,13 @@
       <div class="btn-row">
         <button id="exportSvgBtn" class="btn">⬇ Outline SVG</button>
       </div>
+      <p id="exportFallback" class="hint" hidden>
+        Exported <b id="exportFallbackName"></b> — check your downloads folder.
+        Nothing appeared? <a id="exportFallbackLink" href="#">Click here to save it directly</a>.
+        Some embedded views (like the Claude artifact) block downloads entirely —
+        if the direct link does nothing either, use the offline
+        <code>dist/2.5d-local.html</code> or a GitHub Pages copy.
+      </p>
       <p class="hint">STL is in millimetres, z-up, centred at the origin.</p>
     </section>
 
@@ -293,6 +301,31 @@
     <div id="stage3" class="stage-view" hidden></div>
   </section>
 </main>
+
+<div id="projModal" class="modal-overlay" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>Project — save / move / load</h3>
+      <button id="projCloseBtn" class="btn small">✕</button>
+    </div>
+    <label class="check">
+      <input type="checkbox" id="projIncludePhoto">
+      Include original photo (larger, enables re-tracing later)
+    </label>
+    <textarea id="projText" rows="7" spellcheck="false"
+      placeholder="Your project JSON appears here — or paste a saved project and press “Load from text”."></textarea>
+    <div class="btn-row">
+      <button id="projDownloadBtn" class="btn primary">⬇ Download file</button>
+      <button id="projCopyBtn" class="btn">📋 Copy</button>
+      <button id="projLoadTextBtn" class="btn">Load from text</button>
+      <label class="btn" style="margin:4px 0">Load from file…<input type="file" id="projFileInput" accept=".json,application/json" hidden></label>
+    </div>
+    <p class="hint">Embedded views (like the Claude artifact) block file downloads.
+    To move your work: <b>Copy</b> here → open the offline <code>dist/2.5d-local.html</code>
+    (or a hosted copy) → Project → paste → <b>Load from text</b>. Corners, trace,
+    holes and settings all transfer, so nothing needs re-tracing.</p>
+  </div>
+</div>
 
 <div id="toast" hidden></div>
 

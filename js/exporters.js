@@ -53,8 +53,9 @@ export function downloadBlob(blob, filename) {
   a.download = filename;
   document.body.appendChild(a);
   a.click();
+  // Revoke late: some browsers abort the save if the URL disappears too soon.
   setTimeout(() => {
     URL.revokeObjectURL(a.href);
     a.remove();
-  }, 250);
+  }, 10_000);
 }

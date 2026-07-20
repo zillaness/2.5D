@@ -111,6 +111,13 @@ header, and every dimension field understands both notations regardless of the
 toggle: `12.7`, `.5"`, `1/2 in`, `1 1/2"`, `3/8"`, or `12mm` all parse and
 convert.
 
+**Projects** — the 💾 Project button (header) saves or restores everything:
+paper settings, corners, the trace with all holes, and the rectified image,
+as a JSON file or via copy/paste. That copy/paste path matters in embedded
+views that block file downloads (the Claude artifact does): copy the project
+there, paste it into the offline `dist/2.5d-local.html` or a hosted copy, and
+export from that — no re-tracing.
+
 **3 — Model & export.** Enter the thickness, choose an edge style for the top
 and bottom edges — square, chamfer (45°) or fillet (quarter-round) with a size
 in mm — and preview the solid in 3D. Export a binary **STL** (millimetres,
@@ -175,6 +182,11 @@ npm run build        # regenerate dist/2.5d-local.html
 
 ## Roadmap
 
+- **Everyday calibration objects** — use a credit/bank card (ISO ID-1:
+  85.60 × 53.98 mm), US dollar bill (156.1 × 66.3 mm), or a coin (US quarter
+  ⌀24.26 mm) instead of a sheet of paper. Cards and bills are rectangles, so
+  they calibrate perspective exactly like paper (just smaller); a coin only
+  sets scale and needs a straight-down shot.
 - **Rotate view 90° left/right** — turn the photo/rectified view in quarter
   steps to reorient the work (e.g. paper shot sideways, or just a more
   comfortable editing angle) without retaking the photo or re-dragging
@@ -215,3 +227,8 @@ npm run build        # regenerate dist/2.5d-local.html
 - Radial lens-distortion estimation from the paper's edges (they should be
   straight — their curvature measures the distortion).
 - DXF export of the outline alongside SVG.
+- **Beyond 2.5D: photogrammetry** (long-term) — multiple photos around the
+  object reconstructed into a full 3D mesh (structure-from-motion +
+  multi-view stereo). A different order of machinery than the current
+  single-shot pipeline; the paper would still serve as the scale/ground
+  reference.

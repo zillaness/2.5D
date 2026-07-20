@@ -100,8 +100,8 @@ function guessOrientation(corners) {
 // ---------- step navigation ----------
 
 function goStep(n) {
-  if (n >= 2 && !state.image) return;
-  if (n === 2 && state.rectDirty) {
+  if (n >= 2 && !state.image && !state.rect) return; // rect alone = restored project
+  if (n === 2 && state.rectDirty && state.image) {
     if (!doRectify()) return;
     retrace();
   }
@@ -114,17 +114,26 @@ function goStep(n) {
   positionHoleTag();
   if (n === 2) traceEditor.draw();
   if (n === 3) {
-    if (!viewer) viewer = new Viewer3D($('stage3'));
-    viewer.resize();
+    // A failed 3D preview (e.g. WebGL unavailable) must never block mesh
+    // building or export.
+    if (!viewer) {
+      try {
+        viewer = new Viewer3D($('stage3'));
+      } catch (err) {
+        console.error('3D preview unavailable', err);
+        toast('3D preview unavailable in this browser — the STL export still works.');
+      }
+    }
+    if (viewer) viewer.resize();
     rebuildMesh(true);
   }
   updateStepButtons();
 }
 
 function updateStepButtons() {
-  $('stepBtn2').disabled = !state.image;
+  $('stepBtn2').disabled = !state.image && !state.rect;
   $('stepBtn3').disabled = !(traceEditor.outer && traceEditor.outer.length >= 3);
-  $('toTraceBtn').disabled = !state.image;
+  $('toTraceBtn').disabled = !state.image && !state.rect;
   $('detectBtn').disabled = !state.image;
   $('resetCornersBtn').disabled = !state.image;
   $('toModelBtn').disabled = !(traceEditor.outer && traceEditor.outer.length >= 3);
@@ -179,6 +188,7 @@ function autoDetect(announce = true) {
 }
 
 function doRectify() {
+  if (!state.image) return false;
   const { w, h } = currentPaper();
   const res = rectify(state.image, state.corners, w, h);
   if (!res) {
@@ -750,10 +760,26 @@ bindSlider('arcSlider', 'arcVal', v => v.toFixed(0) + ' seg', v => {
   if (state.model.arcSegments !== v) { state.model.arcSegments = v; if (state.step === 3) rebuildMesh(); }
 });
 
+// Trigger the download and keep a live fallback link the user can click
+// directly — a plain user-gesture click on a real anchor is the most widely
+// permitted download path, and if even that does nothing the surrounding
+// message explains the environment is blocking downloads.
+let fallbackURL = null;
+function deliverExport(blob, filename) {
+  downloadBlob(blob, filename);
+  if (fallbackURL) URL.revokeObjectURL(fallbackURL);
+  fallbackURL = URL.createObjectURL(blob);
+  const link = $('exportFallbackLink');
+  link.href = fallbackURL;
+  link.download = filename;
+  $('exportFallbackName').textContent = filename;
+  $('exportFallback').hidden = false;
+}
+
 $('exportStlBtn').addEventListener('click', () => {
   if (!state.meshData) { toast('No model to export yet.'); return; }
   const blob = toBinarySTL(state.meshData.positions, state.meshData.indices, state.fileName);
-  downloadBlob(blob, `${state.fileName}-2p5d.stl`);
+  deliverExport(blob, `${state.fileName}-2p5d.stl`);
 });
 $('exportSvgBtn').addEventListener('click', () => {
   const { outer, holes, circles } = traceEditor.getTrace();
@@ -761,7 +787,178 @@ $('exportSvgBtn').addEventListener('click', () => {
   const { w, h } = currentPaper();
   // SVG is a 2D profile: screw holes export at their bore diameter.
   const allHoles = [...holes, ...circles.map(c => circleToPolygon(c.cx, c.cy, c.d))];
-  downloadBlob(toSVG(outer, allHoles, w, h), `${state.fileName}-outline.svg`);
+  deliverExport(toSVG(outer, allHoles, w, h), `${state.fileName}-outline.svg`);
+});
+
+// ---------- project save / move / load ----------
+// The whole working state as JSON: paper + corners, trace, holes, model
+// settings, and the rectified image (so editing continues without the photo).
+// This is also the escape hatch for environments that block downloads (the
+// Claude artifact): copy the JSON out, paste it into a local copy, export.
+
+function imageToDataURL(img, type = 'image/jpeg', q = 0.9) {
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth || img.width;
+  c.height = img.naturalHeight || img.height;
+  c.getContext('2d').drawImage(img, 0, 0);
+  return c.toDataURL(type, q);
+}
+
+function serializeProject(includePhoto) {
+  return JSON.stringify({
+    app: '2.5D', version: 1,
+    fileName: state.fileName,
+    units: state.units,
+    paper: state.paper,
+    corners: state.corners,
+    seg: state.seg,
+    model: state.model,
+    trace: traceEditor.getTrace(),
+    holeTemplate: traceEditor.holeTemplate,
+    pxPerMm: state.rect ? state.rect.pxPerMm : null,
+    rectified: state.rect ? state.rect.canvas.toDataURL('image/jpeg', 0.85) : null,
+    photo: includePhoto && state.image ? imageToDataURL(state.image) : null,
+  });
+}
+
+function loadProject(p) {
+  if (!p || (p.app && p.app !== '2.5D')) { toast('Not a 2.5D project.'); return; }
+  if (!p.trace && !p.corners) { toast('Project has no trace or corners to load.'); return; }
+
+  if (p.fileName) state.fileName = p.fileName;
+  if (p.units === 'mm' || p.units === 'in') {
+    state.units = p.units;
+    document.querySelectorAll('#unitToggle button')
+      .forEach(b => b.classList.toggle('active', b.dataset.unit === state.units));
+    relabelUnits();
+  }
+  if (p.paper) {
+    state.paper = { ...state.paper, ...p.paper };
+    sizeSel.value = state.paper.size;
+    $('paperOrient').value = state.paper.orientation;
+    $('customSizeRow').hidden = state.paper.size !== 'custom';
+    $('customW').value = fmtDim(state.paper.customW);
+    $('customH').value = fmtDim(state.paper.customH);
+  }
+  if (p.seg) {
+    state.seg = { ...state.seg, ...p.seg };
+    $('threshSlider').value = state.seg.threshold;
+    $('threshVal').textContent = state.seg.threshold;
+    $('cleanupSlider').value = state.seg.cleanup;
+    $('simplifySlider').value = Math.round(state.seg.simplify * 10);
+    $('smoothSlider').value = state.seg.smooth;
+    $('detectHoles').checked = state.seg.detectHoles;
+  }
+  if (p.model) {
+    state.model = { ...state.model, ...p.model };
+    $('topMode').value = state.model.top.mode;
+    $('bottomMode').value = state.model.bottom.mode;
+    $('arcSlider').value = state.model.arcSegments;
+    refreshModelFields();
+  }
+
+  const applyTrace = () => {
+    if (p.trace) {
+      traceEditor.setTrace(p.trace.outer || [], p.trace.holes || []);
+      traceEditor.setCircles(p.trace.circles || []);
+    }
+    if (p.holeTemplate) traceEditor.holeTemplate = structuredClone(p.holeTemplate);
+    updateStepButtons();
+    updateTraceInfo();
+    $('projModal').hidden = true;
+    toast('Project loaded.');
+    const hasTrace = p.trace && p.trace.outer && p.trace.outer.length >= 3;
+    goStep(hasTrace ? (state.rect ? 2 : 3) : 1);
+  };
+
+  const restoreRect = () => {
+    if (p.rectified && p.pxPerMm) {
+      const im = new Image();
+      im.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = im.width; c.height = im.height;
+        c.getContext('2d').drawImage(im, 0, 0);
+        state.rect = { canvas: c, pxPerMm: p.pxPerMm };
+        state.rectDirty = false;
+        state.diffMap = computeDiffMap(c);
+        traceEditor.setRectified(c, p.pxPerMm);
+        applyTrace();
+      };
+      im.onerror = applyTrace;
+      im.src = p.rectified;
+    } else {
+      applyTrace();
+    }
+  };
+
+  if (p.photo) {
+    const img = new Image();
+    img.onload = () => {
+      state.image = img;
+      $('dropHint').hidden = true;
+      cornerEditor.setImage(img);
+      if (p.corners) { state.corners = p.corners; cornerEditor.setCorners(p.corners); }
+      state.rectDirty = !p.rectified;
+      restoreRect();
+    };
+    img.onerror = restoreRect;
+    img.src = p.photo;
+  } else {
+    if (p.corners) { state.corners = p.corners; cornerEditor.setCorners(p.corners); }
+    restoreRect();
+  }
+}
+
+function refreshProjectText() {
+  $('projText').value = serializeProject($('projIncludePhoto').checked);
+}
+
+$('projectBtn').addEventListener('click', () => {
+  refreshProjectText();
+  $('projModal').hidden = false;
+});
+$('projCloseBtn').addEventListener('click', () => { $('projModal').hidden = true; });
+$('projModal').addEventListener('pointerdown', e => {
+  if (e.target === $('projModal')) $('projModal').hidden = true;
+});
+$('projIncludePhoto').addEventListener('change', refreshProjectText);
+
+$('projDownloadBtn').addEventListener('click', () => {
+  const blob = new Blob([$('projText').value || serializeProject($('projIncludePhoto').checked)],
+    { type: 'application/json' });
+  downloadBlob(blob, `${state.fileName}-project.json`);
+  toast('Project file download started — check your downloads folder.');
+});
+$('projCopyBtn').addEventListener('click', async () => {
+  refreshProjectText();
+  const text = $('projText').value;
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch { /* fall through */ }
+  if (!ok) {
+    $('projText').focus();
+    $('projText').select();
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+  }
+  toast(ok ? 'Project copied to clipboard.'
+           : 'Copy blocked — select the text above and copy manually (Ctrl+A, Ctrl+C).');
+});
+$('projLoadTextBtn').addEventListener('click', () => {
+  try {
+    loadProject(JSON.parse($('projText').value));
+  } catch {
+    toast('That is not valid project JSON — paste the whole text, then Load.');
+  }
+});
+$('projFileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try { loadProject(JSON.parse(reader.result)); }
+    catch { toast('That file is not a valid 2.5D project.'); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
 });
 
 // Step tab buttons
