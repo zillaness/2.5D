@@ -402,6 +402,10 @@ const screwRes = await page.evaluate(async () => {
     // Blind M3 tap fit from top, 4 deep, at (80, 158) -> model (-25, -13)
     { cx: 80, cy: 158, d: boreDiameter('metric', 'M3', 'tap'),
       type: 'blind', side: 'top', depth: 4 },
+    // Through hole with rim treatments: 1 mm chamfer top, 0.8 mm fillet
+    // bottom, at (105, 130) -> model (0, 15)
+    { cx: 105, cy: 130, d: 4.35, type: 'through', side: 'top',
+      edgeTop: { mode: 'chamfer', size: 1 }, edgeBottom: { mode: 'fillet', size: 0.8 } },
     // Through hole overlapping the outline edge -> must demote with warning
     { cx: 146, cy: 158, d: 6, type: 'cb', side: 'top', cbDia: 11, cbDepth: 2 },
   ];
@@ -434,6 +438,8 @@ const screwRes = await page.evaluate(async () => {
   const blind = screwHoles[2];
   const blindFloor = radiiAt(-25, -13, t - blind.depth, blind.d / 2 + 0.3);
   const blindBot = radiiAt(-25, -13, 0, 6); // should be EMPTY (no bottom opening)
+  const rimTop = minMax(radiiAt(0, 15, t, 3.6));   // bore/2 + 1 mm chamfer
+  const rimBot = minMax(radiiAt(0, 15, 0, 3.6));   // bore/2 + 0.8 mm fillet
 
   return {
     ok: true,
@@ -443,7 +449,7 @@ const screwRes = await page.evaluate(async () => {
     m3clear: boreDiameter('metric', 'M3', 'clearance'),
     n632tap: boreDiameter('sae', '#6-32', 'tap'),
     m5bore: m5,
-    csTop, csBot, cbBot, cbShelf,
+    csTop, csBot, cbBot, cbShelf, rimTop, rimBot,
     blindFloorCount: blindFloor.length,
     blindBotCount: blindBot.length,
     tris: mesh.stats.triangles,
@@ -470,6 +476,12 @@ if (screwRes.ok) {
   check('blind hole has a floor and no bottom opening',
     screwRes.blindFloorCount > 8 && screwRes.blindBotCount === 0,
     `floor verts ${screwRes.blindFloorCount}, bottom verts ${screwRes.blindBotCount}`);
+  check('rim chamfer widens top opening to bore/2 + 1',
+    near(screwRes.rimTop[0], 3.175, 0.1) && near(screwRes.rimTop[1], 3.175, 0.1),
+    `${screwRes.rimTop[0].toFixed(2)}..${screwRes.rimTop[1].toFixed(2)}`);
+  check('rim fillet widens bottom opening to bore/2 + 0.8',
+    near(screwRes.rimBot[0], 2.975, 0.1) && near(screwRes.rimBot[1], 2.975, 0.1),
+    `${screwRes.rimBot[0].toFixed(2)}..${screwRes.rimBot[1].toFixed(2)}`);
   check('edge-overlapping hole demoted with warning',
     screwRes.warnings.some(w => /too close|outside/.test(w)), screwRes.warnings.join(' | '));
 }

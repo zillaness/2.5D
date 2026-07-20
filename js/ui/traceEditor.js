@@ -29,6 +29,8 @@ export class TraceEditor {
     this.holeTemplate = {
       d: 5, type: 'through', side: 'top', depth: 3,
       csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+      edgeTop: { mode: 'none', size: 0.5 },
+      edgeBottom: { mode: 'none', size: 0.5 },
       screw: { std: 'custom', size: '', fit: 'clearance' },
     };
     this.selection = null;   // {type:'vertex', loop, idx} | {type:'circle', idx}
@@ -150,11 +152,15 @@ export class TraceEditor {
     return check(-1, this.outer);
   }
 
-  // Largest diameter drawn for a hole (bore or recess).
+  // Largest diameter drawn for a hole (bore, recess, or rim treatment).
   _holeMaxDia(c) {
-    if (c.type === 'cs') return Math.max(c.d, c.csDia || 0);
-    if (c.type === 'cb') return Math.max(c.d, c.cbDia || 0);
-    return c.d;
+    const rim = e => (e && e.mode !== 'none' ? (e.size || 0) * 2 : 0);
+    const onTop = c.side !== 'bottom';
+    let topDia = c.d, botDia = c.d;
+    if (c.type === 'cs') { if (onTop) topDia = Math.max(topDia, c.csDia || 0); else botDia = Math.max(botDia, c.csDia || 0); }
+    if (c.type === 'cb') { if (onTop) topDia = Math.max(topDia, c.cbDia || 0); else botDia = Math.max(botDia, c.cbDia || 0); }
+    if (c.type === 'blind') { if (onTop) botDia = 0; else topDia = 0; }
+    return Math.max(c.d, topDia + rim(c.edgeTop), botDia + rim(c.edgeBottom));
   }
 
   _hitCircle(sp) {

@@ -37,7 +37,25 @@ python3 -m http.server 8000     # or: npx serve .
 # open http://localhost:8000
 ```
 
-Hosting on GitHub Pages (or any static host) also works as-is.
+### Hosting on GitHub Pages (optional)
+
+GitHub Pages serves a repo's files as a website, free, straight from GitHub —
+no server of your own, and since this app is plain static files with no build
+step, it works as-is:
+
+1. On GitHub open **Settings → Pages** for this repository.
+2. Under **Build and deployment**, set **Source** to *Deploy from a branch*,
+   pick the branch (e.g. `main` after merging) and folder **/ (root)**, and
+   save.
+3. After a minute the site is live at `https://<user>.github.io/<repo>/`
+   (for this repo: `https://zillaness.github.io/2.5D/`). Every push to that
+   branch redeploys automatically.
+
+Notes: the site URL is public to anyone who has it (Pages from a free-plan
+repo is always a public site), but that only exposes the app itself — photos
+are processed entirely in the visitor's browser and never uploaded anywhere.
+If you'd rather not publish at all, the single-file `dist/2.5d-local.html` is
+the fully offline option.
 
 ## Workflow
 
@@ -71,6 +89,12 @@ the object is segmented against the paper colour. You get:
     room. The computed ⌀ is shown with its math and stays editable.
   - Countersink ⌀/angle (90° metric, 82° SAE) and counterbore ⌀/depth are
     seeded from head dimensions with printing clearance — all editable.
+  - Each hole's **rim** can also get its own edge break — square, **chamfer**
+    (45°) or **fillet** (quarter-round) with a size in mm, independently at the
+    top and bottom face. Rows appear only where the hole actually opens (a
+    blind hole has one rim; a countersink already breaks its own face's edge).
+    Handy for de-burring-style chamfers on print-facing holes or a soft fillet
+    where a strap or cable passes through.
   - Newly placed holes copy the last one you edited, so a row of identical
     screw holes takes one setup. Position and every dimension can also be
     typed exactly in mm.

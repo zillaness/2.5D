@@ -408,6 +408,67 @@ function holeFeatures(c, t, warnings) {
   };
 }
 
+// Apply a rim treatment (chamfer or fillet) to a hole's opening at one face.
+// A rim chamfer is a 45° cone widening toward the face; a rim fillet is a
+// quarter-round arc. Modifies feat in place. Skipped (with a warning where
+// meaningful) when the face has no opening or already carries a countersink.
+function applyRim(feat, face, t, edge, arcSegments, warnings) {
+  if (!edge || edge.mode === 'none' || !(edge.size > 0)) return;
+  if (face === 'top' ? feat.rTop === null : feat.rBottom === null) return; // no opening
+  const idx = feat.bands.findIndex(b =>
+    face === 'top' ? Math.abs(b.z1 - t) < 1e-9 : Math.abs(b.z0) < 1e-9);
+  if (idx < 0) return;
+  const b = feat.bands[idx];
+  if (Math.abs(b.r0 - b.r1) > 1e-9) {
+    warnings.push('Hole edge treatment skipped on a countersink face (the cone already breaks that edge).');
+    return;
+  }
+  let s = edge.size;
+  const h = b.z1 - b.z0;
+  if (s > h - 0.05) {
+    s = h - 0.05;
+    if (s <= 0.01) { warnings.push('No room for a hole edge treatment — skipped.'); return; }
+    warnings.push('Hole edge treatment reduced to fit the wall height.');
+  }
+  const r = b.r0;
+  const arcs = Math.max(2, arcSegments);
+  const newBands = [];
+  if (face === 'top') {
+    b.z1 = t - s;
+    if (edge.mode === 'chamfer') {
+      newBands.push({ z0: t - s, r0: r, z1: t, r1: r + s });
+    } else {
+      let prev = { z: t - s, r };
+      for (let k = 1; k <= arcs; k++) {
+        const th = (k / arcs) * Math.PI / 2;
+        const pt = { z: (t - s) + s * Math.sin(th), r: r + s - s * Math.cos(th) };
+        newBands.push({ z0: prev.z, r0: prev.r, z1: pt.z, r1: pt.r });
+        prev = pt;
+      }
+    }
+    feat.bands.splice(idx + 1, 0, ...newBands);
+    feat.rTop = r + s;
+  } else {
+    b.z0 = s;
+    if (edge.mode === 'chamfer') {
+      newBands.push({ z0: 0, r0: r + s, z1: s, r1: r });
+    } else {
+      const pts = [];
+      for (let k = 0; k <= arcs; k++) {
+        const th = (k / arcs) * Math.PI / 2;
+        pts.push({ z: s - s * Math.sin(th), r: r + s - s * Math.cos(th) });
+      }
+      pts.reverse(); // ascending z: (0, r+s) ... (s, r)
+      for (let k = 0; k + 1 < pts.length; k++) {
+        newBands.push({ z0: pts[k].z, r0: pts[k].r, z1: pts[k + 1].z, r1: pts[k + 1].r });
+      }
+    }
+    feat.bands.splice(idx, 0, ...newBands);
+    feat.rBottom = r + s;
+  }
+  feat.maxR = Math.max(feat.maxR, r + s);
+}
+
 // Shortest distance from a point to any segment of a set of rings.
 function distToRings(pt, rings) {
   let best = Infinity;
@@ -469,9 +530,15 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
   const sB = params.bottom.mode === 'none' ? 0 : Math.min(params.bottom.size, t);
   const edgeInset = Math.max(sT, sB);
 
-  // Feature geometry per screw hole (may demote types with warnings).
+  // Feature geometry per screw hole (may demote types with warnings), then
+  // per-hole rim chamfers/fillets on each open face.
+  const arcSeg = params.arcSegments || 8;
   for (const c of circles) {
     c.feat = holeFeatures(c, t, warnings);
+    if (c.feat) {
+      applyRim(c.feat, 'top', t, c.edgeTop, arcSeg, warnings);
+      applyRim(c.feat, 'bottom', t, c.edgeBottom, arcSeg, warnings);
+    }
   }
   let live = circles.filter(c => c.feat);
 

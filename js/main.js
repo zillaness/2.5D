@@ -346,6 +346,20 @@ function syncHolePanel() {
   if (c.type === 'cs') { $('csDia').value = c.csDia; $('csAngle').value = c.csAngle; }
   if (c.type === 'cb') { $('cbDia').value = c.cbDia; $('cbDepth').value = c.cbDepth; }
 
+  // Rim treatments only apply where the hole actually opens, and a
+  // countersink already breaks its own face's edge.
+  const onTop = (c.side || 'top') !== 'bottom';
+  const openTop = !(c.type === 'blind' && !onTop) && !(c.type === 'cs' && onTop);
+  const openBottom = !(c.type === 'blind' && onTop) && !(c.type === 'cs' && !onTop);
+  $('holeEdgeTopRow').hidden = !openTop;
+  $('holeEdgeBottomRow').hidden = !openBottom;
+  const eT = c.edgeTop || { mode: 'none', size: 0.5 };
+  const eB = c.edgeBottom || { mode: 'none', size: 0.5 };
+  $('holeEdgeTopMode').value = eT.mode;
+  $('holeEdgeTopSize').value = eT.size;
+  $('holeEdgeBottomMode').value = eB.mode;
+  $('holeEdgeBottomSize').value = eB.size;
+
   $('holeFitNote').textContent = screwFitNote(screw, c.d);
 }
 
@@ -580,7 +594,24 @@ $('holeType').addEventListener('change', e => {
   applyHoleProps(props);
   syncHolePanel();
 });
-$('holeSide').addEventListener('change', e => { applyHoleProps({ side: e.target.value }); });
+$('holeSide').addEventListener('change', e => {
+  applyHoleProps({ side: e.target.value });
+  syncHolePanel();
+});
+
+for (const [face, modeId, sizeId] of [
+  ['edgeTop', 'holeEdgeTopMode', 'holeEdgeTopSize'],
+  ['edgeBottom', 'holeEdgeBottomMode', 'holeEdgeBottomSize'],
+]) {
+  const apply = () => {
+    const size = parseFloat($(sizeId).value);
+    applyHoleProps({
+      [face]: { mode: $(modeId).value, size: isFinite(size) && size > 0 ? size : 0.5 },
+    });
+  };
+  $(modeId).addEventListener('change', apply);
+  $(sizeId).addEventListener('change', apply);
+}
 for (const [id, prop, min] of [
   ['holeDepth', 'depth', 0.2], ['csDia', 'csDia', 0.5], ['csAngle', 'csAngle', 30],
   ['cbDia', 'cbDia', 0.5], ['cbDepth', 'cbDepth', 0.2],

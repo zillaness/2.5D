@@ -166,6 +166,28 @@
           <div class="field"><label>CB ⌀ (mm)</label><input type="number" id="cbDia" step="0.1" min="0.5"></div>
           <div class="field"><label>CB depth (mm)</label><input type="number" id="cbDepth" step="0.1" min="0.2"></div>
         </div>
+        <div class="field-row" id="holeEdgeTopRow">
+          <div class="field">
+            <label for="holeEdgeTopMode">Top rim</label>
+            <select id="holeEdgeTopMode">
+              <option value="none">Square</option>
+              <option value="chamfer">Chamfer</option>
+              <option value="fillet">Fillet</option>
+            </select>
+          </div>
+          <div class="field"><label>Size (mm)</label><input type="number" id="holeEdgeTopSize" step="0.1" min="0.1" value="0.5"></div>
+        </div>
+        <div class="field-row" id="holeEdgeBottomRow">
+          <div class="field">
+            <label for="holeEdgeBottomMode">Bottom rim</label>
+            <select id="holeEdgeBottomMode">
+              <option value="none">Square</option>
+              <option value="chamfer">Chamfer</option>
+              <option value="fillet">Fillet</option>
+            </select>
+          </div>
+          <div class="field"><label>Size (mm)</label><input type="number" id="holeEdgeBottomSize" step="0.1" min="0.1" value="0.5"></div>
+        </div>
         <p id="holeFitNote" class="hint"></p>
       </div>
 
