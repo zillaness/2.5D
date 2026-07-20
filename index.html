@@ -24,7 +24,7 @@
     <button data-unit="in">in</button>
   </div>
   <nav id="steps">
-    <button id="stepBtn1" class="step-btn active" data-step="1"><span class="n">1</span> Photo &amp; paper</button>
+    <button id="stepBtn1" class="step-btn active" data-step="1"><span class="n">1</span> Photo &amp; ref</button>
     <button id="stepBtn2" class="step-btn" data-step="2" disabled><span class="n">2</span> Trace &amp; holes</button>
     <button id="stepBtn3" class="step-btn" data-step="3" disabled><span class="n">3</span> Model &amp; export</button>
   </nav>
@@ -35,10 +35,10 @@
 
     <!-- ============ Step 1 ============ -->
     <section id="panel1" class="panel">
-      <h2>Photo &amp; paper</h2>
-      <p class="hint">Photograph your object lying flat on a sheet of paper, all four
-      paper corners visible. The paper's known size corrects perspective/skew and
-      sets the real-world scale.</p>
+      <h2>Photo &amp; reference</h2>
+      <p class="hint">Photograph your object flat on a surface next to a
+      known-size reference. The reference corrects scale (and, for a rectangle,
+      perspective too).</p>
 
       <label class="file-label">
         <input type="file" id="fileInput" accept="image/*">
@@ -46,34 +46,57 @@
       </label>
 
       <div class="field">
-        <label for="paperSize">Paper size</label>
-        <select id="paperSize"></select>
-      </div>
-      <div class="field">
-        <label for="paperOrient">Orientation in photo</label>
-        <select id="paperOrient">
-          <option value="portrait">Portrait (short edge on top)</option>
-          <option value="landscape">Landscape (long edge on top)</option>
+        <label for="refType">Reference</label>
+        <select id="refType">
+          <option value="rect">Rectangle — paper / card (corrects perspective)</option>
+          <option value="coin">Coin — scale only (shoot straight down)</option>
         </select>
       </div>
-      <div class="field-row" id="customSizeRow" hidden>
+
+      <div id="rectRefControls">
         <div class="field">
-          <label for="customW">Width (mm)</label>
-          <input type="text" inputmode="decimal" id="customW" value="210" min="10" step="0.1">
+          <label for="paperSize">Size</label>
+          <select id="paperSize"></select>
         </div>
         <div class="field">
-          <label for="customH">Height (mm)</label>
-          <input type="text" inputmode="decimal" id="customH" value="297" min="10" step="0.1">
+          <label for="paperOrient">Orientation in photo</label>
+          <select id="paperOrient">
+            <option value="portrait">Portrait (short edge on top)</option>
+            <option value="landscape">Landscape (long edge on top)</option>
+          </select>
         </div>
+        <div class="field-row" id="customSizeRow" hidden>
+          <div class="field">
+            <label for="customW">Width (mm)</label>
+            <input type="text" inputmode="decimal" id="customW" value="210" min="10" step="0.1">
+          </div>
+          <div class="field">
+            <label for="customH">Height (mm)</label>
+            <input type="text" inputmode="decimal" id="customH" value="297" min="10" step="0.1">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="detectBtn" class="btn" disabled>Auto-detect corners</button>
+          <button id="resetCornersBtn" class="btn ghost" disabled>Reset</button>
+        </div>
+        <p class="hint">Drag the four handles onto the reference corners — the
+        <b style="color:#ffd257">yellow edge</b> is the <b>top</b>.
+        Scroll to zoom, drag to pan, double-click to fit.</p>
       </div>
 
-      <div class="btn-row">
-        <button id="detectBtn" class="btn" disabled>Auto-detect corners</button>
-        <button id="resetCornersBtn" class="btn ghost" disabled>Reset</button>
+      <div id="coinRefControls" hidden>
+        <div class="field">
+          <label for="coinSize">Coin</label>
+          <select id="coinSize"></select>
+        </div>
+        <div class="field" id="coinCustomRow" hidden>
+          <label for="coinCustomDia">Diameter (mm)</label>
+          <input type="text" inputmode="decimal" id="coinCustomDia" value="24.26">
+        </div>
+        <p class="hint">Drag the circle over the coin and its edge handle to the
+        rim. A coin sets scale only — shoot straight down so there's no
+        perspective. The object (largest shape) is traced; the coin is ignored.</p>
       </div>
-      <p class="hint">Drag the four handles onto the paper corners — the
-      <b style="color:#ffd257">yellow edge</b> is the paper's <b>top</b>.
-      Scroll to zoom, drag empty space to pan, double-click to fit.</p>
 
       <button id="toTraceBtn" class="btn primary big" disabled>Continue → Trace</button>
     </section>
@@ -110,6 +133,11 @@
       </div>
       <button id="retraceBtn" class="btn">↻ Re-trace from photo</button>
       <p class="hint">Re-tracing replaces manual outline edits.</p>
+
+      <div class="btn-row">
+        <button id="rotateLeftBtn" class="btn small" title="Rotate the whole trace and image 90° left">⟲ Rotate left</button>
+        <button id="rotateRightBtn" class="btn small" title="Rotate the whole trace and image 90° right">⟳ Rotate right</button>
+      </div>
 
       <h3>Edit</h3>
       <div class="tool-row" id="toolRow">
@@ -370,6 +398,21 @@
     To move your work: <b>Copy</b> here → open the offline <code>dist/2.5d-local.html</code>
     (or a hosted copy) → Project → paste → <b>Load from text</b>. Corners, trace,
     holes and settings all transfer, so nothing needs re-tracing.</p>
+
+    <h3 style="margin-top:14px">Outline library</h3>
+    <p class="hint">Save the current outline (drawer, toolbox, tray…) to reuse
+    it later — e.g. as a container shape for foam or Gridfinity layouts. Stored
+    in this browser.</p>
+    <div class="btn-row">
+      <input type="text" id="libName" placeholder="Outline name" style="flex:1">
+      <button id="libSaveBtn" class="btn">Save outline</button>
+    </div>
+    <div class="btn-row">
+      <select id="libList" style="flex:1"><option value="">— saved outlines —</option></select>
+      <button id="libLoadBtn" class="btn">Load</button>
+      <button id="libDeleteBtn" class="btn small">Delete</button>
+    </div>
+    <p id="libNote" class="hint"></p>
   </div>
 </div>
 

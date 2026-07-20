@@ -13,6 +13,9 @@ export class CornerEditor {
     this.vp = new Viewport(canvas);
     this.image = null;      // HTMLImageElement
     this.corners = null;    // [{x,y} x4] in image px, TL TR BR BL
+    this.refMode = 'corners'; // 'corners' (rectangle) | 'coin' (scale only)
+    this.coin = null;       // { cx, cy, r } in image px
+    this.coinDrag = null;   // 'center' | 'radius'
     this.dragIdx = -1;
     this.panning = false;
     this.lastPos = null;
@@ -48,6 +51,18 @@ export class CornerEditor {
     this.draw();
   }
 
+  setRefMode(mode) {
+    this.refMode = mode;
+    if (mode === 'coin' && !this.coin && this.image) {
+      const iw = this.image.naturalWidth, ih = this.image.naturalHeight;
+      this.coin = { cx: iw / 2, cy: ih / 2, r: Math.min(iw, ih) / 8 };
+    }
+    this.draw();
+  }
+
+  setCoin(coin) { this.coin = coin; this.draw(); }
+  getCoin() { return this.coin; }
+
   _hitCorner(sp) {
     if (!this.corners) return -1;
     for (let i = 0; i < 4; i++) {
@@ -57,12 +72,29 @@ export class CornerEditor {
     return -1;
   }
 
+  // Coin handle under the pointer: 'center', 'radius', or null.
+  _hitCoin(sp) {
+    if (!this.coin) return null;
+    const ctr = this.vp.toScreen({ x: this.coin.cx, y: this.coin.cy });
+    if (Math.hypot(ctr.x - sp.x, ctr.y - sp.y) <= HANDLE_R + 6) return 'center';
+    const rimPx = this.coin.r * this.vp.scale;
+    const d = Math.hypot(ctr.x - sp.x, ctr.y - sp.y);
+    if (Math.abs(d - rimPx) <= HANDLE_R + 4) return 'radius';
+    return null;
+  }
+
   _down(e) {
     if (!this.image) return;
     this.canvas.setPointerCapture(e.pointerId);
     const sp = this.vp.eventPos(e);
     this.lastPos = sp;
     if (e.button === 1 || e.button === 2) {
+      this.panning = true;
+      return;
+    }
+    if (this.refMode === 'coin') {
+      const hit = this._hitCoin(sp);
+      if (hit) { this.coinDrag = hit; return; }
       this.panning = true;
       return;
     }
@@ -84,6 +116,13 @@ export class CornerEditor {
       this.draw();
       return;
     }
+    if (this.coinDrag) {
+      const wp = this.vp.toWorld(sp);
+      if (this.coinDrag === 'center') { this.coin.cx = wp.x; this.coin.cy = wp.y; }
+      else this.coin.r = Math.max(2, Math.hypot(wp.x - this.coin.cx, wp.y - this.coin.cy));
+      this.draw();
+      return;
+    }
     if (this.dragIdx >= 0) {
       const wp = this.vp.toWorld(sp);
       const iw = this.image.naturalWidth, ih = this.image.naturalHeight;
@@ -95,13 +134,15 @@ export class CornerEditor {
       return;
     }
     // Hover feedback
-    this.canvas.style.cursor = this._hitCorner(sp) >= 0 ? 'grab' : 'default';
+    if (this.refMode === 'coin') this.canvas.style.cursor = this._hitCoin(sp) ? 'grab' : 'default';
+    else this.canvas.style.cursor = this._hitCorner(sp) >= 0 ? 'grab' : 'default';
     this.draw();
   }
 
   _up(e) {
-    if (this.dragIdx >= 0 && this.onChange) this.onChange(this.corners);
+    if ((this.dragIdx >= 0 || this.coinDrag) && this.onChange) this.onChange();
     this.dragIdx = -1;
+    this.coinDrag = null;
     this.panning = false;
     this.lastPos = null;
     this.draw();
@@ -120,6 +161,8 @@ export class CornerEditor {
     ctx.imageSmoothingEnabled = s < 4;
     ctx.drawImage(this.image, 0, 0);
     ctx.restore();
+
+    if (this.refMode === 'coin') { this._drawCoin(ctx, vw, vh); return; }
 
     if (!this.corners) return;
     const pts = this.corners.map(c => this.vp.toScreen(c));
@@ -162,6 +205,39 @@ export class CornerEditor {
     // Loupe while dragging
     if (this.dragIdx >= 0 && this.pointer) {
       this._drawLoupe(ctx, this.corners[this.dragIdx], vw, vh);
+    }
+  }
+
+  _drawCoin(ctx, vw, vh) {
+    if (!this.coin) return;
+    const ctr = this.vp.toScreen({ x: this.coin.cx, y: this.coin.cy });
+    const r = this.coin.r * this.vp.scale;
+    ctx.beginPath();
+    ctx.arc(ctr.x, ctr.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 210, 87, 0.10)';
+    ctx.fill();
+    ctx.strokeStyle = '#ffd257';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Centre handle
+    ctx.beginPath();
+    ctx.arc(ctr.x, ctr.y, HANDLE_R, 0, Math.PI * 2);
+    ctx.fillStyle = this.coinDrag === 'center' ? '#ffd257' : 'rgba(20,26,33,0.85)';
+    ctx.fill();
+    ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 2; ctx.stroke();
+    // Radius handle (at angle 0)
+    const rh = { x: ctr.x + r, y: ctr.y };
+    ctx.beginPath();
+    ctx.arc(rh.x, rh.y, HANDLE_R - 2, 0, Math.PI * 2);
+    ctx.fillStyle = this.coinDrag === 'radius' ? '#ffd257' : '#53a9ff';
+    ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    // Loupe while adjusting
+    if (this.coinDrag) {
+      const wp = this.coinDrag === 'center'
+        ? { x: this.coin.cx, y: this.coin.cy }
+        : { x: this.coin.cx + this.coin.r, y: this.coin.cy };
+      this._drawLoupe(ctx, wp, vw, vh);
     }
   }
 

@@ -325,10 +325,11 @@ console.log('\nExports — real download events');
   ]);
   const svgPath = svgDl ? await svgDl.path().catch(() => null) : null;
   const svgTxt = svgPath ? fs.readFileSync(svgPath, 'utf8') : '';
-  check('Export SVG fires a download with valid SVG content',
+  const svgW = (svgTxt.match(/width="([\d.]+)mm"/) || [])[1];
+  check('Export SVG fires a download with valid SVG content (~210mm wide)',
     !!svgDl && /-outline\.svg$/.test(svgDl.suggestedFilename()) &&
-    svgTxt.includes('<svg') && svgTxt.includes('width="210mm"'),
-    svgDl ? `${svgDl.suggestedFilename()}, ${svgTxt.length} chars` : 'no download event');
+    svgTxt.includes('<svg') && svgW && Math.abs(parseFloat(svgW) - 210) < 1,
+    svgDl ? `${svgDl.suggestedFilename()}, width ${svgW}mm` : 'no download event');
 
   const fallback = await page.evaluate(() => ({
     visible: !document.getElementById('exportFallback').hidden,
@@ -898,6 +899,80 @@ check('fit arc replaces a run with a smooth arc (>5 pts)',
   groupB.arcR > 0 && groupB.arcPtCount > 7, `r=${groupB.arcR}, ${groupB.arcPtCount} outline pts`);
 check('fit line straightens a run to 2 endpoints (7 -> 4 pts)',
   groupB.lineOk && groupB.lineLen === 4, `${groupB.lineLen} pts`);
+
+// ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
+
+const groupC = await page.evaluate(async () => {
+  const { paperDims } = await import('./js/paperSizes.js');
+  const app = window.__app;
+
+  // Rebuild a simple rectified state to rotate.
+  const ppm = 4;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 200; // 100 x 50 mm space
+  c.getContext('2d').fillStyle = '#eee';
+  c.getContext('2d').fillRect(0, 0, 400, 200);
+  app.state.rect = { canvas: c, pxPerMm: ppm };
+  app.state.diffMap = null;
+  app.traceEditor.setRectified(c, ppm);
+  app.traceEditor.setTrace(
+    [{ x: 10, y: 10 }, { x: 90, y: 10 }, { x: 90, y: 40 }, { x: 10, y: 40 }], []);
+  app.traceEditor.setCircles([]);
+
+  const before = app.traceEditor.outer.map(p => ({ ...p }));
+  const beforeDims = { w: app.state.rect.canvas.width / ppm, h: app.state.rect.canvas.height / ppm };
+  // Rotate right (cw): (x,y) -> (Hmm - y, x); Hmm=50.
+  document.getElementById('rotateRightBtn').click();
+  const after = app.traceEditor.outer.map(p => ({ ...p }));
+  const afterDims = { w: app.state.rect.canvas.width / ppm, h: app.state.rect.canvas.height / ppm };
+  const rotOk = Math.abs(after[0].x - (50 - before[0].y)) < 1e-6 &&
+                Math.abs(after[0].y - before[0].x) < 1e-6 &&
+                Math.abs(afterDims.w - beforeDims.h) < 1e-6 &&
+                Math.abs(afterDims.h - beforeDims.w) < 1e-6;
+
+  // Coin scale: set coin mode, a coin circle of radius 50px on a US quarter
+  // (24.26 mm), no downscale (small image) -> pxPerMm = 2*50/24.26.
+  const fakeImg = document.createElement('canvas');
+  fakeImg.width = 300; fakeImg.height = 300;
+  Object.defineProperty(fakeImg, 'naturalWidth', { value: 300 });
+  Object.defineProperty(fakeImg, 'naturalHeight', { value: 300 });
+  app.state.reference = 'coin';
+  app.state.coin = { size: 'us_quarter', customD: 24.26 };
+  app.state.image = fakeImg;
+  app.cornerEditor.image = fakeImg;
+  app.cornerEditor.setRefMode('coin');
+  app.cornerEditor.setCoin({ cx: 150, cy: 150, r: 50 });
+  app.doRectify();
+  const coinPpm = app.state.rect ? app.state.rect.pxPerMm : null;
+
+  // Outline library round-trip (localStorage).
+  app.traceEditor.setTrace(
+    [{ x: 5, y: 5 }, { x: 25, y: 5 }, { x: 25, y: 20 }, { x: 5, y: 20 }], []);
+  document.getElementById('libName').value = 'test-drawer';
+  document.getElementById('libSaveBtn').click();
+  // Clear then load it back.
+  app.traceEditor.setTrace([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }], []);
+  const list = JSON.parse(localStorage.getItem('2p5d.library.v1') || '[]');
+  const savedNames = list.map(o => o.name);
+
+  return {
+    rotOk,
+    coinPpm, coinExpected: 2 * 50 / 24.26,
+    savedNames,
+    cardDims: paperDims('card', 'portrait'),
+  };
+});
+
+console.log('\nGroup C — rotate 90°, coin scale, outline library');
+check('rotate right maps geometry and swaps trace-space W/H', groupC.rotOk);
+check('coin scale sets pxPerMm from coin diameter',
+  groupC.coinPpm && near(groupC.coinPpm, groupC.coinExpected, 0.05),
+  `${groupC.coinPpm} vs ${groupC.coinExpected.toFixed(3)}`);
+check('outline library saves a named outline to storage',
+  groupC.savedNames.includes('test-drawer'), groupC.savedNames.join(', '));
+check('card reference resolves to ISO ID-1 dims',
+  near(groupC.cardDims.w, 53.98, 0.01) && near(groupC.cardDims.h, 85.60, 0.01),
+  `${groupC.cardDims.w} × ${groupC.cardDims.h}`);
 
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;

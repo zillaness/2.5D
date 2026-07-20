@@ -1,7 +1,7 @@
 // App orchestration: three steps — (1) photo + paper corners, (2) trace +
 // holes, (3) extrusion parameters + export.
 
-import { PAPER_SIZES, DEFAULT_SIZE, paperDims } from './paperSizes.js';
+import { PAPER_SIZES, COIN_SIZES, DEFAULT_SIZE, DEFAULT_COIN, paperDims } from './paperSizes.js';
 import { rectify } from './homography.js';
 import { detectPaperCorners } from './detectPaper.js';
 import { computeDiffMap, otsuThreshold, segmentObject } from './segment.js';
@@ -35,7 +35,9 @@ const state = {
   image: null,
   fileName: 'object',
   corners: null,          // [{x,y} x4] source-image px, TL TR BR BL
+  reference: 'rect', // 'rect' (paper/card, perspective-corrected) | 'coin' (scale only)
   paper: { size: DEFAULT_SIZE, orientation: 'portrait', customW: 210, customH: 297 },
+  coin: { size: DEFAULT_COIN, customD: 24.26 },
   rect: null,             // { canvas, pxPerMm }
   rectDirty: true,
   diffMap: null,
@@ -200,7 +202,11 @@ function loadImageFromURL(url, done) {
     state.rectDirty = true;
     $('dropHint').hidden = true;
     cornerEditor.setImage(img);
-    autoDetect(false);
+    if (state.reference === 'coin') {
+      cornerEditor.setRefMode('coin');
+    } else {
+      autoDetect(false);
+    }
     updateStepButtons();
     if (done) done();
   };
@@ -228,8 +234,39 @@ function autoDetect(announce = true) {
   cornerEditor.setCorners(state.corners);
 }
 
+function coinDiameterMm() {
+  if (state.coin.size === 'coin_custom') return state.coin.customD > 0 ? state.coin.customD : 24.26;
+  return (COIN_SIZES[state.coin.size] || COIN_SIZES[DEFAULT_COIN]).d;
+}
+
+// Scale-only rectify for coin mode: no perspective correction — the source
+// image is used as-is (downscaled if large) with pxPerMm set from the coin.
+function rectifyCoin() {
+  const img = state.image;
+  const coin = cornerEditor.getCoin();
+  if (!coin || !(coin.r > 0)) { toast('Size the coin circle first.'); return false; }
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  const scale = Math.min(1, 1600 / Math.max(iw, ih));
+  const w = Math.round(iw * scale), h = Math.round(ih * scale);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(img, 0, 0, w, h);
+  const pxPerMm = (2 * coin.r * scale) / coinDiameterMm();
+  state.rect = { canvas: c, pxPerMm };
+  state.rectDirty = false;
+  state.diffMap = computeDiffMap(c);
+  if (state.seg.autoThreshold) {
+    state.seg.threshold = otsuThreshold(state.diffMap.diff);
+    $('threshSlider').value = state.seg.threshold;
+    $('threshVal').textContent = state.seg.threshold;
+  }
+  traceEditor.setRectified(c, pxPerMm);
+  return true;
+}
+
 function doRectify() {
   if (!state.image) return false;
+  if (state.reference === 'coin') return rectifyCoin();
   const { w, h } = currentPaper();
   const res = rectify(state.image, state.corners, w, h);
   if (!res) {
@@ -580,6 +617,40 @@ $('customH').addEventListener('change', e => {
   state.rectDirty = true;
 });
 
+// Coin reference controls
+const coinSel = $('coinSize');
+for (const [key, val] of Object.entries(COIN_SIZES)) {
+  const opt = document.createElement('option');
+  opt.value = key; opt.textContent = val.name;
+  coinSel.appendChild(opt);
+}
+coinSel.value = state.coin.size;
+coinSel.addEventListener('change', () => {
+  state.coin.size = coinSel.value;
+  $('coinCustomRow').hidden = coinSel.value !== 'coin_custom';
+  state.rectDirty = true;
+});
+$('coinCustomDia').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm > 1) state.coin.customD = mm;
+  e.target.value = fmtDim(state.coin.customD);
+  state.rectDirty = true;
+});
+
+$('refType').addEventListener('change', e => {
+  state.reference = e.target.value;
+  const coin = state.reference === 'coin';
+  $('rectRefControls').hidden = coin;
+  $('coinRefControls').hidden = !coin;
+  $('panel1').querySelector('h2').textContent = coin ? 'Photo & reference' : 'Photo & reference';
+  cornerEditor.setRefMode(coin ? 'coin' : 'corners');
+  if (state.image) {
+    if (coin && !cornerEditor.getCoin()) cornerEditor.setRefMode('coin');
+    if (!coin && !state.corners) autoDetect(false);
+  }
+  state.rectDirty = true;
+});
+
 $('fileInput').addEventListener('change', e => loadFile(e.target.files[0]));
 $('detectBtn').addEventListener('click', () => autoDetect(true));
 $('resetCornersBtn').addEventListener('click', () => {
@@ -742,6 +813,52 @@ $('showPoints').addEventListener('change', e => {
   traceEditor.showPoints = e.target.checked;
   traceEditor.draw();
 });
+
+// ---------- rotate the trace + rectified image 90° (step 2) ----------
+// Rotates the backdrop and every geometry coordinate together so the trace
+// stays aligned. pxPerMm is unchanged; the trace space just swaps W/H.
+function rotateView(dir) {
+  if (!state.rect) { toast('Load and rectify a photo first.'); return; }
+  const { canvas, pxPerMm } = state.rect;
+  const Wmm = canvas.width / pxPerMm, Hmm = canvas.height / pxPerMm;
+  const cw = dir === 'cw';
+  const map = p => cw ? { x: Hmm - p.y, y: p.x } : { x: p.y, y: Wmm - p.x };
+
+  // Rotate the backdrop bitmap.
+  const out = document.createElement('canvas');
+  out.width = canvas.height; out.height = canvas.width;
+  const octx = out.getContext('2d');
+  if (cw) { octx.translate(out.width, 0); octx.rotate(Math.PI / 2); }
+  else { octx.translate(0, out.height); octx.rotate(-Math.PI / 2); }
+  octx.drawImage(canvas, 0, 0);
+
+  // Rotate all geometry.
+  const { outer, holes, circles } = traceEditor.getTrace();
+  const rotOuter = outer.map(map);
+  const rotHoles = holes.map(h => h.map(map));
+  const rotCircles = circles.map(c => {
+    const m = map({ x: c.cx, y: c.cy });
+    return { ...c, cx: m.x, cy: m.y };
+  });
+  for (let s = 1; s < state.regions.length; s++) {
+    if (state.regions[s].pts) state.regions[s].pts = state.regions[s].pts.map(map);
+  }
+
+  state.rect = { canvas: out, pxPerMm };
+  state.diffMap = computeDiffMap(out);
+  traceEditor.showMask = false;
+  $('showMask').checked = false;
+  traceEditor.setMaskOverlay(null);
+  traceEditor.setRectified(out, pxPerMm);
+  traceEditor.setTrace(rotOuter, rotHoles);
+  traceEditor.setCircles(rotCircles);
+  traceEditor.setSections(state.regions);
+  refreshModelFields();
+  updateTraceInfo();
+  traceEditor.draw();
+}
+$('rotateLeftBtn').addEventListener('click', () => rotateView('ccw'));
+$('rotateRightBtn').addEventListener('click', () => rotateView('cw'));
 
 $('normalizeBtn').addEventListener('click', () => {
   const fit = traceEditor.convertSelectedToCircle();
@@ -977,16 +1094,24 @@ function traceProfile() {
   if (!outer || outer.length < 3) return null;
   return { outer, allHoles: [...holes, ...circles.map(c => circleToPolygon(c.cx, c.cy, c.d))] };
 }
+// Trace-space extent in mm: the rectified canvas size (correct after a 90°
+// rotation), falling back to the nominal paper size.
+function traceSpaceDims() {
+  if (state.rect) {
+    return { w: state.rect.canvas.width / state.rect.pxPerMm, h: state.rect.canvas.height / state.rect.pxPerMm };
+  }
+  return currentPaper();
+}
 $('exportSvgBtn').addEventListener('click', () => {
   const p = traceProfile();
   if (!p) { toast('No trace to export yet.'); return; }
-  const { w, h } = currentPaper();
+  const { w, h } = traceSpaceDims();
   deliverExport(toSVG(p.outer, p.allHoles, w, h), `${state.fileName}-outline.svg`);
 });
 $('exportDxfBtn').addEventListener('click', () => {
   const p = traceProfile();
   if (!p) { toast('No trace to export yet.'); return; }
-  const { h } = currentPaper();
+  const { h } = traceSpaceDims();
   deliverExport(toDXF(p.outer, p.allHoles, h), `${state.fileName}-outline.dxf`);
 });
 
@@ -1009,7 +1134,9 @@ function serializeProject(includePhoto) {
     app: '2.5D', version: 1,
     fileName: state.fileName,
     units: state.units,
+    reference: state.reference,
     paper: state.paper,
+    coin: state.coin,
     corners: state.corners,
     seg: state.seg,
     model: state.model,
@@ -1040,6 +1167,14 @@ function loadProject(p) {
     $('customSizeRow').hidden = state.paper.size !== 'custom';
     $('customW').value = fmtDim(state.paper.customW);
     $('customH').value = fmtDim(state.paper.customH);
+  }
+  if (p.coin) { state.coin = { ...state.coin, ...p.coin }; $('coinSize').value = state.coin.size; }
+  if (p.reference === 'rect' || p.reference === 'coin') {
+    state.reference = p.reference;
+    $('refType').value = p.reference;
+    $('rectRefControls').hidden = p.reference === 'coin';
+    $('coinRefControls').hidden = p.reference !== 'coin';
+    cornerEditor.setRefMode(p.reference === 'coin' ? 'coin' : 'corners');
   }
   if (p.seg) {
     state.seg = { ...state.seg, ...p.seg };
@@ -1130,6 +1265,7 @@ function refreshProjectText() {
 
 $('projectBtn').addEventListener('click', () => {
   refreshProjectText();
+  refreshLibList();
   $('projModal').hidden = false;
 });
 $('projCloseBtn').addEventListener('click', () => { $('projModal').hidden = true; });
@@ -1176,6 +1312,120 @@ $('projFileInput').addEventListener('change', e => {
   e.target.value = '';
 });
 
+// ---------- container outline library (localStorage) ----------
+
+const LIB_KEY = '2p5d.library.v1';
+
+function libAvailable() {
+  try {
+    const k = '__2p5d_probe__';
+    localStorage.setItem(k, '1'); localStorage.removeItem(k);
+    return true;
+  } catch { return false; }
+}
+function libLoad() {
+  try { return JSON.parse(localStorage.getItem(LIB_KEY) || '[]'); } catch { return []; }
+}
+function libSave(list) {
+  try { localStorage.setItem(LIB_KEY, JSON.stringify(list)); return true; } catch { return false; }
+}
+function refreshLibList() {
+  const sel = $('libList');
+  const cur = sel.value;
+  const list = libLoad();
+  sel.innerHTML = '<option value="">— saved outlines —</option>';
+  list.forEach((o, i) => {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = o.name;
+    sel.appendChild(opt);
+  });
+  if (cur && +cur < list.length) sel.value = cur;
+  const ok = libAvailable();
+  $('libSaveBtn').disabled = !ok;
+  $('libLoadBtn').disabled = !ok;
+  $('libDeleteBtn').disabled = !ok;
+  $('libNote').textContent = ok ? '' : 'Storage is unavailable here — the library needs the offline or hosted copy.';
+}
+
+$('libSaveBtn').addEventListener('click', () => {
+  const { outer, holes, circles } = traceEditor.getTrace();
+  if (!outer || outer.length < 3) { toast('No outline to save yet.'); return; }
+  const name = ($('libName').value || '').trim() || `Outline ${new Date().toISOString().slice(0, 10)}`;
+  // Normalize to a small-margin origin so saved outlines stay compact.
+  let minX = Infinity, minY = Infinity;
+  for (const p of outer) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); }
+  const M = 5, off = p => ({ x: p.x - minX + M, y: p.y - minY + M });
+  const entry = {
+    name,
+    outer: outer.map(off),
+    holes: holes.map(h => h.map(off)),
+    circles: circles.map(c => ({ ...c, cx: c.cx - minX + M, cy: c.cy - minY + M })),
+  };
+  const list = libLoad();
+  const existing = list.findIndex(o => o.name === name);
+  if (existing >= 0) list[existing] = entry; else list.push(entry);
+  if (libSave(list)) { toast(`Saved “${name}” to the outline library.`); refreshLibList(); }
+  else toast('Could not save — storage is unavailable here.');
+});
+
+$('libDeleteBtn').addEventListener('click', () => {
+  const i = $('libList').value;
+  if (i === '') { toast('Pick a saved outline first.'); return; }
+  const list = libLoad();
+  const removed = list.splice(+i, 1)[0];
+  libSave(list);
+  refreshLibList();
+  if (removed) toast(`Deleted “${removed.name}”.`);
+});
+
+$('libLoadBtn').addEventListener('click', () => {
+  const i = $('libList').value;
+  if (i === '') { toast('Pick a saved outline first.'); return; }
+  const o = libLoad()[+i];
+  if (!o) return;
+  loadOutlineIntoSession(o);
+  $('projModal').hidden = true;
+});
+
+// Load a bare outline (no photo) into an editable session by synthesizing a
+// blank backdrop, so it can be edited in step 2 and modeled in step 3.
+function loadOutlineIntoSession(o) {
+  const ppm = 4;
+  let maxX = 0, maxY = 0;
+  for (const p of o.outer) { maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+  const c = document.createElement('canvas');
+  c.width = Math.max(40, Math.ceil((maxX + 5) * ppm));
+  c.height = Math.max(40, Math.ceil((maxY + 5) * ppm));
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#f4f2ec';
+  ctx.fillRect(0, 0, c.width, c.height);
+  state.image = null;
+  state.rect = { canvas: c, pxPerMm: ppm };
+  state.rectDirty = false;
+  state.diffMap = computeDiffMap(c);
+  state.fileName = o.name.replace(/[^\w.-]+/g, '_') || 'outline';
+  // Reset to a single base section that follows this outline.
+  state.regions.length = 0;
+  state.regions.push({
+    name: 'Base', pts: null, thickness: state.regions[0] ? state.regions[0].thickness : 5, zBase: 0,
+    top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 },
+  });
+  state.selRegion = 0;
+  traceEditor.setRectified(c, ppm);
+  traceEditor.setMaskOverlay(null);
+  traceEditor.setTrace(o.outer.map(p => ({ ...p })), (o.holes || []).map(h => h.map(p => ({ ...p }))));
+  traceEditor.setCircles((o.circles || []).map(c2 => structuredClone(c2)));
+  traceEditor.setSections(state.regions);
+  refreshModelFields();
+  updateStepButtons();
+  updateTraceInfo();
+  goStep(2);
+  toast(`Loaded outline “${o.name}”.`);
+}
+
+refreshLibList();
+
 // Step tab buttons
 for (const btn of document.querySelectorAll('.step-btn')) {
   btn.addEventListener('click', () => goStep(parseInt(btn.dataset.step, 10)));
@@ -1220,7 +1470,7 @@ document.title = `2.5D v${APP_VERSION} — photo to printable solid`;
 
 // Test hook (used by the headless test-suite; harmless in normal use).
 window.__app = {
-  state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect,
+  state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect, doRectify,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   get viewer() { return viewer; },
 };

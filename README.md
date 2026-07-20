@@ -59,23 +59,37 @@ the fully offline option.
 
 ## Workflow
 
-**1 — Photo & paper.** Load a photo (file picker or drag & drop). Pick the
-paper size (defaults to US Letter) and its orientation *as seen in the photo*. The app tries to find
-the paper's corners automatically; drag the four handles to fine-tune — a
-magnifier loupe appears while dragging. The yellow edge marks the paper's top.
-Scroll to zoom, drag empty space to pan, double-click to re-fit.
+**1 — Photo & reference.** Load a photo (file picker or drag & drop) and pick a
+**reference** to set real-world scale:
 
-**2 — Trace & holes.** The paper is rectified to a flat, true-scale image and
-the object is segmented against the paper colour. You get:
+- **Rectangle** — a sheet of paper (defaults to US Letter), or a
+  **credit/ID card** or **US bill** you always have on hand. Its corners are
+  auto-detected; drag the four handles to fine-tune (a magnifier loupe appears
+  while dragging, the yellow edge marks the top). A rectangle corrects
+  perspective and skew exactly.
+- **Coin** — scale only. Drag a circle over a coin (US quarter, dime, €2, …,
+  or a custom diameter) and its edge handle to the rim. Shoot straight down,
+  since a coin can't correct perspective. Best for small objects where a full
+  sheet of paper is overkill.
+
+**2 — Trace & holes.** The photo is rectified to a flat, true-scale image and
+the object is segmented against the background colour. You get:
 
 - **Detection threshold / noise cleanup** sliders (with Otsu auto-threshold),
   and a mask overlay toggle to see exactly what's being picked up.
 - **Simplify** (Douglas-Peucker tolerance in mm) and **smoothing** (corner
   rounding) for the traced outline.
+- **Rotate 90° left/right** — reorient the rectified image and all traced
+  geometry together, handy when the shot came out sideways.
 - **Hole detection** — enclosed background regions become holes automatically.
 - **Trace correction** — drag any vertex, click an edge to insert one,
   right/Alt-click (or Delete) to remove one, delete whole holes, and undo with
   Ctrl+Z.
+- **Multi-select & run cleanup** — Ctrl/⌘-click points or Shift-drag a marquee
+  to select several; drag the group to move it, Delete to remove it. On a
+  selected run: **Fit arc** (least-squares circle → smooth arc with an editable
+  radius), **Fit line** (straighten), **Densify** (add points), **Reduce**
+  (thin points).
 - **Normalize traced holes** — an explicit button (never automatic) replaces a
   photo-detected hole with a least-squares fitted perfect circle, which is then
   draggable and editable like any placed hole; "All round holes" converts every
@@ -96,6 +110,9 @@ the object is segmented against the paper colour. You get:
     room. The computed ⌀ is shown with its math and stays editable.
   - Countersink ⌀/angle (90° metric, 82° SAE) and counterbore ⌀/depth are
     seeded from head dimensions with printing clearance — all editable.
+  - **Heat-set inserts** (M2–M8): pick the size and the hole becomes a blind
+    pocket at the recommended melt-in diameter and depth (from a brass-insert
+    table, not the screw-bore rule) — editable, since values vary by brand.
   - Each hole's **rim** can also get its own edge break — square, **chamfer**
     (45°) or **fillet** (quarter-round) with a size in mm, independently at the
     top and bottom face. Rows appear only where the hole actually opens (a
@@ -112,8 +129,8 @@ toggle: `12.7`, `.5"`, `1/2 in`, `1 1/2"`, `3/8"`, or `12mm` all parse and
 convert.
 
 **Projects** — the 💾 Project button (header) saves or restores everything:
-paper settings, corners, the trace with all holes, and the rectified image,
-as a JSON file or via copy/paste. That copy/paste path matters in embedded
+the reference/paper settings, corners (or coin), the trace with all holes and
+sections, and the rectified image, as a JSON file or via copy/paste. That copy/paste path matters in embedded
 views that block file downloads (the Claude artifact does): copy the project
 there, paste it into the offline `dist/2.5d-local.html` or a hosted copy, and
 export from that — no re-tracing.
@@ -132,9 +149,16 @@ watertight shell; overlapping sections are exported together and every slicer
 unions them. Screw holes cut through every section they pass through, and the
 countersink/counterbore/blind feature automatically lands on the true entry
 face — the topmost section for "from top" holes, the bottommost for "from
-bottom". The SVG export is the base outline only. Export a binary **STL** (millimetres,
-z-up, centred at the origin) or the outline as **SVG** at true scale (handy
-for laser cutting or importing into CAD).
+bottom".
+
+**Export.** A binary **STL** (millimetres, z-up, centred at the origin), or
+the outline as **SVG** or **DXF** at true scale (for laser cutting or CAD; the
+2D exports use the base outline). An **export quality** preset (coarse → extra
+fine) bundles the round-feature resolution and curve-segment count. Every
+export carries the app version in its header/metadata. The **💾 Project**
+button also has an **outline library** that saves drawer/toolbox/tray outlines
+to this browser for reuse (foundation for the upcoming foam/Gridfinity
+exports).
 
 ## Tips for good photos
 
@@ -194,52 +218,18 @@ npm run build        # regenerate dist/2.5d-local.html
 
 ## Roadmap
 
-Ordered by value-per-effort within each tier.
+### Shipped
 
-### Tier 1 — quick wins (high value ÷ low effort)
+Card/bill/coin references, heat-set inserts, DXF export, STL quality presets,
+hole drag rework (centre = move, rim = resize), point multi-select
+(Ctrl-click + marquee) with group move/delete, arc/line fitting and
+densify/reduce on a selected run, rotate view 90°, and the container outline
+library are all **done** and in the app.
 
-- **Hole drag interaction rework** — move by dragging the centre (move/hand
-  cursor), resize by dragging the rim (double-headed arrow cursor), for
-  existing holes as well as new ones. Today resize-by-drag only works while
-  first placing a hole in Add-hole mode; dragging an existing hole always
-  moves it.
-- **Credit card / dollar bill calibration** — a card (ISO ID-1:
-  85.60 × 53.98 mm) or US bill (156.1 × 66.3 mm) is a rectangle, so it
-  calibrates perspective exactly like paper — just new size presets, and you
-  always have one in a wallet.
-- **Heat-set threaded inserts** — a hole preset sized to an insert's outer
-  diameter (per-series tables, e.g. M3 × ⌀4.0 inserts), typically a blind
-  pocket with a slight interference for the melt-in. The hole model already
-  supports the geometry; what's missing is the insert dimension table and UI.
-- **DXF export** of the outline alongside SVG (better CAD interop).
-- **STL export quality presets** — x-fine / fine / medium / coarse, bundling
-  trace simplification, circle segment counts and curve quality into one
-  choice at export time.
-
-### Tier 2 — solid middles (worth it, more work)
-
-- **Point multi-select** — Ctrl+click to build a selection, Shift+drag
-  marquee — then move or delete the group together. Build together with:
-- **Normalize radiuses & curves** — select a run of points (a traced rounded
-  corner, an arc-ish edge) and replace it with a perfect fitted arc of an
-  editable radius; snap near-straight runs to true lines. Shares the
-  selection model and the least-squares fit machinery with hole
-  normalization.
-- **Local densify/decimate** — add detail where the trace needs it, thin out
-  over-traced runs. (Single-point insert on an edge and delete already
-  exist.)
-- **Coin calibration (scale only)** — drag a circle over a known coin (US
-  quarter ⌀24.26 mm); needs a straight-down shot since a coin can't correct
-  perspective.
-- **Container outline library** — save tool-drawer and toolbox outlines for
-  reuse across projects (builds on the project-JSON format).
-- **Rotate view 90° left/right** — reorient photo, rectified view and all
-  traced geometry in quarter turns without re-dragging corners.
-
-### Tier 3 — big bets (high value, real effort)
+### Next up (value-per-effort)
 
 - **Tool-foam negative export** — shadow-foam drawer layout: a block minus
-  the offset outline. The simplest of the organization features; start here.
+  the offset outline. The simplest organization feature; start here.
 - **Gridfinity bin export** — a bin with the object's outline as a cutout
   (build on the open Gridfinity spec; TraceFinity-style tracers are prior
   art).
@@ -248,12 +238,16 @@ Ordered by value-per-effort within each tier.
   second detection threshold to segment sub-regions of the object from the
   photo ("3D-printed painting": what's connected at one level vs. raised
   detail at another).
-- **Radial lens-distortion estimation** from the paper's edges (they should
-  be straight — their curvature measures the distortion).
+- **Radial lens-distortion estimation** from the reference's edges (they
+  should be straight — their curvature measures the distortion).
 
-### Horizon
+### Bigger bets
 
+- **Keys** — trace your own key's blade profile and pick a keyway/blank
+  (Schlage C, Kwikset KW1/4, …), optionally auto-detecting the type. Keys are
+  small, so the coin or card reference is the right scale — a full sheet of
+  paper is overkill. (Bitting-depth libraries would follow.)
 - **Beyond 2.5D: photogrammetry** — multiple photos around the object
   reconstructed into a full 3D mesh (structure-from-motion + multi-view
   stereo). A different order of machinery than the current single-shot
-  pipeline; the paper would still serve as the scale/ground reference.
+  pipeline; the reference would still set scale/ground.
