@@ -11,7 +11,7 @@ export const PAPER_SIZES = {
   custom: { name: 'Custom…',                  w: 210,   h: 297 },
 };
 
-export const DEFAULT_SIZE = 'A4';
+export const DEFAULT_SIZE = 'letter';
 
 // Returns { w, h } in mm honoring orientation ('portrait' | 'landscape').
 // Table dimensions are portrait (w < h).

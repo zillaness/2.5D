@@ -24,7 +24,12 @@ photo never leaves your machine.
 
 ## Running it
 
-It's a static site, but browsers need it served over HTTP for ES modules:
+**No hosting needed** — grab [`dist/2.5d-local.html`](dist/2.5d-local.html)
+(one self-contained ~700 KB file, everything inlined) and double-click it. It
+runs entirely offline; rebuild it after source changes with `npm run build`.
+
+For development, the un-bundled source needs a static server (browsers block
+ES modules over `file://`):
 
 ```sh
 cd 2.5D
@@ -32,12 +37,12 @@ python3 -m http.server 8000     # or: npx serve .
 # open http://localhost:8000
 ```
 
-Hosting it on GitHub Pages (or any static host) works as-is.
+Hosting on GitHub Pages (or any static host) also works as-is.
 
 ## Workflow
 
 **1 — Photo & paper.** Load a photo (file picker or drag & drop). Pick the
-paper size and its orientation *as seen in the photo*. The app tries to find
+paper size (defaults to US Letter) and its orientation *as seen in the photo*. The app tries to find
 the paper's corners automatically; drag the four handles to fine-tune — a
 magnifier loupe appears while dragging. The yellow edge marks the paper's top.
 Scroll to zoom, drag empty space to pan, double-click to re-fit.
@@ -53,9 +58,22 @@ the object is segmented against the paper colour. You get:
 - **Trace correction** — drag any vertex, click an edge to insert one,
   right/Alt-click (or Delete) to remove one, delete whole holes, and undo with
   Ctrl+Z.
-- **Manual holes** — place circular holes by clicking, then edit their exact
-  centre and diameter in millimetres (e.g. for mounting holes the camera can't
-  see).
+- **Screw holes** — click to place round holes, then give each one a type:
+  - **Through**, **blind** (flat-bottom pocket with a depth), **countersunk**
+    (cone for flat-head screws) or **counterbored** (cylindrical recess for
+    socket-head screws), each from the **top or bottom** face.
+  - Pick a screw from the built-in **metric (M2–M10) or SAE (#2-56–3/8-16)
+    table** and a fit, and the bore is sized with the print-friendly
+    **±½-pitch rule**: *clearance* = nominal + ½ pitch (screw slides through),
+    *thread-into-print* = nominal − ½ pitch (the screw cuts its own thread).
+    That's deliberately looser than a machinist's tap drill (nominal − pitch):
+    a tap cuts clean threads, a screw biting into printed plastic needs more
+    room. The computed ⌀ is shown with its math and stays editable.
+  - Countersink ⌀/angle (90° metric, 82° SAE) and counterbore ⌀/depth are
+    seeded from head dimensions with printing clearance — all editable.
+  - Newly placed holes copy the last one you edited, so a row of identical
+    screw holes takes one setup. Position and every dimension can also be
+    typed exactly in mm.
 
 **3 — Model & export.** Enter the thickness, choose an edge style for the top
 and bottom edges — square, chamfer (45°) or fillet (quarter-round) with a size
@@ -114,6 +132,17 @@ degenerate cases like fillets meeting at half thickness and treatments larger
 than the shape:
 
 ```sh
-npm install          # playwright-core only
+npm install          # playwright-core + esbuild only
 npm test             # needs a Chromium; set CHROMIUM_PATH if not auto-found
+npm run build        # regenerate dist/2.5d-local.html
 ```
+
+## Roadmap
+
+- **Heat-set threaded inserts** — a hole preset sized to an insert's outer
+  diameter (per-series tables, e.g. M3 × ⌀4.0 inserts), typically a blind
+  pocket with a slight interference for the melt-in. The hole model already
+  supports the geometry; what's missing is the insert dimension table and UI.
+- Radial lens-distortion estimation from the paper's edges (they should be
+  straight — their curvature measures the distortion).
+- DXF export of the outline alongside SVG.

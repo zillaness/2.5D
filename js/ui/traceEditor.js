@@ -24,7 +24,13 @@ export class TraceEditor {
     this.circles = [];       // [{cx, cy, d}] mm (manual holes)
 
     this.mode = 'edit';      // 'edit' | 'addhole' | 'pan'
-    this.newHoleDia = 5;
+    // Prototype for newly placed holes; kept in sync with the last edited one
+    // so a row of identical screw holes takes one setup.
+    this.holeTemplate = {
+      d: 5, type: 'through', side: 'top', depth: 3,
+      csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+      screw: { std: 'custom', size: '', fit: 'clearance' },
+    };
     this.selection = null;   // {type:'vertex', loop, idx} | {type:'circle', idx}
     this.dragging = false;
     this.panning = false;
@@ -90,11 +96,7 @@ export class TraceEditor {
   // ---- undo ----
 
   _snapshot() {
-    return {
-      outer: this.outer.map(p => ({ ...p })),
-      holes: this.holes.map(h => h.map(p => ({ ...p }))),
-      circles: this.circles.map(c => ({ ...c })),
-    };
+    return structuredClone({ outer: this.outer, holes: this.holes, circles: this.circles });
   }
 
   pushUndo() {
@@ -148,13 +150,22 @@ export class TraceEditor {
     return check(-1, this.outer);
   }
 
+  // Largest diameter drawn for a hole (bore or recess).
+  _holeMaxDia(c) {
+    if (c.type === 'cs') return Math.max(c.d, c.csDia || 0);
+    if (c.type === 'cb') return Math.max(c.d, c.cbDia || 0);
+    return c.d;
+  }
+
   _hitCircle(sp) {
     for (let i = 0; i < this.circles.length; i++) {
       const c = this.circles[i];
       const ctr = this._mmToScreen({ x: c.cx, y: c.cy });
       const rimR = (c.d / 2) * this.pxPerMm * this.vp.scale;
+      const recessR = (this._holeMaxDia(c) / 2) * this.pxPerMm * this.vp.scale;
       const d = Math.hypot(ctr.x - sp.x, ctr.y - sp.y);
-      if (d <= Math.max(HIT_R, 10) || Math.abs(d - rimR) <= HIT_R) {
+      if (d <= Math.max(HIT_R, 10) || Math.abs(d - rimR) <= HIT_R ||
+          Math.abs(d - recessR) <= HIT_R) {
         return { type: 'circle', idx: i };
       }
     }
@@ -201,7 +212,7 @@ export class TraceEditor {
     if (this.mode === 'addhole' && e.button === 0) {
       const mm = this._screenToMm(sp);
       this.pushUndo();
-      this.circles.push({ cx: mm.x, cy: mm.y, d: this.newHoleDia });
+      this.circles.push({ cx: mm.x, cy: mm.y, ...structuredClone(this.holeTemplate) });
       this.selection = { type: 'circle', idx: this.circles.length - 1 };
       this.dragging = true;
       this._notifySelect();
@@ -338,7 +349,7 @@ export class TraceEditor {
 
   selectedCircle() {
     if (this.selection && this.selection.type === 'circle') {
-      return { ...this.circles[this.selection.idx], idx: this.selection.idx };
+      return { ...structuredClone(this.circles[this.selection.idx]), idx: this.selection.idx };
     }
     return null;
   }
@@ -346,7 +357,10 @@ export class TraceEditor {
   updateSelectedCircle(props) {
     const sel = this.selection;
     if (!sel || sel.type !== 'circle') return;
-    Object.assign(this.circles[sel.idx], props);
+    Object.assign(this.circles[sel.idx], structuredClone(props));
+    // Next placed hole inherits the last edited one (position excluded).
+    const { cx, cy, ...rest } = this.circles[sel.idx];
+    this.holeTemplate = structuredClone(rest);
     this._changed();
   }
 
@@ -412,26 +426,52 @@ export class TraceEditor {
       drawLoop(this.holes[h], h, '#ff7d5c', 'rgba(255, 125, 92, 0.12)');
     }
 
-    // Manual circular holes
+    // Manual screw holes
     for (let i = 0; i < this.circles.length; i++) {
       const c = this.circles[i];
       const ctr = this._mmToScreen({ x: c.cx, y: c.cy });
       const r = (c.d / 2) * this.pxPerMm * s;
       const sel = this.selection && this.selection.type === 'circle' && this.selection.idx === i;
+      const col = sel ? '#ffd257' : '#78aaff';
       ctx.beginPath();
       ctx.arc(ctr.x, ctr.y, r, 0, Math.PI * 2);
       ctx.fillStyle = sel ? 'rgba(255, 210, 87, 0.20)' : 'rgba(120, 170, 255, 0.16)';
       ctx.fill();
-      ctx.strokeStyle = sel ? '#ffd257' : '#78aaff';
+      ctx.strokeStyle = col;
       ctx.lineWidth = 2;
+      if (c.type === 'blind') ctx.setLineDash([5, 4]); // blind bore: dashed
       ctx.stroke();
+      ctx.setLineDash([]);
+      // Recess circle (countersink / counterbore), dashed
+      const maxDia = this._holeMaxDia(c);
+      if (maxDia > c.d + 0.01) {
+        ctx.beginPath();
+        ctx.arc(ctr.x, ctr.y, (maxDia / 2) * this.pxPerMm * s, 0, Math.PI * 2);
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       // Center cross
       ctx.beginPath();
       ctx.moveTo(ctr.x - 6, ctr.y); ctx.lineTo(ctr.x + 6, ctr.y);
       ctx.moveTo(ctr.x, ctr.y - 6); ctx.lineTo(ctr.x, ctr.y + 6);
-      ctx.strokeStyle = sel ? '#ffd257' : '#78aaff';
+      ctx.strokeStyle = col;
       ctx.lineWidth = 1.5;
       ctx.stroke();
+      // Feature label ("CS↑", "CB↓", "BL↑"), plus screw size if set
+      if (c.type !== 'through' || (c.screw && c.screw.std !== 'custom')) {
+        const abbr = { through: '', blind: 'BL', cs: 'CS', cb: 'CB' }[c.type] || '';
+        const arrow = c.type === 'through' ? '' : (c.side === 'bottom' ? '↓' : '↑');
+        const sizeTxt = c.screw && c.screw.std !== 'custom' ? c.screw.size : '';
+        const label = [abbr + arrow, sizeTxt].filter(Boolean).join(' ');
+        ctx.font = 'bold 11px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = col;
+        ctx.fillText(label, ctr.x, ctr.y + Math.max(r, 8) + 4);
+      }
     }
   }
 }

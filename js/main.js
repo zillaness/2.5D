@@ -10,6 +10,7 @@ import {
   chaikinClosed, pointInPolygon,
 } from './contour.js';
 import { buildSolid, circleToPolygon } from './mesh.js';
+import { SCREW_STANDARDS, screwSpec, boreDiameter, recessDefaults } from './screws.js';
 import { toBinarySTL, toSVG, downloadBlob } from './exporters.js';
 import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
@@ -45,7 +46,7 @@ const state = {
 const cornerEditor = new CornerEditor($('cornerCanvas'), () => { state.rectDirty = true; });
 const traceEditor = new TraceEditor($('traceCanvas'), {
   onChange: (throttled) => { updateTraceInfo(); if (!throttled) updateStepButtons(); },
-  onSelect: syncCircleProps,
+  onSelect: syncHolePanel,
 });
 let viewer = null; // created lazily on step 3
 
@@ -270,14 +271,102 @@ function updateTraceInfo(msg) {
     `Holes: ${holes.length} traced + ${circles.length} circles`;
 }
 
-function syncCircleProps() {
-  const c = traceEditor.selectedCircle();
-  $('circleProps').hidden = !c;
-  if (c) {
+// ---------- hole properties panel ----------
+// Edits the selected hole when one is selected; otherwise (in Add-hole mode)
+// edits the template that new holes are stamped from.
+
+function activeHole() {
+  return traceEditor.selectedCircle() || traceEditor.holeTemplate;
+}
+
+function applyHoleProps(props) {
+  if (traceEditor.selectedCircle()) {
+    traceEditor.updateSelectedCircle(props);
+  } else {
+    Object.assign(traceEditor.holeTemplate, structuredClone(props));
+  }
+}
+
+function populateScrewSizes(std, selected) {
+  const sel = $('screwSize');
+  sel.innerHTML = '';
+  sel.disabled = std === 'custom';
+  if (std === 'custom') return;
+  for (const key of Object.keys(SCREW_STANDARDS[std].sizes)) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = key;
+    sel.appendChild(opt);
+  }
+  if (selected && SCREW_STANDARDS[std].sizes[selected]) sel.value = selected;
+}
+
+function screwFitNote(screw, d) {
+  if (!screw || screw.std === 'custom') return '';
+  const s = screwSpec(screw.std, screw.size);
+  if (!s) return '';
+  const nom = s.d.toFixed(2), halfP = (s.p / 2).toFixed(2);
+  if (screw.fit === 'tap') {
+    const tapDrill = (s.d - s.p).toFixed(2);
+    return `${screw.size} thread-into-print: ⌀${d} = ${nom} − ${halfP} (½ pitch). ` +
+      `Looser on purpose than the ${tapDrill} tap drill — a screw self-threads ` +
+      `into a print more easily than a tap cuts.`;
+  }
+  return `${screw.size} clearance: ⌀${d} = ${nom} + ${halfP} (½ pitch).`;
+}
+
+function syncHolePanel() {
+  const selected = traceEditor.selectedCircle();
+  const show = !!selected || traceEditor.mode === 'addhole';
+  $('holeProps').hidden = !show;
+  if (!show) return;
+  const c = selected || traceEditor.holeTemplate;
+
+  $('holePropsTitle').textContent = selected ? 'Selected hole' : 'New hole';
+  $('holeXYRow').hidden = !selected;
+  if (selected) {
     $('circleX').value = c.cx.toFixed(1);
     $('circleY').value = c.cy.toFixed(1);
-    $('circleD').value = c.d;
   }
+
+  const screw = c.screw || { std: 'custom', size: '', fit: 'clearance' };
+  $('screwStd').value = screw.std;
+  populateScrewSizes(screw.std, screw.size);
+  $('screwFitField').hidden = screw.std === 'custom';
+  $('screwFit').value = screw.fit;
+  $('circleD').value = c.d;
+
+  $('holeType').value = c.type || 'through';
+  $('holeSide').value = c.side || 'top';
+  $('holeSideField').style.visibility = c.type === 'through' ? 'hidden' : 'visible';
+  $('holeDepthField').hidden = c.type !== 'blind';
+  $('csRow').hidden = c.type !== 'cs';
+  $('cbRow').hidden = c.type !== 'cb';
+  if (c.type === 'blind') $('holeDepth').value = c.depth;
+  if (c.type === 'cs') { $('csDia').value = c.csDia; $('csAngle').value = c.csAngle; }
+  if (c.type === 'cb') { $('cbDia').value = c.cbDia; $('cbDepth').value = c.cbDepth; }
+
+  $('holeFitNote').textContent = screwFitNote(screw, c.d);
+}
+
+// Apply the screw selection: derive bore ⌀ and recess defaults.
+function applyScrewSelection() {
+  const std = $('screwStd').value;
+  if (std === 'custom') {
+    applyHoleProps({ screw: { std: 'custom', size: '', fit: 'clearance' } });
+    syncHolePanel();
+    return;
+  }
+  let size = $('screwSize').value;
+  if (!SCREW_STANDARDS[std].sizes[size]) size = Object.keys(SCREW_STANDARDS[std].sizes)[0];
+  const fit = $('screwFit').value;
+  const props = {
+    screw: { std, size, fit },
+    d: boreDiameter(std, size, fit),
+    ...recessDefaults(std, size),
+  };
+  applyHoleProps(props);
+  syncHolePanel();
 }
 
 // ---------- step 3: mesh ----------
@@ -301,13 +390,9 @@ function rebuildMesh(fit = false) {
       warn = 'Edge sizes exceed the thickness — scaled down to fit.';
     }
 
-    const allHoles = [
-      ...holes,
-      ...circles.map(c => circleToPolygon(c.cx, c.cy, c.d)),
-    ];
     let mesh = null;
     try {
-      mesh = buildSolid(outer, allHoles, {
+      mesh = buildSolid(outer, holes, circles, {
         thickness: m.thickness, top, bottom, arcSegments: m.arcSegments,
       });
     } catch (err) {
@@ -321,11 +406,14 @@ function rebuildMesh(fit = false) {
       if (viewer) viewer.setMesh(null);
       return;
     }
-    if (mesh.stats.clamped && !warn) {
-      warn = 'Chamfer/fillet was too large for part of the outline — flattened there.';
+    const warns = [];
+    if (warn) warns.push(warn);
+    if (mesh.stats.clamped) {
+      warns.push('Chamfer/fillet was too large for part of the outline — flattened there.');
     }
-    $('meshWarn').hidden = !warn;
-    $('meshWarn').textContent = warn;
+    warns.push(...(mesh.stats.warnings || []));
+    $('meshWarn').hidden = !warns.length;
+    $('meshWarn').textContent = warns.join('\n');
     $('meshInfo').textContent =
       `Size: ${mesh.stats.sizeX.toFixed(1)} × ${mesh.stats.sizeY.toFixed(1)} × ${mesh.stats.sizeZ.toFixed(1)} mm\n` +
       `Triangles: ${mesh.stats.triangles}` +
@@ -445,13 +533,9 @@ for (const btn of document.querySelectorAll('.tool-btn')) {
     document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     traceEditor.setMode(btn.dataset.tool);
-    $('newHoleDiaField').style.display = btn.dataset.tool === 'addhole' ? '' : 'none';
+    syncHolePanel();
   });
 }
-$('newHoleDiaField').style.display = 'none';
-$('newHoleDia').addEventListener('change', e => {
-  traceEditor.newHoleDia = Math.max(0.2, parseFloat(e.target.value) || 5);
-});
 
 $('undoBtn').addEventListener('click', () => {
   if (!traceEditor.undo()) toast('Nothing to undo.');
@@ -459,11 +543,51 @@ $('undoBtn').addEventListener('click', () => {
 $('deleteSelBtn').addEventListener('click', () => traceEditor.deleteSelected());
 $('deleteHoleBtn').addEventListener('click', () => traceEditor.deleteSelectedHole());
 
-for (const [id, prop] of [['circleX', 'cx'], ['circleY', 'cy'], ['circleD', 'd']]) {
+$('screwStd').addEventListener('change', applyScrewSelection);
+$('screwSize').addEventListener('change', applyScrewSelection);
+$('screwFit').addEventListener('change', applyScrewSelection);
+
+for (const [id, prop] of [['circleX', 'cx'], ['circleY', 'cy']]) {
   $(id).addEventListener('change', e => {
     const v = parseFloat(e.target.value);
-    if (!isFinite(v)) return;
-    traceEditor.updateSelectedCircle({ [prop]: prop === 'd' ? Math.max(0.2, v) : v });
+    if (isFinite(v)) traceEditor.updateSelectedCircle({ [prop]: v });
+  });
+}
+
+$('circleD').addEventListener('change', e => {
+  const v = parseFloat(e.target.value);
+  if (!(v > 0.1)) return;
+  // A hand-typed bore means the screw preset no longer applies.
+  applyHoleProps({ d: v, screw: { std: 'custom', size: '', fit: 'clearance' } });
+  syncHolePanel();
+});
+
+$('holeType').addEventListener('change', e => {
+  const c = activeHole();
+  const type = e.target.value;
+  const props = { type };
+  const rd = c.screw && c.screw.std !== 'custom'
+    ? recessDefaults(c.screw.std, c.screw.size) : null;
+  if (type === 'blind' && !(c.depth > 0)) props.depth = 3;
+  if (type === 'cs' && !(c.csDia > c.d)) {
+    props.csDia = rd ? rd.csDia : Math.round(c.d * 2 * 10) / 10;
+    props.csAngle = rd ? rd.csAngle : 90;
+  }
+  if (type === 'cb' && !(c.cbDia > c.d)) {
+    props.cbDia = rd ? rd.cbDia : Math.round(c.d * 1.8 * 10) / 10;
+    props.cbDepth = rd ? rd.cbDepth : Math.max(1, Math.round(c.d * 0.6 * 10) / 10);
+  }
+  applyHoleProps(props);
+  syncHolePanel();
+});
+$('holeSide').addEventListener('change', e => { applyHoleProps({ side: e.target.value }); });
+for (const [id, prop, min] of [
+  ['holeDepth', 'depth', 0.2], ['csDia', 'csDia', 0.5], ['csAngle', 'csAngle', 30],
+  ['cbDia', 'cbDia', 0.5], ['cbDepth', 'cbDepth', 0.2],
+]) {
+  $(id).addEventListener('change', e => {
+    const v = parseFloat(e.target.value);
+    if (isFinite(v) && v >= min) applyHoleProps({ [prop]: v });
   });
 }
 
@@ -510,6 +634,7 @@ $('exportSvgBtn').addEventListener('click', () => {
   const { outer, holes, circles } = traceEditor.getTrace();
   if (!outer || outer.length < 3) { toast('No trace to export yet.'); return; }
   const { w, h } = currentPaper();
+  // SVG is a 2D profile: screw holes export at their bore diameter.
   const allHoles = [...holes, ...circles.map(c => circleToPolygon(c.cx, c.cy, c.d))];
   downloadBlob(toSVG(outer, allHoles, w, h), `${state.fileName}-outline.svg`);
 });

@@ -169,6 +169,10 @@ await page.screenshot({ path: path.join(shotDir, 'step1-corners.png') });
 
 const traceRes = await page.evaluate(({ quad }) => {
   const app = window.__app;
+  // The synthetic photo is A4; the app defaults to US Letter, so pick A4
+  // explicitly (this also exercises the paper-size path).
+  app.state.paper.size = 'A4';
+  document.getElementById('paperSize').value = 'A4';
   // Use exact corners so trace-accuracy checks are meaningful on their own.
   app.state.corners = quad.map(p => ({ ...p }));
   app.state.rectDirty = true;
@@ -301,10 +305,9 @@ await page.screenshot({ path: path.join(shotDir, 'step3-model.png') });
 // ---------- 4. Stress: extreme edge treatments must stay watertight ----------
 
 const stressRes = await page.evaluate(async () => {
-  const { buildSolid, circleToPolygon } = await import('./js/mesh.js');
+  const { buildSolid } = await import('./js/mesh.js');
   const app = window.__app;
   const { outer, holes, circles } = app.traceEditor.getTrace();
-  const allHoles = [...holes, ...circles.map(c => circleToPolygon(c.cx, c.cy, c.d))];
 
   const watertight = mesh => {
     const { positions, indices } = mesh;
@@ -337,7 +340,7 @@ const stressRes = await page.evaluate(async () => {
   const results = [];
   for (const [name, params, dropHoles] of cases) {
     try {
-      const mesh = buildSolid(outer, dropHoles ? [] : allHoles, params);
+      const mesh = buildSolid(outer, dropHoles ? [] : holes, dropHoles ? [] : circles, params);
       results.push({
         name,
         built: !!mesh,
@@ -356,6 +359,119 @@ console.log('\nStress — extreme edge treatments');
 for (const r of stressRes) {
   check(r.name, r.built && r.badEdges === 0,
     r.error || `${r.tris} tris, ${r.badEdges} bad edges${r.clamped ? ', clamped' : ''}`);
+}
+
+// ---------- 5. Screw holes: table math + blind/CS/CB geometry ----------
+
+const screwRes = await page.evaluate(async () => {
+  const { buildSolid } = await import('./js/mesh.js');
+  const { boreDiameter, recessDefaults } = await import('./js/screws.js');
+  const app = window.__app;
+  const { outer, holes } = app.traceEditor.getTrace();
+
+  const watertight = mesh => {
+    const { positions, indices } = mesh;
+    const edgeUse = new Map();
+    const vkey = i => `${positions[i * 3].toFixed(4)},${positions[i * 3 + 1].toFixed(4)},${positions[i * 3 + 2].toFixed(4)}`;
+    for (let t = 0; t < indices.length; t += 3) {
+      const ks = [vkey(indices[t]), vkey(indices[t + 1]), vkey(indices[t + 2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e + 1) % 3];
+        const key = a < b ? a + '|' + b : b + '|' + a;
+        edgeUse.set(key, (edgeUse.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const n of edgeUse.values()) if (n !== 2) bad++;
+    return bad;
+  };
+
+  // Object spans x 65..145, y 120..170 (mm, image coords). Object centre
+  // (105,145) maps to model origin; model y is flipped (y_model = 145 - cy).
+  const t = 6;
+  const m5 = boreDiameter('metric', 'M5', 'clearance');   // 5 + 0.4 = 5.4
+  const m5rec = recessDefaults('metric', 'M5');
+  const screwHoles = [
+    // CS M5 clearance from top at image (80, 132) -> model (-25, +13)
+    { cx: 80, cy: 132, d: m5, type: 'cs', side: 'top',
+      csAngle: m5rec.csAngle, csDia: m5rec.csDia },
+    // CB #8-32 from bottom at (130, 132) -> model (25, 13)
+    { cx: 130, cy: 132, d: boreDiameter('sae', '#8-32', 'clearance'),
+      type: 'cb', side: 'bottom', ...recessDefaults('sae', '#8-32') },
+    // Blind M3 tap fit from top, 4 deep, at (80, 158) -> model (-25, -13)
+    { cx: 80, cy: 158, d: boreDiameter('metric', 'M3', 'tap'),
+      type: 'blind', side: 'top', depth: 4 },
+    // Through hole overlapping the outline edge -> must demote with warning
+    { cx: 146, cy: 158, d: 6, type: 'cb', side: 'top', cbDia: 11, cbDepth: 2 },
+  ];
+  const params = {
+    thickness: t,
+    top: { mode: 'none', size: 0 }, bottom: { mode: 'none', size: 0 },
+    arcSegments: 6,
+  };
+  const mesh = buildSolid(outer, holes, screwHoles, params);
+  if (!mesh) return { ok: false };
+  const { positions } = mesh;
+
+  // Vertex radius stats around a model-space centre at a given z.
+  const radiiAt = (mx, my, z, maxDist) => {
+    const rs = [];
+    for (let i = 0; i < positions.length; i += 3) {
+      if (Math.abs(positions[i + 2] - z) > 1e-4) continue;
+      const d = Math.hypot(positions[i] - mx, positions[i + 1] - my);
+      if (d < maxDist) rs.push(d);
+    }
+    return rs;
+  };
+  const minMax = rs => rs.length ? [Math.min(...rs), Math.max(...rs)] : [NaN, NaN];
+
+  const csTop = minMax(radiiAt(-25, 13, t, m5rec.csDia / 2 + 0.4));   // cone mouth
+  const csBot = minMax(radiiAt(-25, 13, 0, m5rec.csDia / 2 + 0.4));   // bore exit
+  const cb = screwHoles[1];
+  const cbBot = minMax(radiiAt(25, 13, 0, cb.cbDia / 2 + 0.4));       // recess mouth
+  const cbShelf = minMax(radiiAt(25, 13, cb.cbDepth, cb.cbDia / 2 + 0.4));
+  const blind = screwHoles[2];
+  const blindFloor = radiiAt(-25, -13, t - blind.depth, blind.d / 2 + 0.3);
+  const blindBot = radiiAt(-25, -13, 0, 6); // should be EMPTY (no bottom opening)
+
+  return {
+    ok: true,
+    badEdges: watertight(mesh),
+    warnings: mesh.stats.warnings,
+    m3tap: boreDiameter('metric', 'M3', 'tap'),
+    m3clear: boreDiameter('metric', 'M3', 'clearance'),
+    n632tap: boreDiameter('sae', '#6-32', 'tap'),
+    m5bore: m5,
+    csTop, csBot, cbBot, cbShelf,
+    blindFloorCount: blindFloor.length,
+    blindBotCount: blindBot.length,
+    tris: mesh.stats.triangles,
+  };
+});
+
+console.log('\nScrew holes — table math + feature geometry');
+check('mesh with screw features built', screwRes.ok);
+if (screwRes.ok) {
+  check('M3 clearance = 3.25 (nominal + ½ pitch)', screwRes.m3clear === 3.25, `${screwRes.m3clear}`);
+  check('M3 thread-into = 2.75 (nominal − ½ pitch, looser than 2.5 tap drill)',
+    screwRes.m3tap === 2.75, `${screwRes.m3tap}`);
+  check('#6-32 thread-into ≈ 3.10', near(screwRes.n632tap, 3.11, 0.03), `${screwRes.n632tap}`);
+  check('watertight with all features', screwRes.badEdges === 0, `${screwRes.badEdges} bad edges`);
+  check('CS cone mouth at top ≈ csDia/2', near(screwRes.csTop[1], 5.9, 0.15) && near(screwRes.csTop[0], 5.9, 0.15),
+    `${screwRes.csTop[0].toFixed(2)}..${screwRes.csTop[1].toFixed(2)}`);
+  check('CS bore at bottom ≈ 2.7', near(screwRes.csBot[0], 2.7, 0.1) && near(screwRes.csBot[1], 2.7, 0.1),
+    `${screwRes.csBot[0].toFixed(2)}..${screwRes.csBot[1].toFixed(2)}`);
+  check('CB recess mouth at bottom ≈ cbDia/2', near(screwRes.cbBot[1], 3.93, 0.12),
+    `${screwRes.cbBot[0].toFixed(2)}..${screwRes.cbBot[1].toFixed(2)}`);
+  check('CB shelf spans bore..cbDia at depth',
+    near(screwRes.cbShelf[0], 2.28, 0.12) && near(screwRes.cbShelf[1], 3.93, 0.12),
+    `${screwRes.cbShelf[0].toFixed(2)}..${screwRes.cbShelf[1].toFixed(2)}`);
+  check('blind hole has a floor and no bottom opening',
+    screwRes.blindFloorCount > 8 && screwRes.blindBotCount === 0,
+    `floor verts ${screwRes.blindFloorCount}, bottom verts ${screwRes.blindBotCount}`);
+  check('edge-overlapping hole demoted with warning',
+    screwRes.warnings.some(w => /too close|outside/.test(w)), screwRes.warnings.join(' | '));
 }
 
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');

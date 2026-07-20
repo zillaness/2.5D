@@ -6,9 +6,11 @@
   "type": "module",
   "scripts": {
     "serve": "npx serve .",
+    "build": "node build.mjs",
     "test": "node test/e2e.mjs"
   },
   "devDependencies": {
+    "esbuild": "^0.25.0",
     "playwright-core": "^1.61.1"
   }
 }

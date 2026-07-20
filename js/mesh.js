@@ -1,12 +1,18 @@
 // Solid generation: extrude a traced outline (with holes) by a thickness,
-// with optional chamfer/fillet on the bottom and top edges.
+// with optional chamfer/fillet on the bottom and top edges, plus screw-hole
+// features (through / blind / countersunk / counterbored, from either face).
 //
-// Approach: build horizontal slices. Each edge treatment maps to a stack of
-// z-levels with an inward inset; slice outlines come from robust Clipper
-// polygon offsetting. Side walls "zip" consecutive slices together by arc
-// length (original vertices are kept exactly — sharp corners stay sharp), and
-// the end caps are triangulated with earcut. Output is a triangle mesh in mm,
-// z-up, centred on the XY origin.
+// The outline and traced holes are handled as horizontal slices: each edge
+// treatment maps to a stack of z-levels with an inward inset; slice outlines
+// come from robust Clipper polygon offsetting; side walls "zip" consecutive
+// slices by arc length (original vertices kept — sharp corners stay sharp);
+// end caps are triangulated with earcut.
+//
+// Screw holes are meshed analytically (exact cones, cylinders, shelves and
+// floors) when they sit fully inside the shape with room to spare; a hole
+// that overlaps the outline, a traced hole, or another screw hole falls back
+// to a plain Clipper through-hole with a warning. Output is a triangle mesh
+// in mm, z-up, centred on the XY origin.
 
 import earcut from '../vendor/earcut.js';
 import { signedArea, polygonPerimeter } from './contour.js';
@@ -85,8 +91,7 @@ export function buildProfile(thickness, bottom, top, arcSegments = 8) {
     levels.push({ z: t, inset: 0 });
   }
 
-  // Deduplicate / enforce strictly ascending z (allow the two-point vertical
-  // jumps only where inset changes at same z — those get filtered).
+  // Deduplicate identical consecutive levels.
   const out = [];
   for (const lv of levels) {
     const prev = out[out.length - 1];
@@ -237,16 +242,212 @@ function addCap(mb, rings, z, up) {
   }
 }
 
+// ---------- screw-hole feature geometry ----------
+
+// Ring of N points around centre c at radius r (deterministic start angle so
+// walls, shelves and caps share exact vertex coordinates).
+function circleRing(c, r, N) {
+  const pts = [];
+  for (let k = 0; k < N; k++) {
+    const a = (k / N) * Math.PI * 2;
+    pts.push({ x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) });
+  }
+  return pts;
+}
+
+// Cylinder/cone wall between (z0, r0) and (z1, r1), z0 < z1, normals facing
+// the hole axis (outward from the material).
+function emitBand(mb, c, z0, r0, z1, r1, N) {
+  const A = circleRing(c, r0, N).map(p => mb.addVertex(p.x, p.y, z0));
+  const B = circleRing(c, r1, N).map(p => mb.addVertex(p.x, p.y, z1));
+  for (let k = 0; k < N; k++) {
+    const k1 = (k + 1) % N;
+    mb.addTri(A[k], B[k], A[k1]);
+    mb.addTri(A[k1], B[k], B[k1]);
+  }
+}
+
+// Horizontal annulus at z between rIn and rOut (rIn < rOut).
+// up=true -> normal +z (a shelf you look down onto), else -z.
+function emitFlat(mb, c, z, rIn, rOut, up, N) {
+  const S = circleRing(c, rIn, N).map(p => mb.addVertex(p.x, p.y, z));
+  const B = circleRing(c, rOut, N).map(p => mb.addVertex(p.x, p.y, z));
+  for (let k = 0; k < N; k++) {
+    const k1 = (k + 1) % N;
+    if (up) {
+      mb.addTri(S[k], B[k], S[k1]);
+      mb.addTri(S[k1], B[k], B[k1]);
+    } else {
+      mb.addTri(S[k], S[k1], B[k]);
+      mb.addTri(S[k1], B[k1], B[k]);
+    }
+  }
+}
+
+// Filled disc at z (blind-hole floor/ceiling). up=true -> normal +z.
+function emitDisk(mb, c, z, r, up, N) {
+  const P = circleRing(c, r, N).map(p => mb.addVertex(p.x, p.y, z));
+  const C = mb.addVertex(c.x, c.y, z);
+  for (let k = 0; k < N; k++) {
+    const k1 = (k + 1) % N;
+    if (up) mb.addTri(C, P[k], P[k1]);
+    else mb.addTri(C, P[k1], P[k]);
+  }
+}
+
+const csDepthOf = (csDia, d, angleDeg) =>
+  (csDia - d) / 2 / Math.tan((angleDeg / 2) * Math.PI / 180);
+
+// Turn a screw-hole description into wall bands / flats / discs and the face
+// openings. c is the (already transformed) centre. Returns null if the hole
+// should be skipped entirely.
+function holeFeatures(c, t, warnings) {
+  const r = c.d / 2;
+  const top = c.side !== 'bottom';
+  let type = c.type || 'through';
+
+  if (type === 'blind') {
+    const depth = c.depth || 0;
+    if (depth <= 0.1) { warnings.push('Blind hole with no depth skipped.'); return null; }
+    if (depth >= t - 0.15) {
+      warnings.push('Blind hole depth ≥ thickness — made it a through hole.');
+      type = 'through';
+    }
+  }
+  if (type === 'cs') {
+    if (!(c.csDia > c.d + 0.05)) {
+      warnings.push('Countersink ⌀ not larger than the bore — plain through hole used.');
+      type = 'through';
+    }
+  }
+  if (type === 'cb') {
+    if (!(c.cbDia > c.d + 0.05)) {
+      warnings.push('Counterbore ⌀ not larger than the bore — plain through hole used.');
+      type = 'cb-degenerate';
+    } else if (c.cbDepth >= t - 0.15) {
+      warnings.push('Counterbore depth ≥ thickness — hole enlarged to the counterbore ⌀.');
+      return {
+        bands: [{ z0: 0, r0: c.cbDia / 2, z1: t, r1: c.cbDia / 2 }],
+        flats: [], disks: [],
+        rBottom: c.cbDia / 2, rTop: c.cbDia / 2, maxR: c.cbDia / 2,
+      };
+    } else if (c.cbDepth <= 0.1) {
+      warnings.push('Counterbore with no depth — plain through hole used.');
+      type = 'cb-degenerate';
+    }
+  }
+  if (type === 'cb-degenerate') type = 'through';
+
+  if (type === 'through') {
+    return {
+      bands: [{ z0: 0, r0: r, z1: t, r1: r }],
+      flats: [], disks: [],
+      rBottom: r, rTop: r, maxR: r,
+    };
+  }
+
+  if (type === 'blind') {
+    const depth = c.depth;
+    if (t - depth < 0.8) {
+      warnings.push(`Blind hole leaves a thin floor (${(t - depth).toFixed(2)} mm).`);
+    }
+    if (top) {
+      return {
+        bands: [{ z0: t - depth, r0: r, z1: t, r1: r }],
+        flats: [], disks: [{ z: t - depth, r, up: true }],
+        rBottom: null, rTop: r, maxR: r,
+      };
+    }
+    return {
+      bands: [{ z0: 0, r0: r, z1: depth, r1: r }],
+      flats: [], disks: [{ z: depth, r, up: false }],
+      rBottom: r, rTop: null, maxR: r,
+    };
+  }
+
+  if (type === 'cs') {
+    const angle = c.csAngle || 90;
+    let csR = c.csDia / 2;
+    let depth = csDepthOf(c.csDia, c.d, angle);
+    if (depth > t - 0.2) {
+      // Truncate the cone so it never pierces the far face.
+      depth = t - 0.2;
+      csR = r + depth * Math.tan((angle / 2) * Math.PI / 180);
+      warnings.push('Countersink truncated — deeper than the thickness allows.');
+    }
+    if (top) {
+      const zC = t - depth;
+      return {
+        bands: [{ z0: 0, r0: r, z1: zC, r1: r }, { z0: zC, r0: r, z1: t, r1: csR }],
+        flats: [], disks: [],
+        rBottom: r, rTop: csR, maxR: csR,
+      };
+    }
+    return {
+      bands: [{ z0: 0, r0: csR, z1: depth, r1: r }, { z0: depth, r0: r, z1: t, r1: r }],
+      flats: [], disks: [],
+      rBottom: csR, rTop: r, maxR: csR,
+    };
+  }
+
+  // Counterbore
+  const cbR = c.cbDia / 2;
+  const depth = c.cbDepth;
+  if (top) {
+    const zS = t - depth;
+    return {
+      bands: [{ z0: 0, r0: r, z1: zS, r1: r }, { z0: zS, r0: cbR, z1: t, r1: cbR }],
+      flats: [{ z: zS, rIn: r, rOut: cbR, up: true }], disks: [],
+      rBottom: r, rTop: cbR, maxR: cbR,
+    };
+  }
+  return {
+    bands: [{ z0: 0, r0: cbR, z1: depth, r1: cbR }, { z0: depth, r0: r, z1: t, r1: r }],
+    flats: [{ z: depth, rIn: r, rOut: cbR, up: false }], disks: [],
+    rBottom: cbR, rTop: r, maxR: cbR,
+  };
+}
+
+// Shortest distance from a point to any segment of a set of rings.
+function distToRings(pt, rings) {
+  let best = Infinity;
+  for (const ring of rings) {
+    for (let i = 0, n = ring.length; i < n; i++) {
+      const a = ring[i], b = ring[(i + 1) % n];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len2 = dx * dx + dy * dy;
+      let t = len2 > 0 ? ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const px = a.x + dx * t, py = a.y + dy * t;
+      best = Math.min(best, Math.hypot(px - pt.x, py - pt.y));
+    }
+  }
+  return best;
+}
+
+function pointInPoly(pt, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const pi = poly[i], pj = poly[j];
+    if ((pi.y > pt.y) !== (pj.y > pt.y) &&
+        pt.x < (pj.x - pi.x) * (pt.y - pi.y) / (pj.y - pi.y) + pi.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 // Build the full solid.
 //
-// outline/holes: mm in image coordinates (y down); manual hole circles are
-// already converted to polygons by the caller.
+// outline / tracedHoles: mm polygons in image coordinates (y down).
+// screwHoles: [{ cx, cy, d, type, side, depth, csAngle, csDia, cbDia, cbDepth }]
 // params: { thickness, bottom: {mode, size}, top: {mode, size}, arcSegments }
-// Returns { positions: Float32Array, indices: Uint32Array, stats } or null.
-export function buildSolid(outline, holes, params) {
+// Returns { positions, indices, stats } or null.
+export function buildSolid(outline, tracedHoles, screwHoles, params) {
   if (!outline || outline.length < 3) return null;
-  const { thickness } = params;
-  if (!(thickness > 0)) return null;
+  const { thickness: t } = params;
+  if (!(t > 0)) return null;
+  const warnings = [];
 
   // Image y-down -> model y-up (mirror), then centre on origin.
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -254,17 +455,85 @@ export function buildSolid(outline, holes, params) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
-  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  const tx = pts => pts.map(p => ({ x: p.x - cx, y: cy - p.y }));
+  const cx0 = (minX + maxX) / 2, cy0 = (minY + maxY) / 2;
+  const tx = pts => pts.map(p => ({ x: p.x - cx0, y: cy0 - p.y }));
 
-  const islands = buildIslands(tx(outline), holes.map(tx));
+  const txOutline = tx(outline);
+  const txTraced = (tracedHoles || []).map(tx);
+  const circles = (screwHoles || []).map(c => ({
+    ...c,
+    x: c.cx - cx0, y: cy0 - c.cy,
+  }));
+
+  const sT = params.top.mode === 'none' ? 0 : Math.min(params.top.size, t);
+  const sB = params.bottom.mode === 'none' ? 0 : Math.min(params.bottom.size, t);
+  const edgeInset = Math.max(sT, sB);
+
+  // Feature geometry per screw hole (may demote types with warnings).
+  for (const c of circles) {
+    c.feat = holeFeatures(c, t, warnings);
+  }
+  let live = circles.filter(c => c.feat);
+
+  // Pairwise clearance: overlapping screw holes fall back to plain
+  // through-holes handled by Clipper.
+  const demoted = new Set();
+  for (let i = 0; i < live.length; i++) {
+    for (let j = i + 1; j < live.length; j++) {
+      const a = live[i], b = live[j];
+      const need = a.feat.maxR + b.feat.maxR + 0.25;
+      if (Math.hypot(a.x - b.x, a.y - b.y) < need) {
+        demoted.add(a); demoted.add(b);
+      }
+    }
+  }
+  if (demoted.size) {
+    warnings.push('Overlapping screw holes merged as plain through holes (recess features dropped).');
+  }
+
+  // Clearance from the outline / traced holes (including room for the edge
+  // treatment's inward offsets).
+  const islands0 = buildIslands(txOutline, txTraced);
+  if (!islands0.length) return null;
+  for (const c of live) {
+    if (demoted.has(c)) continue;
+    const island = islands0.find(is =>
+      pointInPoly(c, is.outer) && !is.holes.some(h => pointInPoly(c, h)));
+    if (!island) {
+      warnings.push('A screw hole lies outside the shape — treated as a plain cutout.');
+      demoted.add(c);
+      continue;
+    }
+    const margin = c.feat.maxR + edgeInset + 0.25;
+    if (distToRings(c, [island.outer, ...island.holes]) < margin) {
+      warnings.push('A screw hole is too close to an edge for its recess — plain through hole used.');
+      demoted.add(c);
+    }
+  }
+
+  const demotedPolys = [...demoted].map(c =>
+    circleRing(c, Math.max(c.d, c.type === 'cb' ? c.cbDia || 0 : 0) / 2, 48));
+  live = live.filter(c => !demoted.has(c));
+
+  const islands = demoted.size
+    ? buildIslands(txOutline, [...txTraced, ...demotedPolys])
+    : islands0;
   if (!islands.length) return null;
 
-  const profile = buildProfile(thickness, params.bottom, params.top, params.arcSegments || 8);
+  // Assign analytic holes to their (possibly re-built) islands.
+  const perIsland = islands.map(() => []);
+  for (const c of live) {
+    const idx = islands.findIndex(is =>
+      pointInPoly(c, is.outer) && !is.holes.some(h => pointInPoly(c, h)));
+    if (idx >= 0) perIsland[idx].push(c);
+    else warnings.push('A screw hole vanished from the shape and was skipped.');
+  }
+
+  const profile = buildProfile(t, params.bottom, params.top, params.arcSegments || 8);
   const mb = new MeshBuilder();
   let clamped = false;
 
-  for (const island of islands) {
+  islands.forEach((island, islandIdx) => {
     // Slice outlines per level, clamping to the previous slice when an offset
     // collapses or splits the island (keeps the mesh closed; the treatment
     // just flattens out where the shape is too small for it).
@@ -273,7 +542,6 @@ export function buildSolid(outline, holes, params) {
     for (const lv of profile) {
       let slice = offsetIsland(island, lv.inset);
       if (!slice) { slice = prev || island; clamped = clamped || lv.inset > 1e-9; }
-      // Normalize winding: outer CCW, holes CW; align starts to previous slice.
       let outer = ensureWinding(slice.outer, true);
       let hs = slice.holes.map(hp => ensureWinding(hp, false));
       if (prev) {
@@ -285,7 +553,7 @@ export function buildSolid(outline, holes, params) {
       prev = slice;
     }
 
-    // Walls.
+    // Outline / traced-hole walls.
     for (let i = 0; i + 1 < slices.length; i++) {
       const a = slices[i], b = slices[i + 1];
       if (Math.abs(a.z - b.z) < 1e-9) continue;
@@ -295,11 +563,26 @@ export function buildSolid(outline, holes, params) {
       }
     }
 
-    // Caps.
+    // Screw-hole feature surfaces.
+    const holesHere = perIsland[islandIdx];
+    for (const c of holesHere) {
+      const N = c.ringN = Math.max(32, Math.min(128, Math.round(2 * Math.PI * c.feat.maxR / 0.35)));
+      for (const b of c.feat.bands) emitBand(mb, c, b.z0, b.r0, b.z1, b.r1, N);
+      for (const f of c.feat.flats) emitFlat(mb, c, f.z, f.rIn, f.rOut, f.up, N);
+      for (const d of c.feat.disks) emitDisk(mb, c, d.z, d.r, d.up, N);
+    }
+
+    // Caps (screw-hole openings become extra earcut holes).
     const bot = slices[0], top = slices[slices.length - 1];
-    addCap(mb, [bot.outer, ...bot.holes], bot.z, false);
-    addCap(mb, [top.outer, ...top.holes], top.z, true);
-  }
+    const botCircle = holesHere
+      .filter(c => c.feat.rBottom !== null)
+      .map(c => circleRing(c, c.feat.rBottom, c.ringN));
+    const topCircle = holesHere
+      .filter(c => c.feat.rTop !== null)
+      .map(c => circleRing(c, c.feat.rTop, c.ringN));
+    addCap(mb, [bot.outer, ...bot.holes, ...botCircle], bot.z, false);
+    addCap(mb, [top.outer, ...top.holes, ...topCircle], top.z, true);
+  });
 
   const positions = new Float32Array(mb.positions);
   const indices = new Uint32Array(mb.indices);
@@ -312,13 +595,14 @@ export function buildSolid(outline, holes, params) {
       islands: islands.length,
       sizeX: maxX - minX,
       sizeY: maxY - minY,
-      sizeZ: thickness,
+      sizeZ: t,
       clamped,
+      warnings,
     },
   };
 }
 
-// Circle -> polygon (for manual holes), mm, image coords.
+// Circle -> polygon (used for SVG export and legacy paths), mm, image coords.
 export function circleToPolygon(cx, cy, dia, segments = 64) {
   const r = dia / 2;
   const pts = [];

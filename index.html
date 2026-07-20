@@ -109,18 +109,64 @@
         <button class="tool-btn" data-tool="addhole" title="Click to place a circular hole">◎ Add hole</button>
         <button class="tool-btn" data-tool="pan" title="Drag to pan">✋ Pan</button>
       </div>
-      <div class="field" id="newHoleDiaField">
-        <label for="newHoleDia">New hole ⌀ (mm)</label>
-        <input type="number" id="newHoleDia" value="5" min="0.2" step="0.1">
-      </div>
-
-      <div id="circleProps" hidden>
-        <h3>Selected hole</h3>
-        <div class="field-row">
+      <div id="holeProps" hidden>
+        <h3 id="holePropsTitle">Hole properties</h3>
+        <div class="field-row" id="holeXYRow">
           <div class="field"><label>X (mm)</label><input type="number" id="circleX" step="0.1"></div>
           <div class="field"><label>Y (mm)</label><input type="number" id="circleY" step="0.1"></div>
         </div>
-        <div class="field"><label>⌀ (mm)</label><input type="number" id="circleD" step="0.1" min="0.2"></div>
+        <div class="field-row">
+          <div class="field">
+            <label for="screwStd">Screw</label>
+            <select id="screwStd">
+              <option value="custom">Custom ⌀</option>
+              <option value="metric">Metric (ISO)</option>
+              <option value="sae">SAE (inch)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="screwSize">Size</label>
+            <select id="screwSize" disabled></select>
+          </div>
+        </div>
+        <div class="field" id="screwFitField" hidden>
+          <label for="screwFit">Fit (for 3D prints)</label>
+          <select id="screwFit">
+            <option value="clearance">Clearance — screw slides through (+½ pitch)</option>
+            <option value="tap">Thread into print — screw taps in (−½ pitch)</option>
+          </select>
+        </div>
+        <div class="field"><label>Bore ⌀ (mm)</label><input type="number" id="circleD" step="0.05" min="0.2"></div>
+        <div class="field-row">
+          <div class="field">
+            <label for="holeType">Type</label>
+            <select id="holeType">
+              <option value="through">Through</option>
+              <option value="blind">Blind</option>
+              <option value="cs">Countersunk</option>
+              <option value="cb">Counterbored</option>
+            </select>
+          </div>
+          <div class="field" id="holeSideField">
+            <label for="holeSide">From</label>
+            <select id="holeSide">
+              <option value="top">Top</option>
+              <option value="bottom">Bottom</option>
+            </select>
+          </div>
+        </div>
+        <div class="field" id="holeDepthField" hidden>
+          <label>Blind depth (mm)</label><input type="number" id="holeDepth" step="0.1" min="0.2">
+        </div>
+        <div class="field-row" id="csRow" hidden>
+          <div class="field"><label>CS ⌀ (mm)</label><input type="number" id="csDia" step="0.1" min="0.5"></div>
+          <div class="field"><label>Angle (°)</label><input type="number" id="csAngle" step="1" min="30" max="150"></div>
+        </div>
+        <div class="field-row" id="cbRow" hidden>
+          <div class="field"><label>CB ⌀ (mm)</label><input type="number" id="cbDia" step="0.1" min="0.5"></div>
+          <div class="field"><label>CB depth (mm)</label><input type="number" id="cbDepth" step="0.1" min="0.2"></div>
+        </div>
+        <p id="holeFitNote" class="hint"></p>
       </div>
 
       <div class="btn-row">
