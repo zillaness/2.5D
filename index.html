@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2.5D — photo to printable solid</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📐</text></svg>">
+<script src="vendor/clipper.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <h1>2.5D <span class="tagline">photo → traced outline → printable solid</span></h1>
+  <nav id="steps">
+    <button id="stepBtn1" class="step-btn active" data-step="1"><span class="n">1</span> Photo &amp; paper</button>
+    <button id="stepBtn2" class="step-btn" data-step="2" disabled><span class="n">2</span> Trace &amp; holes</button>
+    <button id="stepBtn3" class="step-btn" data-step="3" disabled><span class="n">3</span> Model &amp; export</button>
+  </nav>
+</header>
+
+<main>
+  <aside id="sidebar">
+
+    <!-- ============ Step 1 ============ -->
+    <section id="panel1" class="panel">
+      <h2>Photo &amp; paper</h2>
+      <p class="hint">Photograph your object lying flat on a sheet of paper, all four
+      paper corners visible. The paper's known size corrects perspective/skew and
+      sets the real-world scale.</p>
+
+      <label class="file-label">
+        <input type="file" id="fileInput" accept="image/*">
+        <span id="fileLabelText">Choose photo…</span>
+      </label>
+
+      <div class="field">
+        <label for="paperSize">Paper size</label>
+        <select id="paperSize"></select>
+      </div>
+      <div class="field">
+        <label for="paperOrient">Orientation in photo</label>
+        <select id="paperOrient">
+          <option value="portrait">Portrait (short edge on top)</option>
+          <option value="landscape">Landscape (long edge on top)</option>
+        </select>
+      </div>
+      <div class="field-row" id="customSizeRow" hidden>
+        <div class="field">
+          <label for="customW">Width (mm)</label>
+          <input type="number" id="customW" value="210" min="10" step="0.1">
+        </div>
+        <div class="field">
+          <label for="customH">Height (mm)</label>
+          <input type="number" id="customH" value="297" min="10" step="0.1">
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button id="detectBtn" class="btn" disabled>Auto-detect corners</button>
+        <button id="resetCornersBtn" class="btn ghost" disabled>Reset</button>
+      </div>
+      <p class="hint">Drag the four handles onto the paper corners — the
+      <b style="color:#ffd257">yellow edge</b> is the paper's <b>top</b>.
+      Scroll to zoom, drag empty space to pan, double-click to fit.</p>
+
+      <button id="toTraceBtn" class="btn primary big" disabled>Continue → Trace</button>
+    </section>
+
+    <!-- ============ Step 2 ============ -->
+    <section id="panel2" class="panel" hidden>
+      <h2>Trace &amp; holes</h2>
+
+      <div class="field">
+        <label>Detection threshold <span id="threshVal" class="val"></span></label>
+        <div class="slider-row">
+          <input type="range" id="threshSlider" min="5" max="250" value="60">
+          <button id="threshAutoBtn" class="btn small">Auto</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Noise cleanup <span id="cleanupVal" class="val"></span></label>
+        <input type="range" id="cleanupSlider" min="0" max="5" value="2">
+      </div>
+      <div class="field">
+        <label>Simplify (mm) <span id="simplifyVal" class="val"></span></label>
+        <input type="range" id="simplifySlider" min="0" max="20" value="4">
+      </div>
+      <div class="field">
+        <label>Smoothing <span id="smoothVal" class="val"></span></label>
+        <input type="range" id="smoothSlider" min="0" max="3" value="1">
+      </div>
+      <div class="field-row">
+        <label class="check"><input type="checkbox" id="detectHoles" checked> Detect holes</label>
+        <label class="check"><input type="checkbox" id="showMask"> Show mask</label>
+      </div>
+      <button id="retraceBtn" class="btn">↻ Re-trace from photo</button>
+      <p class="hint">Re-tracing replaces manual outline edits.</p>
+
+      <h3>Edit</h3>
+      <div class="tool-row" id="toolRow">
+        <button class="tool-btn active" data-tool="edit" title="Drag vertices; click an edge to add one; right/Alt-click deletes">✎ Edit</button>
+        <button class="tool-btn" data-tool="addhole" title="Click to place a circular hole">◎ Add hole</button>
+        <button class="tool-btn" data-tool="pan" title="Drag to pan">✋ Pan</button>
+      </div>
+      <div class="field" id="newHoleDiaField">
+        <label for="newHoleDia">New hole ⌀ (mm)</label>
+        <input type="number" id="newHoleDia" value="5" min="0.2" step="0.1">
+      </div>
+
+      <div id="circleProps" hidden>
+        <h3>Selected hole</h3>
+        <div class="field-row">
+          <div class="field"><label>X (mm)</label><input type="number" id="circleX" step="0.1"></div>
+          <div class="field"><label>Y (mm)</label><input type="number" id="circleY" step="0.1"></div>
+        </div>
+        <div class="field"><label>⌀ (mm)</label><input type="number" id="circleD" step="0.1" min="0.2"></div>
+      </div>
+
+      <div class="btn-row">
+        <button id="undoBtn" class="btn small">↶ Undo</button>
+        <button id="deleteSelBtn" class="btn small">Delete point</button>
+        <button id="deleteHoleBtn" class="btn small">Delete hole</button>
+      </div>
+
+      <p id="traceInfo" class="info"></p>
+      <button id="toModelBtn" class="btn primary big" disabled>Continue → Model</button>
+    </section>
+
+    <!-- ============ Step 3 ============ -->
+    <section id="panel3" class="panel" hidden>
+      <h2>Model &amp; export</h2>
+
+      <div class="field">
+        <label for="thickness">Thickness (mm)</label>
+        <input type="number" id="thickness" value="5" min="0.2" step="0.1">
+      </div>
+
+      <h3>Top edge</h3>
+      <div class="field-row">
+        <div class="field">
+          <label for="topMode">Style</label>
+          <select id="topMode">
+            <option value="none">Square</option>
+            <option value="chamfer">Chamfer</option>
+            <option value="fillet">Fillet</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="topSize">Size (mm)</label>
+          <input type="number" id="topSize" value="1" min="0.1" step="0.1">
+        </div>
+      </div>
+
+      <h3>Bottom edge</h3>
+      <div class="field-row">
+        <div class="field">
+          <label for="bottomMode">Style</label>
+          <select id="bottomMode">
+            <option value="none">Square</option>
+            <option value="chamfer">Chamfer</option>
+            <option value="fillet">Fillet</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="bottomSize">Size (mm)</label>
+          <input type="number" id="bottomSize" value="1" min="0.1" step="0.1">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Curve quality <span id="arcVal" class="val"></span></label>
+        <input type="range" id="arcSlider" min="3" max="16" value="8">
+      </div>
+
+      <p id="meshInfo" class="info"></p>
+      <p id="meshWarn" class="warn" hidden></p>
+
+      <div class="btn-row">
+        <button id="exportStlBtn" class="btn primary big">⬇ Export STL</button>
+      </div>
+      <div class="btn-row">
+        <button id="exportSvgBtn" class="btn">⬇ Outline SVG</button>
+      </div>
+      <p class="hint">STL is in millimetres, z-up, centred at the origin.</p>
+    </section>
+
+  </aside>
+
+  <section id="stage">
+    <div id="stage1" class="stage-view">
+      <canvas id="cornerCanvas"></canvas>
+      <div id="dropHint">
+        <div class="drop-inner">
+          <p class="drop-icon">📄 ➜ 📐</p>
+          <p><b>Drop a photo here</b> or use “Choose photo…”</p>
+          <p class="hint">Object on top of a sheet of paper, shot from above,<br>
+          all four corners visible.</p>
+        </div>
+      </div>
+    </div>
+    <div id="stage2" class="stage-view" hidden>
+      <canvas id="traceCanvas"></canvas>
+    </div>
+    <div id="stage3" class="stage-view" hidden></div>
+  </section>
+</main>
+
+<div id="toast" hidden></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

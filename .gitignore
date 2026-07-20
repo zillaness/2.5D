@@ -1,0 +1,4 @@
+node_modules/
+test/shots/
+package-lock.json
+.DS_Store

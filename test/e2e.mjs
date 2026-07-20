@@ -1,0 +1,368 @@
+// End-to-end test: renders a synthetic photo of an object on A4 paper (known
+// homography), drives the app headlessly through all three steps, and checks
+// corner detection, trace accuracy, mesh dimensions, watertightness, and STL
+// output. Requires playwright-core and a Chromium binary.
+//
+//   node test/e2e.mjs [path-to-chromium]
+
+import { createRequire } from 'module';
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const require = createRequire(import.meta.url);
+const { chromium } = require('playwright-core');
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const shotDir = process.env.SHOT_DIR || path.join(root, 'test', 'shots');
+
+const MIME = {
+  '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
+  '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png',
+  '.json': 'application/json',
+};
+
+function serveStatic() {
+  return new Promise(resolve => {
+    const server = http.createServer((req, res) => {
+      const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+      let fp = path.join(root, urlPath === '/' ? 'index.html' : urlPath);
+      if (!fp.startsWith(root) || !fs.existsSync(fp) || fs.statSync(fp).isDirectory()) {
+        res.writeHead(404); res.end('not found'); return;
+      }
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(fp)] || 'application/octet-stream' });
+      fs.createReadStream(fp).pipe(res);
+    });
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+function findChromium() {
+  const candidates = [
+    process.argv[2],
+    process.env.CHROMIUM_PATH,
+    '/opt/pw-browsers/chromium',
+  ].filter(Boolean);
+  for (const c of candidates) {
+    try {
+      const st = fs.statSync(c);
+      if (st.isFile()) return c;
+      if (st.isDirectory()) {
+        for (const sub of ['chrome-linux/chrome', 'chrome-linux/headless_shell', 'chrome']) {
+          const p = path.join(c, sub);
+          if (fs.existsSync(p)) return p;
+        }
+      }
+    } catch { /* try next */ }
+  }
+  return null; // let playwright find its own
+}
+
+let failures = 0;
+function check(name, ok, detail = '') {
+  const mark = ok ? 'PASS' : 'FAIL';
+  if (!ok) failures++;
+  console.log(`  [${mark}] ${name}${detail ? ' — ' + detail : ''}`);
+}
+const near = (a, b, tol) => Math.abs(a - b) <= tol;
+
+const server = await serveStatic();
+const port = server.address().port;
+const execPath = findChromium();
+console.log(`Serving ${root} on :${port}; chromium: ${execPath || '(playwright default)'}`);
+
+const browser = await chromium.launch({
+  executablePath: execPath || undefined,
+  args: ['--use-angle=swiftshader', '--no-sandbox'],
+});
+const page = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+const consoleErrors = [];
+page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
+page.on('pageerror', e => consoleErrors.push(String(e)));
+
+await page.goto(`http://127.0.0.1:${port}/`);
+await page.waitForFunction(() => window.__app && window.ClipperLib);
+
+// ---------- 1. Build the synthetic photo & feed it in ----------
+
+const setup = await page.evaluate(async () => {
+  const { computeHomography, applyHomography } = await import('./js/homography.js');
+
+  const paperW = 210, paperH = 297; // A4 portrait
+  // Paper corners in the fake photo (mild perspective) — TL TR BR BL.
+  const quad = [
+    { x: 150, y: 180 }, { x: 820, y: 140 }, { x: 900, y: 1220 }, { x: 120, y: 1260 },
+  ];
+  const H = computeHomography(
+    [{ x: 0, y: 0 }, { x: paperW, y: 0 }, { x: paperW, y: paperH }, { x: 0, y: paperH }],
+    quad
+  );
+
+  const W = 1000, Hh = 1400;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = Hh;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#38342e'; // desk
+  ctx.fillRect(0, 0, W, Hh);
+
+  const mapPath = pts => {
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const q = applyHomography(H, p.x, p.y);
+      if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
+    });
+    ctx.closePath();
+  };
+
+  // Paper
+  mapPath([{ x: 0, y: 0 }, { x: paperW, y: 0 }, { x: paperW, y: paperH }, { x: 0, y: paperH }]);
+  ctx.fillStyle = '#f4f2ec';
+  ctx.fill();
+
+  // Object: 80 × 50 mm rounded rect centred at (105, 145), corner radius 8.
+  const rr = [];
+  const cxm = 105, cym = 145, hw = 40, hh = 25, r = 8;
+  const cs = [
+    [cxm + hw - r, cym - hh + r, -Math.PI / 2, 0],
+    [cxm + hw - r, cym + hh - r, 0, Math.PI / 2],
+    [cxm - hw + r, cym + hh - r, Math.PI / 2, Math.PI],
+    [cxm - hw + r, cym - hh + r, Math.PI, 1.5 * Math.PI],
+  ];
+  for (const [ax, ay, a0, a1] of cs) {
+    for (let k = 0; k <= 10; k++) {
+      const a = a0 + (a1 - a0) * (k / 10);
+      rr.push({ x: ax + r * Math.cos(a), y: ay + r * Math.sin(a) });
+    }
+  }
+  mapPath(rr);
+  ctx.fillStyle = '#23364a';
+  ctx.fill();
+
+  // 12 mm hole at the object centre — draw in paper colour.
+  const hole = [];
+  for (let k = 0; k < 48; k++) {
+    const a = (k / 48) * Math.PI * 2;
+    hole.push({ x: cxm + 6 * Math.cos(a), y: cym + 6 * Math.sin(a) });
+  }
+  mapPath(hole);
+  ctx.fillStyle = '#f4f2ec';
+  ctx.fill();
+
+  const dataURL = c.toDataURL('image/png');
+  await new Promise(res => window.__app.loadImageFromURL(dataURL, res));
+  return { quad, detected: window.__app.state.corners };
+});
+
+console.log('\nStep 1 — paper detection');
+{
+  const { quad, detected } = setup;
+  let maxErr = 0;
+  for (let i = 0; i < 4; i++) {
+    maxErr = Math.max(maxErr, Math.hypot(quad[i].x - detected[i].x, quad[i].y - detected[i].y));
+  }
+  check('auto-detected corners near truth', maxErr < 10, `max error ${maxErr.toFixed(1)} px`);
+}
+await page.screenshot({ path: path.join(shotDir, 'step1-corners.png') });
+
+// ---------- 2. Trace ----------
+
+const traceRes = await page.evaluate(({ quad }) => {
+  const app = window.__app;
+  // Use exact corners so trace-accuracy checks are meaningful on their own.
+  app.state.corners = quad.map(p => ({ ...p }));
+  app.state.rectDirty = true;
+  app.cornerEditor.setCorners(app.state.corners);
+  app.goStep(2);
+  const { outer, holes } = app.traceEditor.getTrace();
+  const bbox = pts => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  };
+  return {
+    outerCount: outer.length,
+    outerBox: bbox(outer),
+    holeCount: holes.length,
+    holeBox: holes.length ? bbox(holes[0]) : null,
+  };
+}, { quad: setup.quad });
+
+console.log('\nStep 2 — trace');
+check('outline has a sane vertex count', traceRes.outerCount >= 20 && traceRes.outerCount < 3000,
+  `${traceRes.outerCount} pts`);
+check('outline width ≈ 80 mm', near(traceRes.outerBox.w, 80, 1.5), traceRes.outerBox.w.toFixed(2));
+check('outline height ≈ 50 mm', near(traceRes.outerBox.h, 50, 1.5), traceRes.outerBox.h.toFixed(2));
+check('outline position ≈ (65, 120) mm',
+  near(traceRes.outerBox.minX, 65, 1.5) && near(traceRes.outerBox.minY, 120, 1.5),
+  `(${traceRes.outerBox.minX.toFixed(1)}, ${traceRes.outerBox.minY.toFixed(1)})`);
+check('one hole detected', traceRes.holeCount === 1, `${traceRes.holeCount}`);
+if (traceRes.holeBox) {
+  check('hole ⌀ ≈ 12 mm', near(traceRes.holeBox.w, 12, 1.5) && near(traceRes.holeBox.h, 12, 1.5),
+    `${traceRes.holeBox.w.toFixed(2)} × ${traceRes.holeBox.h.toFixed(2)}`);
+}
+await page.waitForTimeout(300); // let the canvas refit after becoming visible
+await page.screenshot({ path: path.join(shotDir, 'step2-trace.png') });
+
+// ---------- 3. Mesh ----------
+
+const meshRes = await page.evaluate(async () => {
+  const app = window.__app;
+  // Manual 6 mm circle hole near the left side of the object.
+  app.traceEditor.circles.push({ cx: 80, cy: 132, d: 6 });
+  app.state.model.thickness = 6;
+  app.state.model.top = { mode: 'chamfer', size: 1 };
+  app.state.model.bottom = { mode: 'fillet', size: 1.5 };
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 600)); // debounce + build
+  const mesh = app.state.meshData;
+  if (!mesh) return { ok: false };
+
+  const { positions, indices, stats } = mesh;
+  let minZ = 1e9, maxZ = -1e9;
+  for (let i = 2; i < positions.length; i += 3) {
+    minZ = Math.min(minZ, positions[i]); maxZ = Math.max(maxZ, positions[i]);
+  }
+  // Bottom (z≈0) and top (z≈max) slice bboxes.
+  const sliceBox = z => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9, count = 0;
+    for (let i = 0; i < positions.length; i += 3) {
+      if (Math.abs(positions[i + 2] - z) < 1e-4) {
+        minX = Math.min(minX, positions[i]); maxX = Math.max(maxX, positions[i]);
+        minY = Math.min(minY, positions[i + 1]); maxY = Math.max(maxY, positions[i + 1]);
+        count++;
+      }
+    }
+    return { w: maxX - minX, h: maxY - minY, count };
+  };
+  // Watertight: every undirected edge (keyed by rounded coords) used exactly twice.
+  const edgeUse = new Map();
+  const vkey = i => `${positions[i * 3].toFixed(4)},${positions[i * 3 + 1].toFixed(4)},${positions[i * 3 + 2].toFixed(4)}`;
+  let degenerate = 0;
+  for (let t = 0; t < indices.length; t += 3) {
+    const ks = [vkey(indices[t]), vkey(indices[t + 1]), vkey(indices[t + 2])];
+    if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) { degenerate++; continue; }
+    for (let e = 0; e < 3; e++) {
+      const a = ks[e], b = ks[(e + 1) % 3];
+      const key = a < b ? a + '|' + b : b + '|' + a;
+      edgeUse.set(key, (edgeUse.get(key) || 0) + 1);
+    }
+  }
+  let bad = 0;
+  for (const n of edgeUse.values()) if (n !== 2) bad++;
+
+  // Hole-ring evidence: bottom-cap vertices near the traced hole centre
+  // (model coords put it at the origin).
+  let nearHole = 0;
+  for (let i = 0; i < positions.length; i += 3) {
+    if (Math.abs(positions[i + 2]) < 1e-4 &&
+        Math.hypot(positions[i], positions[i + 1]) < 9.5) nearHole++;
+  }
+
+  const { toBinarySTL } = await import('./js/exporters.js');
+  const blob = toBinarySTL(positions, indices, 'test');
+
+  return {
+    ok: true, stats, minZ, maxZ,
+    bottomBox: sliceBox(0), topBox: sliceBox(maxZ),
+    badEdges: bad, totalEdges: edgeUse.size, degenerate,
+    nearHole,
+    stlSize: blob.size, stlExpected: 84 + 50 * (indices.length / 3),
+  };
+});
+
+console.log('\nStep 3 — mesh & export');
+check('mesh built', meshRes.ok);
+if (meshRes.ok) {
+  const s = meshRes.stats;
+  check('size ≈ 80 × 50 × 6 mm',
+    near(s.sizeX, 80, 1.5) && near(s.sizeY, 50, 1.5) && near(s.sizeZ, 6, 1e-6),
+    `${s.sizeX.toFixed(1)} × ${s.sizeY.toFixed(1)} × ${s.sizeZ}`);
+  check('z spans 0..thickness', near(meshRes.minZ, 0, 1e-6) && near(meshRes.maxZ, 6, 1e-6),
+    `${meshRes.minZ}..${meshRes.maxZ}`);
+  check('bottom fillet shrinks base by ~2×1.5 mm',
+    near(meshRes.bottomBox.w, 77, 1.0) && near(meshRes.bottomBox.h, 47, 1.0),
+    `${meshRes.bottomBox.w.toFixed(2)} × ${meshRes.bottomBox.h.toFixed(2)}`);
+  check('top chamfer shrinks top by ~2×1 mm',
+    near(meshRes.topBox.w, 78, 1.0) && near(meshRes.topBox.h, 48, 1.0),
+    `${meshRes.topBox.w.toFixed(2)} × ${meshRes.topBox.h.toFixed(2)}`);
+  check('watertight (every edge shared by 2 triangles)', meshRes.badEdges === 0,
+    `${meshRes.badEdges}/${meshRes.totalEdges} bad, ${meshRes.degenerate} degenerate tris`);
+  check('hole ring present in bottom cap', meshRes.nearHole > 8, `${meshRes.nearHole} verts`);
+  check('triangle count sane', meshRes.stats.triangles > 500, `${meshRes.stats.triangles}`);
+  check('binary STL size matches triangle count', meshRes.stlSize === meshRes.stlExpected,
+    `${meshRes.stlSize} vs ${meshRes.stlExpected}`);
+}
+await page.screenshot({ path: path.join(shotDir, 'step3-model.png') });
+
+// ---------- 4. Stress: extreme edge treatments must stay watertight ----------
+
+const stressRes = await page.evaluate(async () => {
+  const { buildSolid, circleToPolygon } = await import('./js/mesh.js');
+  const app = window.__app;
+  const { outer, holes, circles } = app.traceEditor.getTrace();
+  const allHoles = [...holes, ...circles.map(c => circleToPolygon(c.cx, c.cy, c.d))];
+
+  const watertight = mesh => {
+    const { positions, indices } = mesh;
+    const edgeUse = new Map();
+    const vkey = i => `${positions[i * 3].toFixed(4)},${positions[i * 3 + 1].toFixed(4)},${positions[i * 3 + 2].toFixed(4)}`;
+    for (let t = 0; t < indices.length; t += 3) {
+      const ks = [vkey(indices[t]), vkey(indices[t + 1]), vkey(indices[t + 2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e + 1) % 3];
+        const key = a < b ? a + '|' + b : b + '|' + a;
+        edgeUse.set(key, (edgeUse.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const n of edgeUse.values()) if (n !== 2) bad++;
+    return bad;
+  };
+
+  const cases = [
+    ['fillet+fillet at exactly half thickness',
+      { thickness: 6, top: { mode: 'fillet', size: 3 }, bottom: { mode: 'fillet', size: 3 }, arcSegments: 6 }],
+    ['huge chamfer forcing topology clamp',
+      { thickness: 40, top: { mode: 'chamfer', size: 15 }, bottom: { mode: 'none', size: 0 }, arcSegments: 6 }],
+    ['thin plate, fillet top + chamfer bottom',
+      { thickness: 3, top: { mode: 'fillet', size: 1 }, bottom: { mode: 'chamfer', size: 1 }, arcSegments: 10 }],
+    ['no holes, big bottom fillet',
+      { thickness: 8, top: { mode: 'none', size: 0 }, bottom: { mode: 'fillet', size: 4 }, arcSegments: 12 }, true],
+  ];
+  const results = [];
+  for (const [name, params, dropHoles] of cases) {
+    try {
+      const mesh = buildSolid(outer, dropHoles ? [] : allHoles, params);
+      results.push({
+        name,
+        built: !!mesh,
+        badEdges: mesh ? watertight(mesh) : -1,
+        tris: mesh ? mesh.stats.triangles : 0,
+        clamped: mesh ? mesh.stats.clamped : false,
+      });
+    } catch (err) {
+      results.push({ name, built: false, error: String(err) });
+    }
+  }
+  return results;
+});
+
+console.log('\nStress — extreme edge treatments');
+for (const r of stressRes) {
+  check(r.name, r.built && r.badEdges === 0,
+    r.error || `${r.tris} tris, ${r.badEdges} bad edges${r.clamped ? ', clamped' : ''}`);
+}
+
+console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
+if (consoleErrors.length) failures++;
+
+await browser.close();
+server.close();
+
+console.log(failures === 0 ? '\nAll checks passed ✔' : `\n${failures} check(s) FAILED ✘`);
+process.exit(failures === 0 ? 0 : 1);

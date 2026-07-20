@@ -1,0 +1,203 @@
+// Step 1 editor: show the photo, drag the four paper-corner handles.
+// A magnifier loupe appears while dragging for pixel-accurate placement.
+
+import { Viewport, prepareCanvas } from './viewport.js';
+
+const HANDLE_R = 9;
+const LABELS = ['TL', 'TR', 'BR', 'BL'];
+
+export class CornerEditor {
+  constructor(canvas, onChange) {
+    this.canvas = canvas;
+    this.onChange = onChange;
+    this.vp = new Viewport(canvas);
+    this.image = null;      // HTMLImageElement
+    this.corners = null;    // [{x,y} x4] in image px, TL TR BR BL
+    this.dragIdx = -1;
+    this.panning = false;
+    this.lastPos = null;
+    this.pointer = null;
+
+    canvas.addEventListener('pointerdown', e => this._down(e));
+    canvas.addEventListener('pointermove', e => this._move(e));
+    canvas.addEventListener('pointerup', e => this._up(e));
+    canvas.addEventListener('pointercancel', e => this._up(e));
+    canvas.addEventListener('dblclick', () => { this.vp.fit(); this.draw(); });
+    canvas.addEventListener('viewportchange', () => this.draw());
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    this._pendingFit = false;
+    new ResizeObserver(() => {
+      if (this._pendingFit && canvas.clientWidth > 0 && canvas.clientHeight > 0) {
+        this._pendingFit = false;
+        this.vp.fit();
+      }
+      this.draw();
+    }).observe(canvas);
+  }
+
+  setImage(image) {
+    this.image = image;
+    this.vp.setContent(image.naturalWidth, image.naturalHeight);
+    if (this.canvas.clientWidth > 0 && this.canvas.clientHeight > 0) this.vp.fit();
+    else this._pendingFit = true;
+    this.draw();
+  }
+
+  setCorners(corners) {
+    this.corners = corners;
+    this.draw();
+  }
+
+  _hitCorner(sp) {
+    if (!this.corners) return -1;
+    for (let i = 0; i < 4; i++) {
+      const c = this.vp.toScreen(this.corners[i]);
+      if (Math.hypot(c.x - sp.x, c.y - sp.y) <= HANDLE_R + 6) return i;
+    }
+    return -1;
+  }
+
+  _down(e) {
+    if (!this.image) return;
+    this.canvas.setPointerCapture(e.pointerId);
+    const sp = this.vp.eventPos(e);
+    this.lastPos = sp;
+    if (e.button === 1 || e.button === 2) {
+      this.panning = true;
+      return;
+    }
+    const hit = this._hitCorner(sp);
+    if (hit >= 0) {
+      this.dragIdx = hit;
+    } else {
+      this.panning = true;
+    }
+  }
+
+  _move(e) {
+    if (!this.image) return;
+    const sp = this.vp.eventPos(e);
+    this.pointer = sp;
+    if (this.panning && this.lastPos) {
+      this.vp.pan(sp.x - this.lastPos.x, sp.y - this.lastPos.y);
+      this.lastPos = sp;
+      this.draw();
+      return;
+    }
+    if (this.dragIdx >= 0) {
+      const wp = this.vp.toWorld(sp);
+      const iw = this.image.naturalWidth, ih = this.image.naturalHeight;
+      this.corners[this.dragIdx] = {
+        x: Math.max(0, Math.min(iw, wp.x)),
+        y: Math.max(0, Math.min(ih, wp.y)),
+      };
+      this.draw();
+      return;
+    }
+    // Hover feedback
+    this.canvas.style.cursor = this._hitCorner(sp) >= 0 ? 'grab' : 'default';
+    this.draw();
+  }
+
+  _up(e) {
+    if (this.dragIdx >= 0 && this.onChange) this.onChange(this.corners);
+    this.dragIdx = -1;
+    this.panning = false;
+    this.lastPos = null;
+    this.draw();
+  }
+
+  draw() {
+    const ctx = prepareCanvas(this.canvas);
+    const { w: vw, h: vh } = this.vp.viewSize();
+    ctx.clearRect(0, 0, vw, vh);
+    if (!this.image) return;
+
+    const s = this.vp.scale;
+    ctx.save();
+    ctx.translate(this.vp.ox, this.vp.oy);
+    ctx.scale(s, s);
+    ctx.imageSmoothingEnabled = s < 4;
+    ctx.drawImage(this.image, 0, 0);
+    ctx.restore();
+
+    if (!this.corners) return;
+    const pts = this.corners.map(c => this.vp.toScreen(c));
+
+    // Quad outline + translucent fill
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(80, 170, 255, 0.10)';
+    ctx.fill();
+    ctx.strokeStyle = '#53a9ff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Top edge marker (maps to the paper's top/width edge)
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    ctx.lineTo(pts[1].x, pts[1].y);
+    ctx.strokeStyle = '#ffd257';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    for (let i = 0; i < 4; i++) {
+      const p = pts[i];
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, HANDLE_R, 0, Math.PI * 2);
+      ctx.fillStyle = i === this.dragIdx ? '#ffd257' : 'rgba(20, 26, 33, 0.85)';
+      ctx.fill();
+      ctx.strokeStyle = i === this.dragIdx ? '#fff' : '#53a9ff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = i === this.dragIdx ? '#1c2027' : '#cfe3ff';
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(LABELS[i], p.x, p.y);
+    }
+
+    // Loupe while dragging
+    if (this.dragIdx >= 0 && this.pointer) {
+      this._drawLoupe(ctx, this.corners[this.dragIdx], vw, vh);
+    }
+  }
+
+  _drawLoupe(ctx, worldPt, vw, vh) {
+    const R = 70, ZOOM = 4;
+    const sp = this.vp.toScreen(worldPt);
+    // Place the loupe away from the pointer
+    let lx = sp.x + 110, ly = sp.y - 110;
+    if (lx + R > vw) lx = sp.x - 110;
+    if (ly - R < 0) ly = sp.y + 110;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(lx, ly, R, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(lx - R, ly - R, R * 2, R * 2);
+    const srcR = R / ZOOM;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(
+      this.image,
+      worldPt.x - srcR, worldPt.y - srcR, srcR * 2, srcR * 2,
+      lx - R, ly - R, R * 2, R * 2
+    );
+    // Crosshair
+    ctx.strokeStyle = '#ffd257';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(lx - R, ly); ctx.lineTo(lx + R, ly);
+    ctx.moveTo(lx, ly - R); ctx.lineTo(lx, ly + R);
+    ctx.stroke();
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(lx, ly, R, 0, Math.PI * 2);
+    ctx.strokeStyle = '#53a9ff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
