@@ -71,6 +71,7 @@ const traceEditor = new TraceEditor($('traceCanvas'), {
   onSelect: () => {
     syncHolePanel();
     positionHoleTag();
+    refreshSelectionTools();
     const si = traceEditor.selectedSectionIndex();
     if (si >= 1) { state.selRegion = si; refreshModelFields(); }
   },
@@ -755,6 +756,55 @@ $('normalizeAllBtn').addEventListener('click', () => {
   toast(n ? `${n} traced hole${n > 1 ? 's' : ''} normalized to perfect circles.`
           : 'No round-enough traced holes found.');
 });
+
+// Multi-select selection tools.
+function refreshSelectionTools() {
+  const count = traceEditor.selectedVerts.length;
+  $('selCount').textContent = count ? `${count} points` : '';
+  const run3 = traceEditor.hasMultiRun(3);
+  const run2 = traceEditor.hasMultiRun(2);
+  $('fitArcBtn').disabled = !run3;
+  $('fitLineBtn').disabled = !run3;
+  $('simplifySelBtn').disabled = !run3;
+  $('densifyBtn').disabled = !run2;
+  $('clearSelBtn').disabled = !count;
+  if (!count) $('arcRadiusField').hidden = true;
+}
+$('fitArcBtn').addEventListener('click', () => {
+  const r = traceEditor.fitArcToSelection();
+  if (r) {
+    $('arcRadiusField').hidden = false;
+    $('arcRadius').value = fmtDim(r);
+    toast(`Fitted arc, radius ${fmtDimL(r)}.`);
+  } else {
+    toast('Select a run of 3+ points on one outline first.');
+  }
+  refreshSelectionTools();
+});
+$('arcRadius').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm > 0 && traceEditor.setSelectedArcRadius(mm)) {
+    $('arcRadius').value = fmtDim(mm);
+  }
+});
+$('fitLineBtn').addEventListener('click', () => {
+  if (!traceEditor.fitLineToSelection()) toast('Select a run of 3+ points on one outline first.');
+  else $('arcRadiusField').hidden = true;
+  refreshSelectionTools();
+});
+$('densifyBtn').addEventListener('click', () => {
+  if (!traceEditor.densifySelection()) toast('Select 2+ points on one outline first.');
+  refreshSelectionTools();
+});
+$('simplifySelBtn').addEventListener('click', () => {
+  if (!traceEditor.simplifySelection(0.3)) toast('Nothing to reduce in the selected run.');
+  refreshSelectionTools();
+});
+$('clearSelBtn').addEventListener('click', () => {
+  traceEditor.clearMultiSelect();
+  $('arcRadiusField').hidden = true;
+  refreshSelectionTools();
+});
 for (const [id, prop, min] of [
   ['holeDepth', 'depth', 0.2], ['csDia', 'csDia', 0.5],
   ['cbDia', 'cbDia', 0.5], ['cbDepth', 'cbDepth', 0.2],
@@ -785,12 +835,19 @@ document.addEventListener('keydown', e => {
     traceEditor.cancelDraftRegion();
     return;
   }
+  if (e.key === 'Escape' && traceEditor.selectedVerts.length) {
+    traceEditor.clearMultiSelect();
+    $('arcRadiusField').hidden = true;
+    refreshSelectionTools();
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     traceEditor.undo();
   } else if (e.key === 'Delete' || e.key === 'Backspace') {
     e.preventDefault();
     traceEditor.deleteSelected();
+    refreshSelectionTools();
   }
 });
 

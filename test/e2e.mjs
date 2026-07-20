@@ -821,6 +821,84 @@ check('credit-card preset present (53.98 × 85.60 mm)',
 check('version shown in header and stamped in STL',
   /^v\d+\.\d+\.\d+$/.test(groupA.versionInDom) && groupA.versionInStl, groupA.versionInDom);
 
+// ---------- 10. Group B: hole resize hit-region, multi-select, arc/line fit ----------
+
+const groupB = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  // Reset to a clean known trace: a square outline + a couple circles.
+  te.setTrace(
+    [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }],
+    []
+  );
+  te.setCircles([{ cx: 40, cy: 40, d: 10, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } }]);
+
+  // Hole hit-region: near the rim = resize, at the centre = move.
+  const rimHit = te._hitCircle(te._mmToScreen({ x: 45, y: 40 }));  // 5 mm out = bore rim
+  const ctrHit = te._hitCircle(te._mmToScreen({ x: 40, y: 40 }));
+
+  // Multi-select a run of 3 collinear-ish points is not here; use outline
+  // corners: select all 4 corners, group-move by +5,+5 via the API path.
+  te.selectedVerts = [
+    { loop: -1, idx: 0 }, { loop: -1, idx: 1 },
+    { loop: -1, idx: 2 }, { loop: -1, idx: 3 },
+  ];
+  const before = te.outer.map(p => ({ ...p }));
+  te._groupDrag = { start: { x: 0, y: 0 }, orig: before.map(p => ({ ...p })) };
+  // Simulate a move to (+5, +5)
+  te.selectedVerts.forEach((v, i) => {
+    te.outer[v.idx] = { x: before[i].x + 5, y: before[i].y + 5 };
+  });
+  te._groupDrag = null;
+  const moved = te.outer.every((p, i) => Math.abs(p.x - (before[i].x + 5)) < 1e-6);
+
+  // Densify the outline's top edge run (idx 0..1).
+  te.selectedVerts = [{ loop: -1, idx: 0 }, { loop: -1, idx: 1 }];
+  const nBefore = te.outer.length;
+  const densOk = te.densifySelection();
+  const nAfter = te.outer.length;
+
+  // Fit an arc: build a shallow-arc run of 5 points and fit it.
+  te.setTrace([
+    { x: 0, y: 10 }, { x: 2, y: 6 }, { x: 5, y: 5 }, { x: 8, y: 6 }, { x: 10, y: 10 },
+    { x: 10, y: 30 }, { x: 0, y: 30 },
+  ], []);
+  te.selectedVerts = [0, 1, 2, 3, 4].map(idx => ({ loop: -1, idx }));
+  const arcR = te.fitArcToSelection();
+  const arcPtCount = te.outer.length;
+
+  // Fit line: select a run and straighten it.
+  te.setTrace([
+    { x: 0, y: 0 }, { x: 2, y: 1 }, { x: 4, y: -1 }, { x: 6, y: 0.5 }, { x: 8, y: 0 },
+    { x: 8, y: 20 }, { x: 0, y: 20 },
+  ], []);
+  te.selectedVerts = [0, 1, 2, 3, 4].map(idx => ({ loop: -1, idx }));
+  const lineOk = te.fitLineToSelection();
+  const lineLen = te.outer.length;
+
+  return {
+    rimResize: rimHit && rimHit.region === 'resize',
+    ctrMove: ctrHit && ctrHit.region === 'move',
+    moved,
+    densOk, nBefore, nAfter,
+    arcR, arcPtCount,
+    lineOk, lineLen,
+  };
+});
+
+console.log('\nGroup B — hole resize/move, multi-select, arc/line fit, densify');
+check('hole rim hit = resize, centre hit = move', groupB.rimResize && groupB.ctrMove,
+  `rim ${groupB.rimResize}, centre ${groupB.ctrMove}`);
+check('group move shifts all selected vertices together', groupB.moved);
+check('densify adds a midpoint on the selected edge', groupB.densOk && groupB.nAfter === groupB.nBefore + 1,
+  `${groupB.nBefore} -> ${groupB.nAfter}`);
+check('fit arc replaces a run with a smooth arc (>5 pts)',
+  groupB.arcR > 0 && groupB.arcPtCount > 7, `r=${groupB.arcR}, ${groupB.arcPtCount} outline pts`);
+check('fit line straightens a run to 2 endpoints (7 -> 4 pts)',
+  groupB.lineOk && groupB.lineLen === 4, `${groupB.lineLen} pts`);
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 

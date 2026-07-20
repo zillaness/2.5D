@@ -45,11 +45,15 @@ export class TraceEditor {
       edgeBottom: { mode: 'none', size: 0.5 },
       screw: { std: 'custom', size: '', fit: 'clearance' },
     };
-    this.selection = null;   // {type:'vertex', loop, idx} | {type:'circle', idx}
+    this.selection = null;   // {type:'vertex', loop, idx} | {type:'circle', idx} | {type:'holeloop', loop}
+    this.selectedVerts = [];  // multi-selection: [{loop, idx}] for group move/delete/fit
     this.dragging = false;
     this.panning = false;
     this.lastPos = null;
     this.undoStack = [];
+    this._circleResize = false; // true when dragging a hole's rim (resize)
+    this._groupDrag = null;     // {start, orig:[{x,y}]} while moving a vertex group
+    this._marquee = null;       // {x0,y0,x1,y1} screen rect while Shift-dragging
 
     canvas.addEventListener('pointerdown', e => this._down(e));
     canvas.addEventListener('pointermove', e => this._move(e));
@@ -97,6 +101,7 @@ export class TraceEditor {
     this.holes = holes || [];
     if (!keepUndo) this.undoStack.length = 0;
     this.selection = null;
+    this.selectedVerts = [];
     this._notifySelect();
     this.draw();
   }
@@ -149,6 +154,7 @@ export class TraceEditor {
     this.sections.push(...s.sections);
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
     this.selection = null;
+    this.selectedVerts = [];
     this._notifySelect();
     this._changed();
     return true;
@@ -214,6 +220,8 @@ export class TraceEditor {
     return Math.max(c.d, topDia + rim(c.edgeTop), botDia + rim(c.edgeBottom));
   }
 
+  // Hit-test a hole. region: 'resize' when near the bore rim (drag = change
+  // diameter), 'move' when in the interior/centre (drag = reposition).
   _hitCircle(sp) {
     for (let i = 0; i < this.circles.length; i++) {
       const c = this.circles[i];
@@ -221,10 +229,10 @@ export class TraceEditor {
       const rimR = (c.d / 2) * this.pxPerMm * this.vp.scale;
       const recessR = (this._holeMaxDia(c) / 2) * this.pxPerMm * this.vp.scale;
       const d = Math.hypot(ctr.x - sp.x, ctr.y - sp.y);
-      if (d <= Math.max(HIT_R, 10) || Math.abs(d - rimR) <= HIT_R ||
-          Math.abs(d - recessR) <= HIT_R) {
-        return { type: 'circle', idx: i };
-      }
+      const onRim = Math.abs(d - rimR) <= HIT_R || Math.abs(d - recessR) <= HIT_R;
+      const inInterior = d <= Math.max(HIT_R, 10) || d < rimR - HIT_R;
+      if (inInterior) return { type: 'circle', idx: i, region: 'move' };
+      if (onRim) return { type: 'circle', idx: i, region: 'resize' };
     }
     return null;
   }
@@ -306,7 +314,28 @@ export class TraceEditor {
       return;
     }
 
+    // Ctrl/Cmd+click on a vertex toggles it in the multi-selection.
+    if (vHit && (e.ctrlKey || e.metaKey)) {
+      this._toggleVert(vHit);
+      this.selection = null;
+      this._notifySelect();
+      this.draw();
+      return;
+    }
+
     if (vHit) {
+      if (this._vertInMulti(vHit) && this.selectedVerts.length > 1) {
+        // Drag the whole group.
+        this.pushUndo();
+        const mm0 = this._screenToMm(sp);
+        this._groupDrag = {
+          start: mm0,
+          orig: this.selectedVerts.map(v => ({ ...this._loop(v.loop)[v.idx] })),
+        };
+        this.dragging = true;
+        return;
+      }
+      this.selectedVerts = [];
       this.selection = vHit;
       this.pushUndo();
       this.dragging = true;
@@ -315,7 +344,9 @@ export class TraceEditor {
       return;
     }
     if (cHit) {
-      this.selection = cHit;
+      this.selectedVerts = [];
+      this.selection = { type: 'circle', idx: cHit.idx };
+      this._circleResize = cHit.region === 'resize';
       this.pushUndo();
       this.dragging = true;
       this._notifySelect();
@@ -326,6 +357,7 @@ export class TraceEditor {
     const eHit = this._hitEdge(sp);
     if (eHit) {
       // Insert a vertex on the edge and start dragging it.
+      this.selectedVerts = [];
       this.pushUndo();
       const pts = this._loop(eHit.loop);
       const a = pts[eHit.idx], b = pts[(eHit.idx + 1) % pts.length];
@@ -338,10 +370,18 @@ export class TraceEditor {
       return;
     }
 
+    // Shift+drag on empty space starts a marquee multi-selection.
+    if (e.shiftKey) {
+      this._marquee = { x0: sp.x, y0: sp.y, x1: sp.x, y1: sp.y };
+      this.dragging = true;
+      return;
+    }
+
     // Inside a traced hole (or a section footprint): select + drag the loop.
     const mm = this._screenToMm(sp);
     for (let h = 0; h < this.holes.length; h++) {
       if (pointInPolygon(mm, this.holes[h])) {
+        this.selectedVerts = [];
         this.selection = { type: 'holeloop', loop: h };
         this.pushUndo();
         this.dragging = true;
@@ -353,6 +393,7 @@ export class TraceEditor {
     }
     for (let s = 1; s < this.sections.length; s++) {
       if (this.sections[s].pts && pointInPolygon(mm, this.sections[s].pts)) {
+        this.selectedVerts = [];
         this.selection = { type: 'holeloop', loop: REGION_LOOP_BASE + s };
         this.pushUndo();
         this.dragging = true;
@@ -364,8 +405,23 @@ export class TraceEditor {
     }
 
     this.selection = null;
+    this.selectedVerts = [];
     this.panning = true;
     this._notifySelect();
+    this.draw();
+  }
+
+  // ---- multi-selection helpers ----
+
+  _vertKey(v) { return `${v.loop}:${v.idx}`; }
+  _vertInMulti(v) { return this.selectedVerts.some(s => s.loop === v.loop && s.idx === v.idx); }
+  _toggleVert(v) {
+    const i = this.selectedVerts.findIndex(s => s.loop === v.loop && s.idx === v.idx);
+    if (i >= 0) this.selectedVerts.splice(i, 1);
+    else this.selectedVerts.push({ loop: v.loop, idx: v.idx });
+  }
+  clearMultiSelect() {
+    this.selectedVerts = [];
     this.draw();
   }
 
@@ -397,6 +453,30 @@ export class TraceEditor {
       this.draw();
       return;
     }
+    // Marquee selection
+    if (this.dragging && this._marquee) {
+      this._marquee.x1 = sp.x; this._marquee.y1 = sp.y;
+      this.draw();
+      return;
+    }
+    // Group move of a vertex multi-selection
+    if (this.dragging && this._groupDrag) {
+      const mm = this._screenToMm(sp);
+      const maxX = this.rectified.width / this.pxPerMm;
+      const maxY = this.rectified.height / this.pxPerMm;
+      const dx = mm.x - this._groupDrag.start.x, dy = mm.y - this._groupDrag.start.y;
+      this.selectedVerts.forEach((v, i) => {
+        const loop = this._loop(v.loop);
+        if (!loop) return;
+        const o = this._groupDrag.orig[i];
+        loop[v.idx] = {
+          x: Math.max(0, Math.min(maxX, o.x + dx)),
+          y: Math.max(0, Math.min(maxY, o.y + dy)),
+        };
+      });
+      this._changed(true);
+      return;
+    }
     if (this.dragging && this.selection) {
       const mm = this._screenToMm(sp);
       const maxX = this.rectified.width / this.pxPerMm;
@@ -414,6 +494,10 @@ export class TraceEditor {
       } else if (this.selection.type === 'vertex') {
         const pts = this._loop(this.selection.loop);
         pts[this.selection.idx] = mm;
+      } else if (this.selection.type === 'circle' && this._circleResize) {
+        // Dragging the rim resizes the bore diameter.
+        const c = this.circles[this.selection.idx];
+        c.d = Math.max(0.4, 2 * Math.hypot(mm.x - c.cx, mm.y - c.cy));
       } else if (this.selection.type === 'circle') {
         const c = this.circles[this.selection.idx];
         c.cx = mm.x; c.cy = mm.y;
@@ -426,13 +510,28 @@ export class TraceEditor {
       this._changed(true);
       return;
     }
-    if (this.mode === 'edit') {
-      const hit = this._hitVertex(sp) || this._hitCircle(sp) || this._hitEdge(sp);
-      this.canvas.style.cursor = hit ? 'pointer' : 'default';
+    if (this.mode === 'edit') this._updateHoverCursor(sp);
+  }
+
+  _updateHoverCursor(sp) {
+    const v = this._hitVertex(sp);
+    if (v) { this.canvas.style.cursor = 'pointer'; return; }
+    const c = this._hitCircle(sp);
+    if (c) {
+      this.canvas.style.cursor = c.region === 'resize' ? 'nwse-resize' : 'move';
+      return;
     }
+    this.canvas.style.cursor = this._hitEdge(sp) ? 'copy' : 'default';
   }
 
   _up() {
+    if (this._marquee) {
+      this._applyMarquee(this._marquee);
+      this._marquee = null;
+      this.dragging = false;
+      this.draw();
+      return;
+    }
     if (this.dragging) {
       if (this._placedIdx !== null) {
         const c = this.circles[this._placedIdx];
@@ -444,12 +543,39 @@ export class TraceEditor {
         this._holeStart = null;
         if (this.cb.onHolePlaced) this.cb.onHolePlaced(placed);
       }
+      if (this.selection && this.selection.type === 'circle' && this._circleResize) {
+        this.circles[this.selection.idx].d = Math.round(this.circles[this.selection.idx].d * 20) / 20;
+      }
       this._changed();
     }
     this.dragging = false;
     this.panning = false;
     this.lastPos = null;
     this._lastMm = null;
+    this._groupDrag = null;
+    this._circleResize = false;
+  }
+
+  // Select every vertex whose screen position falls inside the marquee rect.
+  _applyMarquee(m) {
+    const xa = Math.min(m.x0, m.x1), xb = Math.max(m.x0, m.x1);
+    const ya = Math.min(m.y0, m.y1), yb = Math.max(m.y0, m.y1);
+    if (xb - xa < 3 && yb - ya < 3) return; // ignore a stray click
+    const sel = [];
+    const scan = (loopIdx, pts) => {
+      for (let i = 0; i < pts.length; i++) {
+        const s = this._mmToScreen(pts[i]);
+        if (s.x >= xa && s.x <= xb && s.y >= ya && s.y <= yb) sel.push({ loop: loopIdx, idx: i });
+      }
+    };
+    scan(-1, this.outer);
+    for (let h = 0; h < this.holes.length; h++) scan(h, this.holes[h]);
+    for (let s = 1; s < this.sections.length; s++) {
+      if (this.sections[s].pts) scan(REGION_LOOP_BASE + s, this.sections[s].pts);
+    }
+    this.selectedVerts = sel;
+    this.selection = null;
+    this._notifySelect();
   }
 
   // ---- edit ops ----
@@ -482,10 +608,47 @@ export class TraceEditor {
   }
 
   deleteSelected() {
+    if (this.selectedVerts.length) { this._deleteVertGroup(); return; }
     if (!this.selection) return;
     if (this.selection.type === 'vertex') this._deleteVertex(this.selection);
     else if (this.selection.type === 'circle') this._deleteCircle(this.selection.idx);
     else if (this.selection.type === 'holeloop') this.deleteSelectedHole();
+  }
+
+  // Delete every vertex in the multi-selection, per loop, keeping each loop a
+  // valid polygon (>= 3 points) and never emptying the outer outline.
+  _deleteVertGroup() {
+    this.pushUndo();
+    const byLoop = new Map();
+    for (const v of this.selectedVerts) {
+      if (!byLoop.has(v.loop)) byLoop.set(v.loop, []);
+      byLoop.get(v.loop).push(v.idx);
+    }
+    // Phase 1: remove vertices in place (loop indexing unaffected); note loops
+    // that would collapse for phase 2.
+    const collapseHoles = [], collapseSections = [];
+    for (const [loop, idxs] of byLoop) {
+      const pts = this._loop(loop);
+      if (!pts) continue;
+      if (pts.length - idxs.length < 3) {
+        if (loop === -1) continue; // never empty the outer outline
+        if (this._isRegionLoop(loop)) collapseSections.push(loop - REGION_LOOP_BASE);
+        else collapseHoles.push(loop);
+        continue;
+      }
+      const drop = new Set(idxs);
+      const kept = pts.filter((_, i) => !drop.has(i));
+      pts.length = 0;
+      pts.push(...kept);
+    }
+    // Phase 2: drop collapsed loops from the back so indices stay valid.
+    for (const h of collapseHoles.sort((a, b) => b - a)) this.holes.splice(h, 1);
+    for (const s of collapseSections.sort((a, b) => b - a)) this.sections.splice(s, 1);
+    this.selectedVerts = [];
+    this.selection = null;
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifySelect();
+    this._changed();
   }
 
   // Delete the whole loop containing the selection (traced hole or circle).
@@ -576,6 +739,171 @@ export class TraceEditor {
     return candidates.length;
   }
 
+  // ---- normalize / edit a run of outline points (multi-select ops) ----
+
+  // The contiguous span of the current vertex multi-selection on one loop:
+  // { loop, lo, hi } inclusive (endpoints preserved, interior operated on),
+  // or null if the selection isn't usable.
+  _selectionSpan(minCount = 3) {
+    const vs = this.selectedVerts;
+    if (vs.length < minCount) return null;
+    const loop = vs[0].loop;
+    if (!vs.every(v => v.loop === loop)) return null;
+    const pts = this._loop(loop);
+    if (!pts) return null;
+    const idxs = vs.map(v => v.idx).sort((a, b) => a - b);
+    return { loop, lo: idxs[0], hi: idxs[idxs.length - 1], pts };
+  }
+
+  hasMultiRun(minCount = 3) { return !!this._selectionSpan(minCount); }
+
+  _reselectRun(loop, lo, newLen) {
+    this.selectedVerts = [];
+    for (let i = 0; i < newLen; i++) this.selectedVerts.push({ loop, idx: lo + i });
+  }
+
+  // Replace the interior of the selected span with a straight line (keep
+  // endpoints). Returns true on success.
+  fitLineToSelection() {
+    const span = this._selectionSpan(3);
+    if (!span) return false;
+    const { loop, lo, hi, pts } = span;
+    this.pushUndo();
+    pts.splice(lo + 1, hi - lo - 1); // drop interior points
+    this._reselectRun(loop, lo, 2);
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifySelect();
+    this._changed();
+    return true;
+  }
+
+  // Fit a circular arc through the selected span and rebuild it as a smooth
+  // arc (endpoints preserved). Returns the fit radius or null.
+  fitArcToSelection() {
+    const span = this._selectionSpan(3);
+    if (!span) return null;
+    const { loop, lo, hi, pts } = span;
+    const run = pts.slice(lo, hi + 1);
+    const fit = fitCircle(run);
+    if (!fit) return null;
+    this.pushUndo();
+    const arc = this._arcPoints(fit.cx, fit.cy, fit.r, run[0], run[run.length - 1], run[(run.length / 2) | 0]);
+    pts.splice(lo, hi - lo + 1, ...arc);
+    this._reselectRun(loop, lo, arc.length);
+    this._lastArc = { loop, lo, len: arc.length, A: run[0], B: run[run.length - 1], mid: run[(run.length / 2) | 0] };
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifySelect();
+    this._changed();
+    return Math.round(fit.r * 100) / 100;
+  }
+
+  // Re-fit the last arc to an explicit radius, keeping its endpoints and side.
+  setSelectedArcRadius(rMm) {
+    const la = this._lastArc;
+    if (!la || !(rMm > 0)) return false;
+    const pts = this._loop(la.loop);
+    if (!pts) return false;
+    const A = pts[la.lo], B = pts[la.lo + la.len - 1];
+    if (!A || !B) return false;
+    // Centre lies on the perpendicular bisector of AB at distance h from the
+    // midpoint; two solutions — pick the side matching the original bulge.
+    const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2;
+    const half = Math.hypot(B.x - A.x, B.y - A.y) / 2;
+    if (rMm < half) rMm = half; // radius can't be smaller than the chord half
+    const h = Math.sqrt(Math.max(0, rMm * rMm - half * half));
+    let nx = -(B.y - A.y), ny = (B.x - A.x);
+    const nl = Math.hypot(nx, ny) || 1; nx /= nl; ny /= nl;
+    const c1 = { x: mx + nx * h, y: my + ny * h };
+    const c2 = { x: mx - nx * h, y: my - ny * h };
+    const dist = (c, p) => Math.abs(Math.hypot(p.x - c.x, p.y - c.y) - rMm);
+    const c = dist(c1, la.mid) <= dist(c2, la.mid) ? c1 : c2;
+    this.pushUndo();
+    const arc = this._arcPoints(c.x, c.y, rMm, A, B, la.mid);
+    pts.splice(la.lo, la.len, ...arc);
+    la.len = arc.length;
+    this._reselectRun(la.loop, la.lo, arc.length);
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifySelect();
+    this._changed();
+    return true;
+  }
+
+  // Points along the arc of circle (cx,cy,r) from A to B, choosing the sweep
+  // whose midpoint is nearest `nearMid`. Spacing ~ chord tolerance.
+  _arcPoints(cx, cy, r, A, B, nearMid) {
+    let a0 = Math.atan2(A.y - cy, A.x - cx);
+    let a1 = Math.atan2(B.y - cy, B.x - cx);
+    const norm = a => { while (a <= -Math.PI) a += 2 * Math.PI; while (a > Math.PI) a -= 2 * Math.PI; return a; };
+    let sweep = norm(a1 - a0);
+    // Test the midpoint of this sweep against nearMid; flip if the other way is closer.
+    const mAng = a0 + sweep / 2;
+    const mPt = { x: cx + r * Math.cos(mAng), y: cy + r * Math.sin(mAng) };
+    const mPtAlt = { x: cx + r * Math.cos(mAng + Math.PI), y: cy + r * Math.sin(mAng + Math.PI) };
+    if (nearMid && Math.hypot(mPtAlt.x - nearMid.x, mPtAlt.y - nearMid.y) <
+        Math.hypot(mPt.x - nearMid.x, mPt.y - nearMid.y)) {
+      sweep = sweep > 0 ? sweep - 2 * Math.PI : sweep + 2 * Math.PI;
+    }
+    const arcLen = Math.abs(sweep) * r;
+    const n = Math.max(2, Math.min(200, Math.round(arcLen / 0.5)));
+    const out = [];
+    for (let k = 0; k <= n; k++) {
+      const a = a0 + sweep * (k / n);
+      out.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+    }
+    return out;
+  }
+
+  // Insert a midpoint on every edge of the selected span (add detail).
+  densifySelection() {
+    const span = this._selectionSpan(2);
+    if (!span) return false;
+    const { loop, lo, hi, pts } = span;
+    this.pushUndo();
+    const dense = [pts[lo]];
+    for (let i = lo; i < hi; i++) {
+      const a = pts[i], b = pts[i + 1];
+      dense.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, b);
+    }
+    pts.splice(lo, hi - lo + 1, ...dense);
+    this._reselectRun(loop, lo, dense.length);
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifySelect();
+    this._changed();
+    return true;
+  }
+
+  // Thin the selected span with Douglas–Peucker (keep endpoints).
+  simplifySelection(tolMm = 0.3) {
+    const span = this._selectionSpan(3);
+    if (!span) return false;
+    const { loop, lo, hi, pts } = span;
+    const run = pts.slice(lo, hi + 1);
+    const keep = new Uint8Array(run.length);
+    keep[0] = keep[run.length - 1] = 1;
+    const stack = [[0, run.length - 1]];
+    while (stack.length) {
+      const [s, e] = stack.pop();
+      const a = run[s], b = run[e];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1e-9;
+      let maxD = 0, maxI = -1;
+      for (let i = s + 1; i < e; i++) {
+        const d = Math.abs(dx * (a.y - run[i].y) - (a.x - run[i].x) * dy) / len;
+        if (d > maxD) { maxD = d; maxI = i; }
+      }
+      if (maxD > tolMm) { keep[maxI] = 1; stack.push([s, maxI], [maxI, e]); }
+    }
+    const kept = run.filter((_, i) => keep[i]);
+    if (kept.length === run.length) return false;
+    this.pushUndo();
+    pts.splice(lo, hi - lo + 1, ...kept);
+    this._reselectRun(loop, lo, kept.length);
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifySelect();
+    this._changed();
+    return true;
+  }
+
   // Screen position/radius of a circle hole (CSS px) for UI overlays.
   circleScreenPos(idx) {
     const c = this.circles[idx];
@@ -650,11 +978,13 @@ export class TraceEditor {
         const p = this._mmToScreen(pts[i]);
         const sel = this.selection && this.selection.type === 'vertex' &&
           this.selection.loop === loopIdx && this.selection.idx === i;
+        const multi = this.selectedVerts.length &&
+          this.selectedVerts.some(v => v.loop === loopIdx && v.idx === i);
         ctx.beginPath();
-        ctx.arc(p.x, p.y, sel ? VERT_R + 2 : VERT_R, 0, Math.PI * 2);
-        ctx.fillStyle = sel ? '#ffd257' : '#ffffff';
+        ctx.arc(p.x, p.y, sel || multi ? VERT_R + 2 : VERT_R, 0, Math.PI * 2);
+        ctx.fillStyle = multi ? '#53a9ff' : (sel ? '#ffd257' : '#ffffff');
         ctx.fill();
-        ctx.strokeStyle = sel ? '#8a6d00' : stroke;
+        ctx.strokeStyle = multi ? '#0c1015' : (sel ? '#8a6d00' : stroke);
         ctx.lineWidth = 1.5;
         ctx.stroke();
       }
@@ -757,6 +1087,20 @@ export class TraceEditor {
         ctx.fillStyle = col;
         ctx.fillText(label, ctr.x, ctr.y + Math.max(r, 8) + 4);
       }
+    }
+
+    // Marquee selection rectangle
+    if (this._marquee) {
+      const m = this._marquee;
+      const x = Math.min(m.x0, m.x1), y = Math.min(m.y0, m.y1);
+      const w = Math.abs(m.x1 - m.x0), h = Math.abs(m.y1 - m.y0);
+      ctx.fillStyle = 'rgba(83, 169, 255, 0.12)';
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = '#53a9ff';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
     }
 
     if (this.cb.onDraw) this.cb.onDraw();
