@@ -175,6 +175,11 @@ npm run build        # regenerate dist/2.5d-local.html
 
 ## Roadmap
 
+- **Hole drag interaction rework** — move by dragging the centre (move/hand
+  cursor), resize by dragging the rim (double-headed arrow cursor), for
+  existing holes as well as new ones. Today resize-by-drag only works while
+  first placing a hole in Add-hole mode; dragging an existing hole always
+  moves it.
 - **Heat-set threaded inserts** — a hole preset sized to an insert's outer
   diameter (per-series tables, e.g. M3 × ⌀4.0 inserts), typically a blind
   pocket with a slight interference for the melt-in. The hole model already
