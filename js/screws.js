@@ -45,7 +45,30 @@ export const SCREW_STANDARDS = {
   },
 };
 
+// Brass heat-set threaded inserts (melt into a printed hole with a soldering
+// iron). `hole` is the recommended printed hole diameter (already sized so
+// molten plastic flows into the knurls — do NOT use the screw-bore rule);
+// `length` is the insert length. Values are typical for common tapered
+// inserts (CNC-Kitchen / McMaster style) and vary by brand — all editable.
+export const INSERT_SIZES = {
+  'M2':   { hole: 3.2,  length: 4.0 },
+  'M2.5': { hole: 3.5,  length: 4.0 },
+  'M3':   { hole: 4.0,  length: 5.0 },
+  'M4':   { hole: 5.6,  length: 6.0 },
+  'M5':   { hole: 6.4,  length: 7.0 },
+  'M6':   { hole: 8.1,  length: 8.0 },
+  'M8':   { hole: 10.0, length: 10.0 },
+};
+
 const round05 = v => Math.round(v * 20) / 20; // nearest 0.05 mm
+
+// Insert hole preset: a blind pocket sized to the recommended hole diameter,
+// deep enough for the insert plus a little debris room.
+export function insertHole(sizeKey) {
+  const s = INSERT_SIZES[sizeKey];
+  if (!s) return null;
+  return { bore: round05(s.hole), depth: round05(s.length + 0.5) };
+}
 
 export function screwSpec(std, sizeKey) {
   const standard = SCREW_STANDARDS[std];

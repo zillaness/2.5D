@@ -17,7 +17,7 @@
 </head>
 <body>
 <header>
-  <h1>2.5D <span class="tagline">photo → traced outline → printable solid</span></h1>
+  <h1>2.5D <span class="tagline">photo → traced outline → printable solid</span><span id="appVersion" class="ver"></span></h1>
   <button id="projectBtn" class="btn small" title="Save, copy, or load the whole project (corners, trace, holes, settings)">💾 Project</button>
   <div id="unitToggle" class="unit-toggle" title="Display unit — you can always type either (e.g. 12.7, 1/2&quot;, 0.5 in)">
     <button data-unit="mm" class="active">mm</button>
@@ -131,6 +131,7 @@
               <option value="custom">Custom ⌀</option>
               <option value="metric">Metric (ISO)</option>
               <option value="sae">SAE (inch)</option>
+              <option value="insert">Heat-set insert</option>
             </select>
           </div>
           <div class="field">
@@ -275,9 +276,14 @@
 
       <button id="regionDeleteBtn" class="btn small" disabled>Delete section</button>
 
+      <h3>Export detail</h3>
+      <div class="field">
+        <label for="qualitySel">Quality preset</label>
+        <select id="qualitySel"></select>
+      </div>
       <div class="field">
         <label>Curve quality <span id="arcVal" class="val"></span></label>
-        <input type="range" id="arcSlider" min="3" max="16" value="8">
+        <input type="range" id="arcSlider" min="3" max="24" value="8">
       </div>
 
       <p id="meshInfo" class="info"></p>
@@ -288,6 +294,7 @@
       </div>
       <div class="btn-row">
         <button id="exportSvgBtn" class="btn">⬇ Outline SVG</button>
+        <button id="exportDxfBtn" class="btn">⬇ Outline DXF</button>
       </div>
       <p id="exportFallback" class="hint" hidden>
         Exported <b id="exportFallbackName"></b> — check your downloads folder.

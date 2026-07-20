@@ -768,6 +768,59 @@ if (multiRes.ok) {
   check('all section shells watertight', multiRes.badEdges === 0, `${multiRes.badEdges} bad edges`);
 }
 
+// ---------- 9. Group A: inserts, DXF, quality presets, card preset, version ----------
+
+const groupA = await page.evaluate(async () => {
+  const { insertHole, INSERT_SIZES } = await import('./js/screws.js');
+  const { toDXF } = await import('./js/exporters.js');
+  const { buildModel } = await import('./js/mesh.js');
+  const { PAPER_SIZES } = await import('./js/paperSizes.js');
+  const app = window.__app;
+
+  // Insert preset: M3 -> blind pocket at recommended hole ⌀.
+  const m3 = insertHole('M3');
+
+  // DXF content check.
+  const dxf = await toDXF(
+    [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 8 }, { x: 0, y: 8 }],
+    [[{ x: 3, y: 3 }, { x: 5, y: 3 }, { x: 5, y: 5 }, { x: 3, y: 5 }]],
+    100
+  ).text();
+
+  // Quality presets change triangle density on the same trace.
+  const { outer, holes, circles } = app.traceEditor.getTrace();
+  const region = [{ name: 'B', pts: null, thickness: 4, zBase: 0,
+    top: { mode: 'fillet', size: 1 }, bottom: { mode: 'none', size: 0 } }];
+  const coarse = buildModel(outer, holes, circles, region, { arcSegments: 4, chordTol: 0.8 });
+  const xfine = buildModel(outer, holes, circles, region, { arcSegments: 20, chordTol: 0.1 });
+
+  // Version present in DOM and STL header.
+  const { toBinarySTL } = await import('./js/exporters.js');
+  const stlBuf = await toBinarySTL(new Float32Array([0,0,0, 1,0,0, 0,1,0]), new Uint32Array([0,1,2]), 'x').arrayBuffer();
+  const stlHeader = new TextDecoder().decode(new Uint8Array(stlBuf, 0, 20));
+
+  return {
+    m3, hasM3: !!INSERT_SIZES['M3'],
+    dxfOk: dxf.includes('AC1009') && (dxf.match(/POLYLINE/g) || []).length === 2 && dxf.includes('EOF'),
+    coarseTris: coarse.stats.triangles, xfineTris: xfine.stats.triangles,
+    cardW: PAPER_SIZES.card.w, cardH: PAPER_SIZES.card.h,
+    versionInDom: document.getElementById('appVersion').textContent,
+    versionInStl: stlHeader.startsWith('2.5D v'),
+  };
+});
+
+console.log('\nGroup A — inserts, DXF, quality, card, version');
+check('heat-set M3 insert -> blind pocket ⌀4.0 depth 5.5',
+  groupA.hasM3 && near(groupA.m3.bore, 4.0, 0.01) && near(groupA.m3.depth, 5.5, 0.01),
+  `⌀${groupA.m3.bore} × ${groupA.m3.depth}`);
+check('DXF export is valid R12 with 2 closed polylines', groupA.dxfOk);
+check('quality preset changes triangle density (xfine > coarse)',
+  groupA.xfineTris > groupA.coarseTris * 1.3, `${groupA.coarseTris} vs ${groupA.xfineTris}`);
+check('credit-card preset present (53.98 × 85.60 mm)',
+  near(groupA.cardW, 53.98, 0.01) && near(groupA.cardH, 85.60, 0.01), `${groupA.cardW} × ${groupA.cardH}`);
+check('version shown in header and stamped in STL',
+  /^v\d+\.\d+\.\d+$/.test(groupA.versionInDom) && groupA.versionInStl, groupA.versionInDom);
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 

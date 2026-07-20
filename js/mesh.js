@@ -637,10 +637,12 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
       }
     }
 
-    // Screw-hole feature surfaces.
+    // Screw-hole feature surfaces. Ring resolution follows a chord tolerance
+    // (smaller = smoother, more triangles) set by the export quality preset.
+    const chordTol = params.chordTol || 0.35;
     const holesHere = perIsland[islandIdx];
     for (const c of holesHere) {
-      const N = c.ringN = Math.max(32, Math.min(128, Math.round(2 * Math.PI * c.feat.maxR / 0.35)));
+      const N = c.ringN = Math.max(24, Math.min(256, Math.round(2 * Math.PI * c.feat.maxR / chordTol)));
       for (const b of c.feat.bands) emitBand(mb, c, b.z0, b.r0, b.z1, b.r1, N);
       for (const f of c.feat.flats) emitFlat(mb, c, f.z, f.rIn, f.rOut, f.up, N);
       for (const d of c.feat.disks) emitDisk(mb, c, d.z, d.r, d.up, N);
@@ -690,8 +692,11 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
 // blind / rim features apply on the true entry face — the region with the
 // highest top for side="top" holes, the lowest bottom for side="bottom" —
 // and everywhere else the hole is a plain bore.
-export function buildModel(outer, tracedHoles, screwHoles, regions, arcSegments) {
+export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
   if (!outer || outer.length < 3 || !regions || !regions.length) return null;
+  // opts may be a number (legacy arcSegments) or { arcSegments, chordTol }.
+  const arcSegments = typeof opts === 'number' ? opts : (opts && opts.arcSegments) || 8;
+  const chordTol = (opts && typeof opts === 'object' && opts.chordTol) || 0.35;
   const warnings = [];
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -744,7 +749,7 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, arcSegments)
       warnings.push(`Section "${r.name || i + 1}": edge sizes exceeded the thickness — scaled to fit.`);
     }
     const mesh = buildSolid(footprints[i], tracedHoles, perRegion[i], {
-      thickness, zBase, top, bottom, arcSegments, center,
+      thickness, zBase, top, bottom, arcSegments, chordTol, center,
     });
     if (!mesh) {
       warnings.push(`Section "${r.name || i + 1}" produced no solid — check its outline.`);

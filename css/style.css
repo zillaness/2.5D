@@ -34,6 +34,7 @@ header {
 }
 h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.5px; }
 .tagline { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 8px; }
+.ver { font-size: 11px; font-weight: 600; color: var(--accent); margin-left: 8px; vertical-align: super; }
 
 #steps { display: flex; gap: 6px; }
 

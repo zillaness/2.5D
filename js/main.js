@@ -10,9 +10,21 @@ import {
   chaikinClosed, pointInPolygon,
 } from './contour.js';
 import { buildModel, circleToPolygon } from './mesh.js';
-import { SCREW_STANDARDS, screwSpec, boreDiameter, recessDefaults } from './screws.js';
+import {
+  SCREW_STANDARDS, INSERT_SIZES, screwSpec, boreDiameter, recessDefaults, insertHole,
+} from './screws.js';
 import { parseLength, formatLength, formatLengthLabelled } from './units.js';
-import { toBinarySTL, toSVG, downloadBlob } from './exporters.js';
+import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
+import { APP_VERSION } from './version.js';
+
+// Export quality presets: chord tolerance (mm) for round features and the
+// arc-segment count for chamfer/fillet curves. Smaller = smoother + more tris.
+const QUALITY_PRESETS = {
+  coarse: { label: 'Coarse (fast)',   chordTol: 0.8,  arcSegments: 4 },
+  medium: { label: 'Medium',          chordTol: 0.4,  arcSegments: 8 },
+  fine:   { label: 'Fine',            chordTol: 0.2,  arcSegments: 12 },
+  xfine:  { label: 'Extra fine',      chordTol: 0.1,  arcSegments: 20 },
+};
 import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
 import { Viewer3D } from './viewer3d.js';
@@ -32,7 +44,7 @@ const state = {
     threshold: 60, autoThreshold: true, cleanup: 2, marginMm: 2,
     detectHoles: true, simplify: 0.4, smooth: 1, minHoleAreaMm2: 3,
   },
-  model: { arcSegments: 8 },
+  model: { arcSegments: 8, quality: 'medium' },
   // Sections: [0] is the base (footprint = traced outline); extra sections
   // carry their own drawn footprint, thickness and floor offset (overhangs).
   regions: [
@@ -363,22 +375,36 @@ function applyHoleProps(props) {
   }
 }
 
+function screwSizeKeys(std) {
+  if (std === 'insert') return Object.keys(INSERT_SIZES);
+  if (SCREW_STANDARDS[std]) return Object.keys(SCREW_STANDARDS[std].sizes);
+  return [];
+}
+
 function populateScrewSizes(std, selected) {
   const sel = $('screwSize');
   sel.innerHTML = '';
   sel.disabled = std === 'custom';
   if (std === 'custom') return;
-  for (const key of Object.keys(SCREW_STANDARDS[std].sizes)) {
+  for (const key of screwSizeKeys(std)) {
     const opt = document.createElement('option');
     opt.value = key;
     opt.textContent = key;
     sel.appendChild(opt);
   }
-  if (selected && SCREW_STANDARDS[std].sizes[selected]) sel.value = selected;
+  if (selected && screwSizeKeys(std).includes(selected)) sel.value = selected;
 }
 
 function screwFitNote(screw, d) {
   if (!screw || screw.std === 'custom') return '';
+  if (screw.std === 'insert') {
+    const s = INSERT_SIZES[screw.size];
+    if (!s) return '';
+    const dStr = state.units === 'in' ? `${formatLength(d, 'in')}" (${d} mm)` : `${d} mm`;
+    return `${screw.size} heat-set insert: blind pocket ⌀${dStr}, ` +
+      `recommended hole for a ⌀${s.hole} mm / ${s.length} mm insert. ` +
+      `Sized to melt in — not the screw-bore rule; check your insert brand's spec.`;
+  }
   const s = screwSpec(screw.std, screw.size);
   if (!s) return '';
   const dStr = state.units === 'in' ? `${formatLength(d, 'in')}" (${d} mm)` : `${d} mm`;
@@ -409,7 +435,7 @@ function syncHolePanel() {
   const screw = c.screw || { std: 'custom', size: '', fit: 'clearance' };
   $('screwStd').value = screw.std;
   populateScrewSizes(screw.std, screw.size);
-  $('screwFitField').hidden = screw.std === 'custom';
+  $('screwFitField').hidden = screw.std === 'custom' || screw.std === 'insert';
   $('screwFit').value = screw.fit;
   $('circleD').value = fmtDim(c.d);
 
@@ -440,7 +466,7 @@ function syncHolePanel() {
   $('holeFitNote').textContent = screwFitNote(screw, c.d);
 }
 
-// Apply the screw selection: derive bore ⌀ and recess defaults.
+// Apply the screw selection: derive bore ⌀ and recess/insert defaults.
 function applyScrewSelection() {
   const std = $('screwStd').value;
   if (std === 'custom') {
@@ -449,14 +475,25 @@ function applyScrewSelection() {
     return;
   }
   let size = $('screwSize').value;
-  if (!SCREW_STANDARDS[std].sizes[size]) size = Object.keys(SCREW_STANDARDS[std].sizes)[0];
+  const keys = screwSizeKeys(std);
+  if (!keys.includes(size)) size = keys[0];
+
+  if (std === 'insert') {
+    const ins = insertHole(size);
+    applyHoleProps({
+      screw: { std, size, fit: 'clearance' },
+      d: ins.bore, type: 'blind', depth: ins.depth,
+    });
+    syncHolePanel();
+    return;
+  }
+
   const fit = $('screwFit').value;
-  const props = {
+  applyHoleProps({
     screw: { std, size, fit },
     d: boreDiameter(std, size, fit),
     ...recessDefaults(std, size),
-  };
-  applyHoleProps(props);
+  });
   syncHolePanel();
 }
 
@@ -469,9 +506,12 @@ function rebuildMesh(fit = false) {
     const { outer, holes, circles } = traceEditor.getTrace();
     if (!outer || outer.length < 3) return;
 
+    const q = QUALITY_PRESETS[state.model.quality] || QUALITY_PRESETS.medium;
     let mesh = null;
     try {
-      mesh = buildModel(outer, holes, circles, state.regions, state.model.arcSegments);
+      mesh = buildModel(outer, holes, circles, state.regions, {
+        arcSegments: state.model.arcSegments, chordTol: q.chordTol,
+      });
     } catch (err) {
       console.error('buildModel failed', err);
     }
@@ -833,6 +873,26 @@ bindSlider('arcSlider', 'arcVal', v => v.toFixed(0) + ' seg', v => {
   if (state.model.arcSegments !== v) { state.model.arcSegments = v; if (state.step === 3) rebuildMesh(); }
 });
 
+// Export quality preset — bundles the round-feature chord tolerance and the
+// chamfer/fillet arc-segment count into one choice.
+(() => {
+  const sel = $('qualitySel');
+  for (const [key, q] of Object.entries(QUALITY_PRESETS)) {
+    const opt = document.createElement('option');
+    opt.value = key; opt.textContent = q.label;
+    sel.appendChild(opt);
+  }
+  sel.value = state.model.quality;
+  sel.addEventListener('change', () => {
+    state.model.quality = sel.value;
+    const q = QUALITY_PRESETS[sel.value];
+    state.model.arcSegments = q.arcSegments;
+    $('arcSlider').value = q.arcSegments;
+    $('arcVal').textContent = q.arcSegments + ' seg';
+    if (state.step === 3) rebuildMesh();
+  });
+})();
+
 // Trigger the download and keep a live fallback link the user can click
 // directly — a plain user-gesture click on a real anchor is the most widely
 // permitted download path, and if even that does nothing the surrounding
@@ -854,13 +914,23 @@ $('exportStlBtn').addEventListener('click', () => {
   const blob = toBinarySTL(state.meshData.positions, state.meshData.indices, state.fileName);
   deliverExport(blob, `${state.fileName}-2p5d.stl`);
 });
-$('exportSvgBtn').addEventListener('click', () => {
+// Both 2D exports flatten screw holes to their bore diameter.
+function traceProfile() {
   const { outer, holes, circles } = traceEditor.getTrace();
-  if (!outer || outer.length < 3) { toast('No trace to export yet.'); return; }
+  if (!outer || outer.length < 3) return null;
+  return { outer, allHoles: [...holes, ...circles.map(c => circleToPolygon(c.cx, c.cy, c.d))] };
+}
+$('exportSvgBtn').addEventListener('click', () => {
+  const p = traceProfile();
+  if (!p) { toast('No trace to export yet.'); return; }
   const { w, h } = currentPaper();
-  // SVG is a 2D profile: screw holes export at their bore diameter.
-  const allHoles = [...holes, ...circles.map(c => circleToPolygon(c.cx, c.cy, c.d))];
-  deliverExport(toSVG(outer, allHoles, w, h), `${state.fileName}-outline.svg`);
+  deliverExport(toSVG(p.outer, p.allHoles, w, h), `${state.fileName}-outline.svg`);
+});
+$('exportDxfBtn').addEventListener('click', () => {
+  const p = traceProfile();
+  if (!p) { toast('No trace to export yet.'); return; }
+  const { h } = currentPaper();
+  deliverExport(toDXF(p.outer, p.allHoles, h), `${state.fileName}-outline.dxf`);
 });
 
 // ---------- project save / move / load ----------
@@ -926,6 +996,10 @@ function loadProject(p) {
   if (p.model && p.model.arcSegments) {
     state.model.arcSegments = p.model.arcSegments;
     $('arcSlider').value = state.model.arcSegments;
+  }
+  if (p.model && QUALITY_PRESETS[p.model.quality]) {
+    state.model.quality = p.model.quality;
+    $('qualitySel').value = p.model.quality;
   }
   if (Array.isArray(p.regions) && p.regions.length) {
     // Restore sections in place (the array is shared with the editor).
@@ -1084,9 +1158,12 @@ for (const btn of document.querySelectorAll('#unitToggle button')) {
 
 updateStepButtons();
 
+$('appVersion').textContent = `v${APP_VERSION}`;
+document.title = `2.5D v${APP_VERSION} — photo to printable solid`;
+
 // Test hook (used by the headless test-suite; harmless in normal use).
 window.__app = {
   state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect,
-  cornerEditor, traceEditor, syncHolePanel,
+  cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   get viewer() { return viewer; },
 };
