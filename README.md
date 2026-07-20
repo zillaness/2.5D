@@ -175,6 +175,10 @@ npm run build        # regenerate dist/2.5d-local.html
 
 ## Roadmap
 
+- **Rotate view 90° left/right** — turn the photo/rectified view in quarter
+  steps to reorient the work (e.g. paper shot sideways, or just a more
+  comfortable editing angle) without retaking the photo or re-dragging
+  corners.
 - **Normalize radiuses & curves** — like hole normalization, but for the
   outline: select a run of points (a traced rounded corner, an arc-ish edge)
   and replace it with a perfect fitted arc of an editable radius; snap
