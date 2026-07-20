@@ -175,6 +175,11 @@ npm run build        # regenerate dist/2.5d-local.html
 
 ## Roadmap
 
+- **Point editing upgrades** — densify/decimate locally (add detail where the
+  trace needs it, thin out over-traced runs), Ctrl+click to build a
+  multi-selection of points, and Shift+drag marquee selection — then move or
+  delete the group together. (Single-point insert on an edge and delete
+  already exist.)
 - **Hole drag interaction rework** — move by dragging the centre (move/hand
   cursor), resize by dragging the rim (double-headed arrow cursor), for
   existing holes as well as new ones. Today resize-by-drag only works while
