@@ -9,7 +9,7 @@ import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
 } from './contour.js';
-import { buildSolid, circleToPolygon } from './mesh.js';
+import { buildModel, circleToPolygon } from './mesh.js';
 import { SCREW_STANDARDS, screwSpec, boreDiameter, recessDefaults } from './screws.js';
 import { parseLength, formatLength, formatLengthLabelled } from './units.js';
 import { toBinarySTL, toSVG, downloadBlob } from './exporters.js';
@@ -32,12 +32,16 @@ const state = {
     threshold: 60, autoThreshold: true, cleanup: 2, marginMm: 2,
     detectHoles: true, simplify: 0.4, smooth: 1, minHoleAreaMm2: 3,
   },
-  model: {
-    thickness: 5,
-    top: { mode: 'none', size: 1 },
-    bottom: { mode: 'none', size: 1 },
-    arcSegments: 8,
-  },
+  model: { arcSegments: 8 },
+  // Sections: [0] is the base (footprint = traced outline); extra sections
+  // carry their own drawn footprint, thickness and floor offset (overhangs).
+  regions: [
+    {
+      name: 'Base', pts: null, thickness: 5, zBase: 0,
+      top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 },
+    },
+  ],
+  selRegion: 0,
   meshData: null,
   step: 1,
   units: 'mm', // display unit; inputs accept both (12.7 / 1/2" / 0.5 in)
@@ -52,7 +56,12 @@ const parseDim = str => parseLength(str, state.units);
 const cornerEditor = new CornerEditor($('cornerCanvas'), () => { state.rectDirty = true; });
 const traceEditor = new TraceEditor($('traceCanvas'), {
   onChange: (throttled) => { updateTraceInfo(); if (!throttled) updateStepButtons(); },
-  onSelect: () => { syncHolePanel(); positionHoleTag(); },
+  onSelect: () => {
+    syncHolePanel();
+    positionHoleTag();
+    const si = traceEditor.selectedSectionIndex();
+    if (si >= 1) { state.selRegion = si; refreshModelFields(); }
+  },
   onDraw: () => positionHoleTag(),
   onHolePlaced: () => {
     syncHolePanel();
@@ -62,7 +71,26 @@ const traceEditor = new TraceEditor($('traceCanvas'), {
     input.focus();
     input.select();
   },
+  onRegionDrawn: (pts) => {
+    state.regions.push({
+      name: `Section ${state.regions.length + 1}`,
+      pts,
+      thickness: state.regions[0].thickness,
+      zBase: 0,
+      top: { mode: 'none', size: 1 },
+      bottom: { mode: 'none', size: 1 },
+    });
+    state.selRegion = state.regions.length - 1;
+    refreshModelFields();
+    toast('Section added — set its thickness and floor offset in step 3 (Model & export).');
+  },
+  onSectionsChanged: () => {
+    if (state.selRegion >= state.regions.length) state.selRegion = 0;
+    refreshModelFields();
+    if (state.step === 3) rebuildMesh();
+  },
 });
+traceEditor.setSections(state.regions);
 let viewer = null; // created lazily on step 3
 
 // ---------- helpers ----------
@@ -441,25 +469,11 @@ function rebuildMesh(fit = false) {
     const { outer, holes, circles } = traceEditor.getTrace();
     if (!outer || outer.length < 3) return;
 
-    const m = state.model;
-    // Edge treatments cannot overlap: clamp sizes to the thickness.
-    let warn = '';
-    const sT = m.top.mode === 'none' ? 0 : m.top.size;
-    const sB = m.bottom.mode === 'none' ? 0 : m.bottom.size;
-    let top = { ...m.top }, bottom = { ...m.bottom };
-    if (sT + sB > m.thickness) {
-      const k = m.thickness / (sT + sB) * 0.999;
-      top.size = sT * k; bottom.size = sB * k;
-      warn = 'Edge sizes exceed the thickness — scaled down to fit.';
-    }
-
     let mesh = null;
     try {
-      mesh = buildSolid(outer, holes, circles, {
-        thickness: m.thickness, top, bottom, arcSegments: m.arcSegments,
-      });
+      mesh = buildModel(outer, holes, circles, state.regions, state.model.arcSegments);
     } catch (err) {
-      console.error('buildSolid failed', err);
+      console.error('buildModel failed', err);
     }
     state.meshData = mesh;
     if (!mesh) {
@@ -470,9 +484,8 @@ function rebuildMesh(fit = false) {
       return;
     }
     const warns = [];
-    if (warn) warns.push(warn);
     if (mesh.stats.clamped) {
-      warns.push('Chamfer/fillet was too large for part of the outline — flattened there.');
+      warns.push('Chamfer/fillet was too large for part of an outline — flattened there.');
     }
     warns.push(...(mesh.stats.warnings || []));
     $('meshWarn').hidden = !warns.length;
@@ -489,7 +502,8 @@ function renderMeshInfo() {
   $('meshInfo').textContent =
     `Size: ${fmtDim(s.sizeX)} × ${fmtDim(s.sizeY)} × ${fmtDimL(s.sizeZ)}\n` +
     `Triangles: ${s.triangles}` +
-    (s.islands > 1 ? `\nParts: ${s.islands}` : '');
+    (s.sections > 1 ? `\nSections: ${s.sections}` : '') +
+    (s.islands > s.sections ? `\nParts: ${s.islands}` : '');
 }
 
 // ---------- wiring: step 1 ----------
@@ -722,6 +736,15 @@ $('toModelBtn').addEventListener('click', () => goStep(3));
 document.addEventListener('keydown', e => {
   if (state.step !== 2) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (traceEditor.mode === 'region' && e.key === 'Enter') {
+    e.preventDefault();
+    traceEditor.commitDraftRegion();
+    return;
+  }
+  if (traceEditor.mode === 'region' && e.key === 'Escape') {
+    traceEditor.cancelDraftRegion();
+    return;
+  }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     traceEditor.undo();
@@ -733,27 +756,77 @@ document.addEventListener('keydown', e => {
 
 // ---------- wiring: step 3 ----------
 
-function refreshModelFields() {
-  $('thickness').value = fmtDim(state.model.thickness);
-  $('topSize').value = fmtDim(state.model.top.size);
-  $('bottomSize').value = fmtDim(state.model.bottom.size);
+function currentRegion() {
+  return state.regions[state.selRegion] || state.regions[0];
 }
+
+function refreshRegionSelect() {
+  const sel = $('regionSel');
+  sel.innerHTML = '';
+  state.regions.forEach((r, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = (r.name || `Section ${i + 1}`) + (i === 0 ? ' (base)' : '');
+    sel.appendChild(opt);
+  });
+  sel.value = state.selRegion;
+}
+
+function refreshModelFields() {
+  if (state.selRegion >= state.regions.length) state.selRegion = 0;
+  refreshRegionSelect();
+  const r = currentRegion();
+  $('regionName').value = r.name || '';
+  $('thickness').value = fmtDim(r.thickness);
+  $('floorOffset').value = fmtDim(r.zBase || 0);
+  $('topMode').value = r.top.mode;
+  $('topSize').value = fmtDim(r.top.size);
+  $('bottomMode').value = r.bottom.mode;
+  $('bottomSize').value = fmtDim(r.bottom.size);
+  $('regionDeleteBtn').disabled = state.selRegion === 0;
+}
+
+$('regionSel').addEventListener('change', e => {
+  state.selRegion = parseInt(e.target.value, 10) || 0;
+  refreshModelFields();
+  traceEditor.draw();
+});
+$('regionName').addEventListener('change', e => {
+  currentRegion().name = e.target.value.trim() || `Section ${state.selRegion + 1}`;
+  refreshModelFields();
+  traceEditor.draw();
+});
 $('thickness').addEventListener('change', e => {
   const mm = parseDim(e.target.value);
-  if (mm > 0) { state.model.thickness = mm; rebuildMesh(); }
+  if (mm > 0) { currentRegion().thickness = mm; rebuildMesh(); }
   refreshModelFields();
+  traceEditor.draw();
 });
-$('topMode').addEventListener('change', e => { state.model.top.mode = e.target.value; rebuildMesh(); });
-$('bottomMode').addEventListener('change', e => { state.model.bottom.mode = e.target.value; rebuildMesh(); });
+$('floorOffset').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm !== null && mm >= 0) { currentRegion().zBase = mm; rebuildMesh(); }
+  refreshModelFields();
+  traceEditor.draw();
+});
+$('topMode').addEventListener('change', e => { currentRegion().top.mode = e.target.value; rebuildMesh(); });
+$('bottomMode').addEventListener('change', e => { currentRegion().bottom.mode = e.target.value; rebuildMesh(); });
 $('topSize').addEventListener('change', e => {
   const mm = parseDim(e.target.value);
-  if (mm > 0) { state.model.top.size = mm; rebuildMesh(); }
+  if (mm > 0) { currentRegion().top.size = mm; rebuildMesh(); }
   refreshModelFields();
 });
 $('bottomSize').addEventListener('change', e => {
   const mm = parseDim(e.target.value);
-  if (mm > 0) { state.model.bottom.size = mm; rebuildMesh(); }
+  if (mm > 0) { currentRegion().bottom.size = mm; rebuildMesh(); }
   refreshModelFields();
+});
+$('regionDeleteBtn').addEventListener('click', () => {
+  if (state.selRegion === 0) return;
+  state.regions.splice(state.selRegion, 1);
+  state.selRegion = 0;
+  refreshModelFields();
+  traceEditor.draw();
+  rebuildMesh();
 });
 refreshModelFields();
 bindSlider('arcSlider', 'arcVal', v => v.toFixed(0) + ' seg', v => {
@@ -813,6 +886,7 @@ function serializeProject(includePhoto) {
     corners: state.corners,
     seg: state.seg,
     model: state.model,
+    regions: state.regions,
     trace: traceEditor.getTrace(),
     holeTemplate: traceEditor.holeTemplate,
     pxPerMm: state.rect ? state.rect.pxPerMm : null,
@@ -849,13 +923,23 @@ function loadProject(p) {
     $('smoothSlider').value = state.seg.smooth;
     $('detectHoles').checked = state.seg.detectHoles;
   }
-  if (p.model) {
-    state.model = { ...state.model, ...p.model };
-    $('topMode').value = state.model.top.mode;
-    $('bottomMode').value = state.model.bottom.mode;
+  if (p.model && p.model.arcSegments) {
+    state.model.arcSegments = p.model.arcSegments;
     $('arcSlider').value = state.model.arcSegments;
-    refreshModelFields();
   }
+  if (Array.isArray(p.regions) && p.regions.length) {
+    // Restore sections in place (the array is shared with the editor).
+    state.regions.length = 0;
+    for (const r of p.regions) state.regions.push(structuredClone(r));
+    state.regions[0].pts = null; // base always follows the traced outline
+  } else if (p.model && p.model.thickness) {
+    // Legacy single-thickness project.
+    state.regions[0].thickness = p.model.thickness;
+    if (p.model.top) state.regions[0].top = structuredClone(p.model.top);
+    if (p.model.bottom) state.regions[0].bottom = structuredClone(p.model.bottom);
+  }
+  state.selRegion = 0;
+  refreshModelFields();
 
   const applyTrace = () => {
     if (p.trace) {

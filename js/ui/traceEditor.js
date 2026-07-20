@@ -8,6 +8,10 @@ import { pointInPolygon, fitCircle, resampleClosed } from '../contour.js';
 
 const VERT_R = 4.5;
 const HIT_R = 8;
+// Extra sections ("regions") reuse the loop-addressing scheme: loop index
+// -1 = outer outline, 0..n-1 = traced holes, REGION_LOOP_BASE + i = the
+// footprint of sections[i] (i >= 1; sections[0] is the base = outer).
+const REGION_LOOP_BASE = 1000;
 
 export class TraceEditor {
   constructor(canvas, callbacks = {}) {
@@ -23,6 +27,8 @@ export class TraceEditor {
     this.outer = [];         // [{x,y}] mm
     this.holes = [];         // [[{x,y}]] mm (traced holes)
     this.circles = [];       // [{cx, cy, d}] mm (manual holes)
+    this.sections = [];      // shared with app state; [0]=base (no pts), [i>0].pts = footprint
+    this._draftRegion = null; // in-progress region polygon (mode 'region')
 
     this.mode = 'edit';      // 'edit' | 'addhole' | 'pan'
     this.showPoints = true;  // vertex control handles on/off
@@ -49,7 +55,16 @@ export class TraceEditor {
     canvas.addEventListener('pointermove', e => this._move(e));
     canvas.addEventListener('pointerup', e => this._up(e));
     canvas.addEventListener('pointercancel', e => this._up(e));
-    canvas.addEventListener('dblclick', () => { this.vp.fit(); this.draw(); });
+    canvas.addEventListener('dblclick', () => {
+      if (this.mode === 'region' && this._draftRegion) {
+        // The double-click's two single clicks each added a point — drop them.
+        this._draftRegion.splice(-2, 2);
+        this.commitDraftRegion();
+        return;
+      }
+      this.vp.fit();
+      this.draw();
+    });
     canvas.addEventListener('viewportchange', () => this.draw());
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     this._pendingFit = false;
@@ -91,20 +106,30 @@ export class TraceEditor {
     this.draw();
   }
 
+  setSections(sections) {
+    this.sections = sections;
+    this.draw();
+  }
+
   getTrace() {
     return { outer: this.outer, holes: this.holes, circles: this.circles };
   }
 
   setMode(mode) {
+    if (this.mode === 'region' && mode !== 'region') this._draftRegion = null;
     this.mode = mode;
-    this.canvas.style.cursor = mode === 'pan' ? 'grab' : 'default';
+    this.canvas.style.cursor = mode === 'pan' ? 'grab'
+      : mode === 'region' ? 'crosshair' : 'default';
     this.draw();
   }
 
   // ---- undo ----
 
   _snapshot() {
-    return structuredClone({ outer: this.outer, holes: this.holes, circles: this.circles });
+    return structuredClone({
+      outer: this.outer, holes: this.holes, circles: this.circles,
+      sections: this.sections,
+    });
   }
 
   pushUndo() {
@@ -118,6 +143,11 @@ export class TraceEditor {
     this.outer = s.outer;
     this.holes = s.holes;
     this.circles = s.circles;
+    // The sections array is shared with app state — restore it in place so
+    // every holder of the reference sees the undone contents.
+    this.sections.length = 0;
+    this.sections.push(...s.sections);
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
     this.selection = null;
     this._notifySelect();
     this._changed();
@@ -136,7 +166,16 @@ export class TraceEditor {
   }
 
   _loop(loopIdx) {
-    return loopIdx === -1 ? this.outer : this.holes[loopIdx];
+    if (loopIdx === -1) return this.outer;
+    if (loopIdx >= REGION_LOOP_BASE) {
+      const s = this.sections[loopIdx - REGION_LOOP_BASE];
+      return s && s.pts;
+    }
+    return this.holes[loopIdx];
+  }
+
+  _isRegionLoop(loopIdx) {
+    return typeof loopIdx === 'number' && loopIdx >= REGION_LOOP_BASE;
   }
 
   // ---- hit testing ----
@@ -152,6 +191,11 @@ export class TraceEditor {
       }
       return null;
     };
+    for (let s = 1; s < this.sections.length; s++) {
+      if (!this.sections[s].pts) continue;
+      const r = check(REGION_LOOP_BASE + s, this.sections[s].pts);
+      if (r) return r;
+    }
     for (let h = 0; h < this.holes.length; h++) {
       const r = check(h, this.holes[h]);
       if (r) return r;
@@ -207,6 +251,9 @@ export class TraceEditor {
     };
     check(-1, this.outer);
     for (let h = 0; h < this.holes.length; h++) check(h, this.holes[h]);
+    for (let s = 1; s < this.sections.length; s++) {
+      if (this.sections[s].pts) check(REGION_LOOP_BASE + s, this.sections[s].pts);
+    }
     return best;
   }
 
@@ -220,6 +267,15 @@ export class TraceEditor {
 
     if (e.button === 1 || this.mode === 'pan') {
       this.panning = true;
+      return;
+    }
+
+    if (this.mode === 'region' && e.button === 0) {
+      // Click to add draft points; commit via double-click or Enter.
+      const mm = this._screenToMm(sp);
+      if (!this._draftRegion) this._draftRegion = [];
+      this._draftRegion.push(mm);
+      this.draw();
       return;
     }
 
@@ -282,7 +338,7 @@ export class TraceEditor {
       return;
     }
 
-    // Inside a traced hole: select and drag the whole loop.
+    // Inside a traced hole (or a section footprint): select + drag the loop.
     const mm = this._screenToMm(sp);
     for (let h = 0; h < this.holes.length; h++) {
       if (pointInPolygon(mm, this.holes[h])) {
@@ -295,10 +351,40 @@ export class TraceEditor {
         return;
       }
     }
+    for (let s = 1; s < this.sections.length; s++) {
+      if (this.sections[s].pts && pointInPolygon(mm, this.sections[s].pts)) {
+        this.selection = { type: 'holeloop', loop: REGION_LOOP_BASE + s };
+        this.pushUndo();
+        this.dragging = true;
+        this._lastMm = mm;
+        this._notifySelect();
+        this.draw();
+        return;
+      }
+    }
 
     this.selection = null;
     this.panning = true;
     this._notifySelect();
+    this.draw();
+  }
+
+  // Commit or cancel an in-progress region draft (mode 'region').
+  commitDraftRegion() {
+    const pts = this._draftRegion;
+    this._draftRegion = null;
+    if (pts && pts.length >= 3 && this.cb.onRegionDrawn) {
+      this.pushUndo();
+      this.cb.onRegionDrawn(pts);
+      this._changed();
+      return true;
+    }
+    this.draw();
+    return false;
+  }
+
+  cancelDraftRegion() {
+    this._draftRegion = null;
     this.draw();
   }
 
@@ -333,7 +419,8 @@ export class TraceEditor {
         c.cx = mm.x; c.cy = mm.y;
       } else if (this.selection.type === 'holeloop' && this._lastMm) {
         const dx = mm.x - this._lastMm.x, dy = mm.y - this._lastMm.y;
-        for (const p of this.holes[this.selection.loop]) { p.x += dx; p.y += dy; }
+        const loop = this._loop(this.selection.loop);
+        if (loop) for (const p of loop) { p.x += dx; p.y += dy; }
         this._lastMm = mm;
       }
       this._changed(true);
@@ -369,10 +456,18 @@ export class TraceEditor {
 
   _deleteVertex(sel) {
     const pts = this._loop(sel.loop);
+    if (!pts) return;
     if (sel.loop === -1 && pts.length <= 3) return; // outline must stay a polygon
     this.pushUndo();
     pts.splice(sel.idx, 1);
-    if (sel.loop >= 0 && pts.length < 3) this.holes.splice(sel.loop, 1);
+    if (pts.length < 3) {
+      if (this._isRegionLoop(sel.loop)) {
+        this.sections.splice(sel.loop - REGION_LOOP_BASE, 1);
+        if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+      } else if (sel.loop >= 0) {
+        this.holes.splice(sel.loop, 1);
+      }
+    }
     this.selection = null;
     this._notifySelect();
     this._changed();
@@ -399,6 +494,7 @@ export class TraceEditor {
     if (this.selection.type === 'circle') { this._deleteCircle(this.selection.idx); return; }
     const loop = this.selection.type === 'holeloop' ? this.selection.loop
       : (this.selection.type === 'vertex' ? this.selection.loop : -1);
+    if (this._isRegionLoop(loop)) { this.deleteSelectedSection(); return; }
     if (loop >= 0) {
       this.pushUndo();
       this.holes.splice(loop, 1);
@@ -406,6 +502,25 @@ export class TraceEditor {
       this._notifySelect();
       this._changed();
     }
+  }
+
+  // Which section (index into sections) the selection belongs to, or -1.
+  selectedSectionIndex() {
+    const sel = this.selection;
+    if (!sel) return -1;
+    const loop = sel.type === 'vertex' || sel.type === 'holeloop' ? sel.loop : -2;
+    return this._isRegionLoop(loop) ? loop - REGION_LOOP_BASE : -1;
+  }
+
+  deleteSelectedSection() {
+    const idx = this.selectedSectionIndex();
+    if (idx < 1) return; // never the base
+    this.pushUndo();
+    this.sections.splice(idx, 1);
+    this.selection = null;
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifySelect();
+    this._changed();
   }
 
   // ---- normalize traced holes to perfect circles (explicit action only) ----
@@ -548,6 +663,52 @@ export class TraceEditor {
     drawLoop(this.outer, -1, '#37d67a', 'rgba(55, 214, 122, 0.08)');
     for (let h = 0; h < this.holes.length; h++) {
       drawLoop(this.holes[h], h, '#ff7d5c', 'rgba(255, 125, 92, 0.12)');
+    }
+
+    // Section footprints (extra thickness regions)
+    for (let sc = 1; sc < this.sections.length; sc++) {
+      const sec = this.sections[sc];
+      if (!sec.pts || sec.pts.length < 3) continue;
+      drawLoop(sec.pts, REGION_LOOP_BASE + sc, '#3fc6d4', 'rgba(63, 198, 212, 0.10)');
+      let cxm = 0, cym = 0;
+      for (const p of sec.pts) { cxm += p.x; cym += p.y; }
+      const ctr = this._mmToScreen({ x: cxm / sec.pts.length, y: cym / sec.pts.length });
+      ctx.font = 'bold 11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#3fc6d4';
+      const zb = sec.zBase || 0;
+      ctx.fillText(
+        `${sec.name || 'Section'} · ${zb > 0 ? `${zb}–${(zb + sec.thickness).toFixed(1)}` : sec.thickness} mm`,
+        ctr.x, ctr.y
+      );
+    }
+
+    // In-progress region draft
+    if (this._draftRegion && this._draftRegion.length) {
+      const pts = this._draftRegion.map(p => this._mmToScreen(p));
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.strokeStyle = '#3fc6d4';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (const p of pts) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, VERT_R, 0, Math.PI * 2);
+        ctx.fillStyle = '#3fc6d4';
+        ctx.fill();
+      }
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#3fc6d4';
+      const last = pts[pts.length - 1];
+      ctx.fillText(
+        pts.length < 3 ? 'click to add points…' : 'double-click or Enter to close',
+        last.x + 10, last.y - 10
+      );
     }
 
     // Manual screw holes

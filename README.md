@@ -120,7 +120,19 @@ export from that — no re-tracing.
 
 **3 — Model & export.** Enter the thickness, choose an edge style for the top
 and bottom edges — square, chamfer (45°) or fillet (quarter-round) with a size
-in mm — and preview the solid in 3D. Export a binary **STL** (millimetres,
+in mm — and preview the solid in 3D.
+
+**Sections — different thicknesses & overhangs.** The model isn't limited to
+one height. Draw extra sections with the **▱ Section** tool in step 2 (click
+points, double-click or Enter to close), then give each its own **thickness**
+and **floor offset** in step 3: a raised boss on a thinner plate, a stepped
+part, or an overhang that floats above the build plate (floor offset > 0 —
+your slicer will want supports if nothing is underneath). Each section is a
+watertight shell; overlapping sections are exported together and every slicer
+unions them. Screw holes cut through every section they pass through, and the
+countersink/counterbore/blind feature automatically lands on the true entry
+face — the topmost section for "from top" holes, the bottommost for "from
+bottom". The SVG export is the base outline only. Export a binary **STL** (millimetres,
 z-up, centred at the origin) or the outline as **SVG** at true scale (handy
 for laser cutting or importing into CAD).
 

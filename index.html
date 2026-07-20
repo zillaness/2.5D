@@ -115,6 +115,7 @@
       <div class="tool-row" id="toolRow">
         <button class="tool-btn active" data-tool="edit" title="Drag vertices; click an edge to add one; right/Alt-click deletes">✎ Edit</button>
         <button class="tool-btn" data-tool="addhole" title="Click to place a circular hole">◎ Add hole</button>
+        <button class="tool-btn" data-tool="region" title="Draw a section with its own thickness/offset — click points, double-click or Enter to close, Esc cancels">▱ Section</button>
         <button class="tool-btn" data-tool="pan" title="Drag to pan">✋ Pan</button>
       </div>
       <div id="holeProps" hidden>
@@ -217,10 +218,28 @@
     <section id="panel3" class="panel" hidden>
       <h2>Model &amp; export</h2>
 
+      <h3>Sections</h3>
       <div class="field">
-        <label for="thickness">Thickness (mm)</label>
-        <input type="text" inputmode="decimal" id="thickness" value="5" min="0.2" step="0.1">
+        <select id="regionSel"></select>
       </div>
+      <div class="field">
+        <label for="regionName">Name</label>
+        <input type="text" id="regionName">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="thickness">Thickness (mm)</label>
+          <input type="text" inputmode="decimal" id="thickness" value="5">
+        </div>
+        <div class="field">
+          <label for="floorOffset">Floor offset (mm)</label>
+          <input type="text" inputmode="decimal" id="floorOffset" value="0" title="Lift this section off the floor plane — for overhangs / stepped undersides">
+        </div>
+      </div>
+      <p class="hint">Draw more sections with the ▱ Section tool in step 2 —
+      each extrudes with its own thickness. Floor offset &gt; 0 makes a
+      section hang above the build plate (supports may be needed when
+      nothing is underneath).</p>
 
       <h3>Top edge</h3>
       <div class="field-row">
@@ -253,6 +272,8 @@
           <input type="text" inputmode="decimal" id="bottomSize" value="1" min="0.1" step="0.1">
         </div>
       </div>
+
+      <button id="regionDeleteBtn" class="btn small" disabled>Delete section</button>
 
       <div class="field">
         <label>Curve quality <span id="arcVal" class="val"></span></label>

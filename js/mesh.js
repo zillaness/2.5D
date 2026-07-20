@@ -498,16 +498,22 @@ function pointInPoly(pt, poly) {
   return inside;
 }
 
-// Build the full solid.
+// Build one prismatic solid (a single section of the model).
 //
 // outline / tracedHoles: mm polygons in image coordinates (y down).
-// screwHoles: [{ cx, cy, d, type, side, depth, csAngle, csDia, cbDia, cbDepth }]
-// params: { thickness, bottom: {mode, size}, top: {mode, size}, arcSegments }
+// screwHoles: [{ cx, cy, d, type, side, ... , asBore }] — asBore forces a
+//   plain through-bore (used when a hole merely passes through this section
+//   and its recess/rim features belong to another section's face).
+// params: { thickness, zBase, bottom: {mode, size}, top: {mode, size},
+//           arcSegments, center: {cx, cy} }
+//   zBase lifts the whole solid off the floor plane (overhangs);
+//   center overrides the model origin so multiple sections share one frame.
 // Returns { positions, indices, stats } or null.
 export function buildSolid(outline, tracedHoles, screwHoles, params) {
   if (!outline || outline.length < 3) return null;
   const { thickness: t } = params;
   if (!(t > 0)) return null;
+  const zBase = params.zBase || 0;
   const warnings = [];
 
   // Image y-down -> model y-up (mirror), then centre on origin.
@@ -516,7 +522,8 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
-  const cx0 = (minX + maxX) / 2, cy0 = (minY + maxY) / 2;
+  const cx0 = params.center ? params.center.cx : (minX + maxX) / 2;
+  const cy0 = params.center ? params.center.cy : (minY + maxY) / 2;
   const tx = pts => pts.map(p => ({ x: p.x - cx0, y: cy0 - p.y }));
 
   const txOutline = tx(outline);
@@ -534,8 +541,8 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
   // per-hole rim chamfers/fillets on each open face.
   const arcSeg = params.arcSegments || 8;
   for (const c of circles) {
-    c.feat = holeFeatures(c, t, warnings);
-    if (c.feat) {
+    c.feat = holeFeatures(c.asBore ? { ...c, type: 'through' } : c, t, warnings);
+    if (c.feat && !c.asBore) {
       applyRim(c.feat, 'top', t, c.edgeTop, arcSeg, warnings);
       applyRim(c.feat, 'bottom', t, c.edgeBottom, arcSeg, warnings);
     }
@@ -652,6 +659,9 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
   });
 
   const positions = new Float32Array(mb.positions);
+  if (zBase !== 0) {
+    for (let i = 2; i < positions.length; i += 3) positions[i] += zBase;
+  }
   const indices = new Uint32Array(mb.indices);
 
   return {
@@ -663,6 +673,115 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
       sizeX: maxX - minX,
       sizeY: maxY - minY,
       sizeZ: t,
+      zBase,
+      zTop: zBase + t,
+      clamped,
+      warnings,
+    },
+  };
+}
+
+// Build the whole model from sections ("regions"), each an independent
+// watertight prism: footprint × [zBase, zBase + thickness]. Overlapping
+// sections are exported as overlapping closed shells — slicers union them.
+//
+// regions: [{ name, pts (null -> use `outer`), thickness, zBase, top, bottom }]
+// Screw holes cut every region whose footprint contains them; the recess /
+// blind / rim features apply on the true entry face — the region with the
+// highest top for side="top" holes, the lowest bottom for side="bottom" —
+// and everywhere else the hole is a plain bore.
+export function buildModel(outer, tracedHoles, screwHoles, regions, arcSegments) {
+  if (!outer || outer.length < 3 || !regions || !regions.length) return null;
+  const warnings = [];
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of outer) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const center = { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+
+  const footprints = regions.map(r => (r.pts && r.pts.length >= 3 ? r.pts : outer));
+
+  // Assign screw holes: which regions does each cut, and which face is entry?
+  const perRegion = regions.map(() => []);
+  for (const h of screwHoles || []) {
+    const containing = [];
+    for (let i = 0; i < regions.length; i++) {
+      if (pointInPoly({ x: h.cx, y: h.cy }, footprints[i])) containing.push(i);
+    }
+    if (!containing.length) {
+      warnings.push('A screw hole lies outside every section and was skipped.');
+      continue;
+    }
+    let entry = containing[0];
+    for (const i of containing) {
+      const better = (h.side === 'bottom')
+        ? (regions[i].zBase || 0) < (regions[entry].zBase || 0)
+        : (regions[i].zBase || 0) + regions[i].thickness >
+          (regions[entry].zBase || 0) + regions[entry].thickness;
+      if (better) entry = i;
+    }
+    for (const i of containing) {
+      perRegion[i].push(i === entry ? h : { ...h, asBore: true });
+    }
+  }
+
+  const parts = [];
+  let totalTris = 0, clamped = false;
+  let zLo = Infinity, zHi = -Infinity;
+  regions.forEach((r, i) => {
+    let { thickness, zBase = 0, top, bottom } = r;
+    if (!(thickness > 0)) { warnings.push(`Section "${r.name || i + 1}" has no thickness — skipped.`); return; }
+    // Edge treatments cannot exceed the section's thickness.
+    top = { ...(top || { mode: 'none', size: 0 }) };
+    bottom = { ...(bottom || { mode: 'none', size: 0 }) };
+    const sT = top.mode === 'none' ? 0 : top.size;
+    const sB = bottom.mode === 'none' ? 0 : bottom.size;
+    if (sT + sB > thickness) {
+      const k = thickness / (sT + sB) * 0.999;
+      top.size = sT * k; bottom.size = sB * k;
+      warnings.push(`Section "${r.name || i + 1}": edge sizes exceeded the thickness — scaled to fit.`);
+    }
+    const mesh = buildSolid(footprints[i], tracedHoles, perRegion[i], {
+      thickness, zBase, top, bottom, arcSegments, center,
+    });
+    if (!mesh) {
+      warnings.push(`Section "${r.name || i + 1}" produced no solid — check its outline.`);
+      return;
+    }
+    parts.push(mesh);
+    totalTris += mesh.stats.triangles;
+    clamped = clamped || mesh.stats.clamped;
+    warnings.push(...mesh.stats.warnings.map(w =>
+      regions.length > 1 ? `Section "${r.name || i + 1}": ${w}` : w));
+    zLo = Math.min(zLo, zBase);
+    zHi = Math.max(zHi, zBase + thickness);
+  });
+  if (!parts.length) return null;
+
+  const positions = new Float32Array(parts.reduce((n, p) => n + p.positions.length, 0));
+  const indices = new Uint32Array(parts.reduce((n, p) => n + p.indices.length, 0));
+  let vOff = 0, iOff = 0;
+  for (const p of parts) {
+    positions.set(p.positions, vOff * 3);
+    for (let k = 0; k < p.indices.length; k++) indices[iOff + k] = p.indices[k] + vOff;
+    vOff += p.positions.length / 3;
+    iOff += p.indices.length;
+  }
+
+  return {
+    positions,
+    indices,
+    stats: {
+      triangles: totalTris,
+      sections: parts.length,
+      islands: parts.reduce((n, p) => n + p.stats.islands, 0),
+      sizeX: maxX - minX,
+      sizeY: maxY - minY,
+      sizeZ: zHi - zLo,
+      zBase: zLo,
+      zTop: zHi,
       clamped,
       warnings,
     },

@@ -217,9 +217,11 @@ const meshRes = await page.evaluate(async () => {
   const app = window.__app;
   // Manual 6 mm circle hole near the left side of the object.
   app.traceEditor.circles.push({ cx: 80, cy: 132, d: 6 });
-  app.state.model.thickness = 6;
-  app.state.model.top = { mode: 'chamfer', size: 1 };
-  app.state.model.bottom = { mode: 'fillet', size: 1.5 };
+  Object.assign(app.state.regions[0], {
+    thickness: 6,
+    top: { mode: 'chamfer', size: 1 },
+    bottom: { mode: 'fillet', size: 1.5 },
+  });
   app.goStep(3);
   await new Promise(r => setTimeout(r, 600)); // debounce + build
   const mesh = app.state.meshData;
@@ -678,6 +680,93 @@ check('project JSON round-trips the full trace after a fresh page load',
   `${restored.outerPts} pts, ${restored.circles} circles, rect ${restored.hasRect}`);
 check('restored project builds a mesh (export-ready with no photo re-trace)',
   restored.meshTris > 100, `${restored.meshTris} tris`);
+
+// ---------- 8. Multi-section model: thicknesses, floor offset, cross-section holes ----------
+
+const multiRes = await page.evaluate(async () => {
+  const { buildModel } = await import('./js/mesh.js');
+  const { boreDiameter, recessDefaults } = await import('./js/screws.js');
+  const app = window.__app;
+  const { outer, holes } = app.traceEditor.getTrace();
+
+  const rect = (x0, y0, x1, y1) =>
+    [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+  const none = { mode: 'none', size: 0 };
+  // Base 4 mm; boss 9 mm on top of it; wing hanging at z 5..7, sticking out
+  // past the base outline (a true overhang).
+  const regions = [
+    { name: 'Base', pts: null, thickness: 4, zBase: 0, top: none, bottom: none },
+    { name: 'Boss', pts: rect(90, 130, 120, 145), thickness: 9, zBase: 0, top: none, bottom: none },
+    { name: 'Wing', pts: rect(140, 135, 160, 155), thickness: 2, zBase: 5, top: none, bottom: none },
+  ];
+  // CS hole through boss + base: entry face must be the boss top (z=9).
+  const m5 = boreDiameter('metric', 'M5', 'clearance');
+  const m5rec = recessDefaults('metric', 'M5');
+  const screwHoles = [{
+    cx: 105, cy: 137, d: m5, type: 'cs', side: 'top',
+    csAngle: m5rec.csAngle, csDia: m5rec.csDia,
+  }];
+
+  const mesh = buildModel(outer, holes, screwHoles, regions, 6);
+  if (!mesh) return { ok: false };
+  const { positions, indices, stats } = mesh;
+
+  const radiiAt = (mx, my, z, maxDist) => {
+    const rs = [];
+    for (let i = 0; i < positions.length; i += 3) {
+      if (Math.abs(positions[i + 2] - z) > 1e-4) continue;
+      const d = Math.hypot(positions[i] - mx, positions[i + 1] - my);
+      if (d < maxDist) rs.push(d);
+    }
+    return rs.length ? [Math.min(...rs), Math.max(...rs)] : [NaN, NaN];
+  };
+  // Wing-only x range (base outer ends at model x=40; wing spans 35..55).
+  let wingMinZ = 1e9, wingMaxZ = -1e9;
+  for (let i = 0; i < positions.length; i += 3) {
+    if (positions[i] > 42) {
+      wingMinZ = Math.min(wingMinZ, positions[i + 2]);
+      wingMaxZ = Math.max(wingMaxZ, positions[i + 2]);
+    }
+  }
+  const edgeUse = new Map();
+  const vkey = i => `${positions[i * 3].toFixed(4)},${positions[i * 3 + 1].toFixed(4)},${positions[i * 3 + 2].toFixed(4)}`;
+  for (let t = 0; t < indices.length; t += 3) {
+    const ks = [vkey(indices[t]), vkey(indices[t + 1]), vkey(indices[t + 2])];
+    if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+    for (let e = 0; e < 3; e++) {
+      const a = ks[e], b = ks[(e + 1) % 3];
+      const key = a < b ? a + '|' + b : b + '|' + a;
+      edgeUse.set(key, (edgeUse.get(key) || 0) + 1);
+    }
+  }
+  let bad = 0;
+  for (const n of edgeUse.values()) if (n !== 2) bad++;
+
+  return {
+    ok: true, stats,
+    csAtBossTop: radiiAt(0, 8, 9, m5rec.csDia / 2 + 0.4),
+    boreAtBaseTop: radiiAt(0, 8, 4, m5 / 2 + 0.4),
+    wingMinZ, wingMaxZ,
+    badEdges: bad,
+  };
+});
+
+console.log('\nMulti-section — thickness per region, overhang, cross-section holes');
+check('model built with 3 sections', multiRes.ok && multiRes.stats.sections === 3,
+  multiRes.ok ? `${multiRes.stats.sections} sections, ${multiRes.stats.triangles} tris` : 'build failed');
+if (multiRes.ok) {
+  check('overall height = tallest section (9 mm)',
+    near(multiRes.stats.sizeZ, 9, 1e-6) && near(multiRes.stats.zTop, 9, 1e-6), `${multiRes.stats.sizeZ}`);
+  check('overhang wing floats at z 5..7 (floor offset)',
+    near(multiRes.wingMinZ, 5, 1e-6) && near(multiRes.wingMaxZ, 7, 1e-6),
+    `${multiRes.wingMinZ}..${multiRes.wingMaxZ}`);
+  check('CS recess lands on the boss top (true entry face, z=9)',
+    near(multiRes.csAtBossTop[1], 5.9, 0.15), `${multiRes.csAtBossTop[0].toFixed(2)}..${multiRes.csAtBossTop[1].toFixed(2)}`);
+  check('same hole is a plain bore through the base (z=4 opening ≈ 2.7)',
+    near(multiRes.boreAtBaseTop[0], 2.7, 0.1) && near(multiRes.boreAtBaseTop[1], 2.7, 0.1),
+    `${multiRes.boreAtBaseTop[0].toFixed(2)}..${multiRes.boreAtBaseTop[1].toFixed(2)}`);
+  check('all section shells watertight', multiRes.badEdges === 0, `${multiRes.badEdges} bad edges`);
+}
 
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
