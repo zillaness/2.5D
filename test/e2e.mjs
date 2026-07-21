@@ -1716,17 +1716,76 @@ if (pdfHasLib) {
     stanUnits === 'mm' && stanBuilt.calloutHidden && stanBuilt.holes === 4 && stanBuilt.circles === 0 &&
     near(stanBuilt.span, 60, 1.5),
     `units ${stanUnits}, calloutHidden ${stanBuilt.calloutHidden}, ${stanBuilt.holes} grooves, ${stanBuilt.span.toFixed(1)} mm`);
-  // KNOWN GAP (#28): the shared mesh core is non-manifold when several holes share
-  // colinear horizontal edges on the same scanline (a row of rectangular slots —
-  // exactly a rail's groove pattern). Round holes and rotated/offset slots are
-  // fine; only aligned straight-edged slots break. Inherited from 2.5D's mesh.js
-  // (byte-identical, not fixable from Blueprint). This characterization pins the
-  // current behaviour so a future mesh fix flips it and prompts a real watertight
-  // assertion here. Picatinny's round counterbores DO extrude watertight (above).
-  check('stanag: KNOWN GAP #28 — aligned rectangular slots not yet watertight',
-    stanBuilt.tris > 0 && stanBuilt.open > 0,
-    `${stanBuilt.tris} tris, ${stanBuilt.open} open edges (expected while #28 open)`);
-  if (stanBuilt.open > 0) console.log(`  note: STANAG grooved extrude has ${stanBuilt.open} open edges — mesh gap #28 (aligned slots).`);
+  // #28 fixed: several holes sharing colinear horizontal edges on one scanline
+  // (a row of rectangular slots — a rail's groove pattern) used to leave open
+  // cap edges (earcut dropped ears on the exact ties). mesh.js now deskews the
+  // island (nudges the holes a few µm apart) so earcut triangulates cleanly —
+  // Blueprint's first deliberate divergence from 2.5D's shared mesh. Full
+  // watertight + no-degenerate-facet coverage is in §19.
+  check('stanag: grooved rail extrudes to a watertight solid (#28 fixed)',
+    stanBuilt.tris > 50 && stanBuilt.open === 0, `${stanBuilt.tris} tris, ${stanBuilt.open} open`);
+}
+
+// ---------- 19. Mesh robustness (#28): aligned slots, watertight + no slivers ----------
+//
+// Regression matrix for the earcut scanline degeneracy: rows of rectangular
+// slots whose top/bottom edges are exactly colinear. Pre-fix: 2 slots → 8 open
+// cap edges, 4 → 16, 17 (a real rail) → 68 — a non-watertight, non-printable
+// mesh. mesh.js now deskews such an island (nudges its holes apart by a few µm so
+// no two share a scanline), then earcut triangulates cleanly. We assert BOTH
+// watertightness (open === 0) AND no degenerate facets (a rotation-only fix
+// closed the mesh but left zero-area (0,0,0)-normal facets that strict STL
+// validators reject; the nudge emits only real, positive-area triangles).
+{
+  const slotRes = await page.evaluate(async () => {
+    const { buildModel } = await import('./js/mesh.js');
+    const mk = (o = {}) => [{ name: 'Base', pts: null, thickness: 5, zBase: 0,
+      top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 }, ...o }];
+    // { open: cap/wall edges not shared by exactly 2 tris; degen: zero-area facets }
+    const health = (mesh) => {
+      if (!mesh) return { open: -1, degen: -1 };
+      const { positions, indices } = mesh;
+      const edge = new Map();
+      const vk = i => `${positions[i*3].toFixed(3)},${positions[i*3+1].toFixed(3)},${positions[i*3+2].toFixed(3)}`;
+      let degen = 0;
+      for (let i = 0; i < indices.length; i += 3) {
+        for (let e = 0; e < 3; e++) { const a = vk(indices[i+e]), b = vk(indices[i+(e+1)%3]); const key = a<b?a+'|'+b:b+'|'+a; edge.set(key, (edge.get(key)||0)+1); }
+        const [a, b, c] = [indices[i], indices[i+1], indices[i+2]];
+        const nx = (positions[b*3+1]-positions[a*3+1])*(positions[c*3+2]-positions[a*3+2]) - (positions[b*3+2]-positions[a*3+2])*(positions[c*3+1]-positions[a*3+1]);
+        const ny = (positions[b*3+2]-positions[a*3+2])*(positions[c*3]-positions[a*3]) - (positions[b*3]-positions[a*3])*(positions[c*3+2]-positions[a*3+2]);
+        const nz = (positions[b*3]-positions[a*3])*(positions[c*3+1]-positions[a*3+1]) - (positions[b*3+1]-positions[a*3+1])*(positions[c*3]-positions[a*3]);
+        if (Math.hypot(nx, ny, nz) < 1e-9) degen++;
+      }
+      let open = 0; for (const n of edge.values()) if (n !== 2) open++;
+      return { open, degen };
+    };
+    const rect = (cx, hw, y0, y1) => [{x:cx-hw,y:y0},{x:cx+hw,y:y0},{x:cx+hw,y:y1},{x:cx-hw,y:y1}];
+    const outer = [{x:5,y:5},{x:65,y:5},{x:65,y:26.2},{x:5,y:26.2}];
+    const outer17 = [{x:5,y:5},{x:185,y:5},{x:185,y:26.2},{x:5,y:26.2}];
+    const C4 = [20, 30, 40, 50];
+    const C17 = Array.from({ length: 17 }, (_, i) => 12 + i * 10);
+    const opts = { arcSegments: 8, chordTol: 0.4 };
+    return {
+      s2: health(buildModel(outer, C4.slice(0, 2).map(c => rect(c, 2.675, 7, 24.2)), [], mk(), opts)),
+      s4: health(buildModel(outer, C4.map(c => rect(c, 2.675, 7, 24.2)), [], mk(), opts)),
+      s17: health(buildModel(outer17, C17.map(c => rect(c, 2.675, 7, 24.2)), [], mk(), opts)),
+      s4ch: health(buildModel(outer, C4.map(c => rect(c, 2.675, 7, 24.2)), [], mk({ top: { mode: 'chamfer', size: 0.8 }, bottom: { mode: 'chamfer', size: 0.8 } }), opts)),
+      s4scr: health(buildModel(outer, C4.map(c => rect(c, 2.675, 7, 24.2)),
+        [{ cx: 12, cy: 15.6, d: 3, type: 'through', side: 'top' },
+         { cx: 58, cy: 15.6, d: 3, type: 'cb', cbDia: 6, cbDepth: 2, side: 'top' }], mk(), opts)),
+    };
+  });
+  console.log('\nMesh robustness (#28) — aligned rectangular slots');
+  check('2 / 4 / 17 aligned slots extrude watertight',
+    slotRes.s2.open === 0 && slotRes.s4.open === 0 && slotRes.s17.open === 0,
+    `open edges: ${slotRes.s2.open}, ${slotRes.s4.open}, ${slotRes.s17.open}`);
+  check('2 / 4 / 17 aligned slots have no degenerate facets',
+    slotRes.s2.degen === 0 && slotRes.s4.degen === 0 && slotRes.s17.degen === 0,
+    `degen facets: ${slotRes.s2.degen}, ${slotRes.s4.degen}, ${slotRes.s17.degen}`);
+  check('aligned slots + chamfered edges: watertight, no slivers',
+    slotRes.s4ch.open === 0 && slotRes.s4ch.degen === 0, `${slotRes.s4ch.open} open, ${slotRes.s4ch.degen} degen`);
+  check('aligned slots + screw holes: watertight, no slivers',
+    slotRes.s4scr.open === 0 && slotRes.s4scr.degen === 0, `${slotRes.s4scr.open} open, ${slotRes.s4scr.degen} degen`);
 }
 
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');

@@ -27,11 +27,15 @@ Blueprint = "drawing → printable solid." Steps 1–3 are shipped and pushed to
 `claude/blueprint-seed`: (1) fork seed + rebrand, (2) inline pdf.js + PDF vector
 geometry → view picker → trace, (3) read the drawing (title-block units/scale/
 part-name, dimension-derived true scale, trust-label cross-check) + a mixed
-inch/mm units picker. Step 4 (S2a) shipped hole-callout parsing (#23) and the
-Picatinny/STANAG rail acceptance test (#27), which surfaced a shared-core mesh
-gap (#28: aligned rectangular slots are non-manifold). 118 tests pass, 0 fail;
-`file://` PDF-import smoke passes on the single-file build. The long-term endgame
-is 3D-from-multiple-views.
+inch/mm units picker. Step 4 (S2a) shipped hole-callout parsing (#23), the
+Picatinny/STANAG rail acceptance test (#27), and the #28 mesh fix it surfaced
+(earcut dropped ears on aligned rectangular slots → non-watertight rails; fixed
+by deskewing degenerate islands in `mesh.js` — the first sanctioned divergence
+from 2.5D's shared core, flagged for backport; an adversarial review workflow
+caught that a first rotation-retry attempt left zero-area facets, prompting the
+hole-nudge fix). 122 tests pass, 0 fail; `file://` smoke passes on the single-file
+build (grooved rail watertight from the packaged app). The long-term endgame is
+3D-from-multiple-views.
 
 ## Skills in play
 
@@ -90,8 +94,9 @@ parse→match on the selected view's page for PDFs, and when circles match raise
 `finishCadImport`. `.callout-list` styled in a scoped `<style>` in `index.html`
 (keeps shared `css/style.css` byte-identical). Tests: `test/e2e.mjs` §17 — parse,
 match, file-input Apply + Skip integration; §18 — the #27 rail acceptance test;
-**118 pass / 0 fail**; `file://` smoke on `dist/blueprint-local.html` confirmed
-(callout modal + Apply, no page errors).
+§19 — the #28 aligned-slot mesh regression matrix; **121 pass / 0 fail**;
+`file://` smoke on `dist/blueprint-local.html` confirmed (callout modal + Apply,
+and a watertight grooved rail via the app's own step-3 build).
 
 ## The queue — Blueprint work items
 
@@ -99,7 +104,7 @@ match, file-input Apply + Skip integration; §18 — the #27 rail acceptance tes
 |---|------|--------|-------|
 | **23** | **Hole callout parsing** (⌀ / counterbore / countersink / depth / `nX`) → auto-apply with confirm | **SHIPPED (S2a)** | `js/import/holeCallouts.js` (`parseCallouts`+`matchCallouts`+`reassembleRuns`), `#calloutModal` confirm, wired into `useCadView`. PDF text layer only. Suite 109/0. |
 | **27** | Picatinny / STANAG rail acceptance test (mixed inch/mm) end-to-end | **SHIPPED (S2a)** | `test/e2e.mjs` §18. Authored as fixtures from the drawings' **dimensions** (the pipeline reads dims, it doesn't need a supplied vector file). Picatinny (in): units/scale from `6.934`, `5X Ø.206 CBORE Ø.448 DEEP .151` → 5 counterbores, **watertight**. STANAG (mm): units/scale/grooves read, no callout modal. Correction to the old "blocked on vector PDFs" note — that was wrong. |
-| **28** | **Mesh gap: aligned rectangular slots are non-manifold** | **OPEN — found in S2a** | Shared `js/mesh.js` produces open edges when several holes share colinear horizontal edges on one scanline (a row of slots — a rail's groove pattern). Round holes + rotated/offset slots are fine. **Inherited from 2.5D → affects 2.5D too** (byte-identical). A slotted rail therefore doesn't yet export a printable (watertight) STL. Characterized in §18 (`stanag: KNOWN GAP #28`); fix belongs in the shared core (earcut/Clipper robustness), coordinate with 2.5D mainline (S2b). |
+| **28** | **Mesh gap: aligned rectangular slots are non-manifold** | **FIXED (S2a)** | Root cause: **earcut** silently drops ears when several holes share exactly-collinear horizontal edges on one scanline (proved in pure Node: 4 aligned slots → 20 cap tris instead of V+2H−2=26). First tried a rotate-and-retry (closes the mesh) but an **adversarial review workflow caught** that it emits zero-area (0,0,0-normal) cap facets — rotation preserves collinearity, so the ear triangles it fans across the still-collinear original points collapse to slivers (54–62 on the 17-slot rail; strict STL validators reject them). **Final fix** (`deskewIsland` in `js/mesh.js`): when an island's cap would be degenerate, nudge its traced holes apart by a few µm each (low-discrepancy scatter, verified by `capIsClean`, escalating amplitude) so no two share a scanline; caps AND walls derive from the nudged rings so they stay matched. Outer bbox unchanged (only interior slot edges move ≤ ~a few µm, far below print resolution); round holes and tie-free shapes untouched. `triangulateCap` keeps a 1-rotation completeness net as a last-resort closure guarantee (also fixes the review's "5 retries every build" perf note). §18 asserts watertight; §19 asserts **watertight AND zero degenerate facets** (2/4/17 slots, chamfer, +screws). Suite 122/0. **First deliberate `mesh.js` divergence from 2.5D → cherry-pick to 2.5D mainline (S2b), same bug.** Pre-existing corner-touching-slots pinch (over-shared edge) is unrelated and unchanged. |
 | — | OCR for scanned PDFs / raster drawings (v1.1) | Deferred | The uploaded Picatinny/STANAG images are **raster** — no text layer, no vector paths — so reading dims *off those files* needs OCR. Detect image-only pages, vectorize linework, read numbers with Tesseract.js (inline, ~+2–4 MB). |
 | — | 3D-from-views (endgame) | Long-term | Multi-view (plan + section) → solid; needs a CSG kernel. The true Picatinny 45° dovetail cross-section (section A-A) lives here, not the 2.5D top-view extrude. |
 | — | Fork housekeeping | Ongoing | (a) rename the product — "Blueprint" is a working name; (b) lift into its own repo eventually; (c) decide when to rebrand **internal** format keys (currently unchanged on purpose — see Constraints). |
@@ -111,6 +116,10 @@ match, file-input Apply + Skip integration; §18 — the #27 rail acceptance tes
 - **Keep shared-core files byte-identical to 2.5D** so fixes cherry-pick cheaply
   between the two. Diverge only in the rebranded shell (`index.html`, `main.js`,
   `build.mjs`, `version.js`, `README.md`, `package.json`) and new `js/import/*`.
+  **One sanctioned exception (S2a, user-approved): `js/mesh.js` diverged for the
+  #28 fix** (`deskewIsland` + `capIsClean`/`nudgeHoles`/`triangulateCap`). The
+  change is additive and self-contained — cherry-pick it INTO 2.5D (S2b) to
+  restore parity; 2.5D has the same bug.
 - **Internal project-format keys intentionally left as 2.5D's** (`app:'2.5D'`,
   `LIB_KEY`, `-2p5d.stl` suffix, STL header `"2.5D v"`) so the inherited test
   suite stays green. Rebranding these is a deliberate future decision, not an

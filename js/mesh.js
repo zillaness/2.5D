@@ -212,6 +212,99 @@ function zipRings(mb, ringA, zA, ringB, zB) {
   }
 }
 
+// ---------- #28: aligned-slot cap degeneracy ----------
+//
+// When several holes share exactly-collinear horizontal edges on one scanline
+// (a row of rectangular slots — a rail's grooves), earcut cannot triangulate
+// the cap cleanly: on the original coordinates it drops ears (leaving OPEN cap
+// edges → a non-watertight solid); on rotated coordinates it closes the cap but
+// the ear triangles it fans across the still-collinear original points collapse
+// to ZERO-AREA facets (valid winding, but degenerate geometry some STL
+// validators reject). Neither is acceptable.
+//
+// Fix at the geometry level: when an island's cap would be degenerate, nudge its
+// holes apart by a unique sub-µm offset each so no two share an exact edge
+// coordinate. Caps AND walls both derive from the nudged rings, so they stay
+// matched exactly, and earcut then emits only strictly positive-area triangles.
+// The nudge is the smallest that clears the degeneracy (≤ ~a few µm, far below
+// slicer/print resolution) and is applied only to slotted islands — round holes
+// and tie-free outlines are untouched.
+
+const triArea2 = (f, a, b, c) =>
+  (f[b*2] - f[a*2]) * (f[c*2+1] - f[a*2+1]) - (f[b*2+1] - f[a*2+1]) * (f[c*2] - f[a*2]);
+
+function ringsToFlat(rings) {
+  const flat = [], holeIdx = [];
+  for (let r = 0; r < rings.length; r++) {
+    if (r > 0) holeIdx.push(flat.length / 2);
+    for (const p of rings[r]) flat.push(p.x, p.y);
+  }
+  return { flat, holeIdx };
+}
+
+// A cap triangulation is clean iff it has the full V + 2H − 2 triangles (no
+// dropped ears) and no zero-area sliver. The threshold rejects only genuinely
+// degenerate (near-collinear) triangles; legitimately thin ones pass.
+function capIsClean(flat, holeIdx) {
+  const tris = earcut(flat, holeIdx.length ? holeIdx : null, 2);
+  const expect = flat.length / 2 + 2 * holeIdx.length - 2;
+  if (tris.length / 3 < expect) return false;
+  for (let i = 0; i < tris.length; i += 3) {
+    if (Math.abs(triArea2(flat, tris[i], tris[i + 1], tris[i + 2])) < 1e-7) return false;
+  }
+  return true;
+}
+
+// A rigid transform (rotate/shear) can't help: it preserves collinearity, so
+// slot-top corners that share a scanline stay collinear and earcut still fans
+// zero-area triangles across them. The ties must genuinely break — give each
+// hole its own sub-µm nudge (bounded, deterministic, unique per hole) so no two
+// holes share an exact edge coordinate. The cap then triangulates into thin but
+// strictly positive-area triangles; the offset is far below print resolution
+// and applied only to the traced holes of a degenerate island.
+function nudgeHoles(holes, amp) {
+  return holes.map((h, k) => {
+    // Low-discrepancy scatter (golden-ratio / √2 fractions), NOT an evenly-spaced
+    // ramp: a monotone ramp just re-lines the corners up along a slanted line, so
+    // the offsets must be non-monotonic to actually scatter them off every line.
+    const dx = (((k + 1) * 0.6180339887) % 1 - 0.5) * amp;
+    const dy = (((k + 1) * 0.4142135624) % 1 - 0.5) * amp;
+    return h.map(p => ({ x: p.x + dx, y: p.y + dy }));
+  });
+}
+
+// If the island's cap triangulates degenerately, return a copy with the holes
+// nudged just enough to clear it; otherwise return the island unchanged. Screw
+// holes are round and handled separately, so only the traced holes are nudged.
+function deskewIsland(island) {
+  const rings = [island.outer, ...island.holes];
+  const { flat, holeIdx } = ringsToFlat(rings);
+  if (holeIdx.length < 2 || capIsClean(flat, holeIdx)) return island;
+  for (const amp of [8e-3, 3e-2, 0.1]) {
+    const holes = nudgeHoles(island.holes, amp);
+    const t = ringsToFlat([island.outer, ...holes]);
+    if (capIsClean(t.flat, t.holeIdx)) return { outer: island.outer, holes };
+  }
+  return island; // nothing cleared it — the completeness net below keeps it closed
+}
+
+// Triangulate a slice (outer + holes) with earcut. A deskewed island triangulates
+// cleanly on the first pass; the rotated retry is only a completeness net for a
+// residual degeneracy deskew didn't catch (keeps the cap closed, never open —
+// worst case a few zero-area facets, still watertight).
+function triangulateCap(flat, holeIndices) {
+  const expect = flat.length / 2 + 2 * (holeIndices ? holeIndices.length : 0) - 2;
+  const tris = earcut(flat, holeIndices, 2);
+  if (tris.length / 3 >= expect) return tris;
+  const c = Math.cos(0.013), s = Math.sin(0.013), rot = new Array(flat.length);
+  for (let i = 0; i < flat.length; i += 2) {
+    rot[i] = flat[i] * c - flat[i + 1] * s;
+    rot[i + 1] = flat[i] * s + flat[i + 1] * c;
+  }
+  const t = earcut(rot, holeIndices, 2);
+  return t.length > tris.length ? t : tris;
+}
+
 // Triangulate a slice (outer + holes) with earcut and append at height z.
 // up=true -> normal +z (top cap), up=false -> normal -z (bottom cap).
 function addCap(mb, rings, z, up) {
@@ -221,7 +314,7 @@ function addCap(mb, rings, z, up) {
     if (r > 0) holeIndices.push(flat.length / 2);
     for (const p of rings[r]) flat.push(p.x, p.y);
   }
-  const tris = earcut(flat, holeIndices.length ? holeIndices : null, 2);
+  const tris = triangulateCap(flat, holeIndices.length ? holeIndices : null);
   const base = [];
   for (let i = 0; i < flat.length; i += 2) base.push(mb.addVertex(flat[i], flat[i + 1], z));
 
@@ -608,6 +701,11 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
   let clamped = false;
 
   islands.forEach((island, islandIdx) => {
+    // #28: nudge holes apart if this island's cap would triangulate degenerately
+    // (a row of rectangular slots). Slices, walls and caps all derive from
+    // `island`, so deskewing it here keeps them mutually consistent. No-op for
+    // tie-free shapes.
+    island = deskewIsland(island);
     // Slice outlines per level, clamping to the previous slice when an offset
     // collapses or splits the island (keeps the mesh closed; the treatment
     // just flattens out where the shape is too small for it).
