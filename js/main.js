@@ -1104,6 +1104,12 @@ $('normalizeAllBtn').addEventListener('click', () => {
   toast(n ? `${n} traced hole${n > 1 ? 's' : ''} normalized to perfect circles.`
           : 'No round-enough traced holes found.');
 });
+$('detectFilletsBtn').addEventListener('click', () => {
+  const n = traceEditor.detectFillets();
+  toast(n ? `${n} rounded corner${n > 1 ? 's' : ''} converted to live fillet arcs.`
+          : 'No clean rounded corners found to convert.');
+  refreshSelectionTools();
+});
 
 // Multi-select selection tools.
 function refreshSelectionTools() {

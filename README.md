@@ -130,7 +130,13 @@ the object is segmented against the background colour. You get:
 - **Normalize traced holes** — an explicit button (never automatic) replaces a
   photo-detected hole with a least-squares fitted perfect circle, which is then
   draggable and editable like any placed hole; "All round holes" converts every
-  round-ish one at once. Traced hole loops can also be dragged whole, and the
+  round-ish one at once.
+- **Detect fillets** — the outline counterpart: scans the outline, traced holes
+  and sections for cleanly-rounded corners (e.g. from an imported drawing, or a
+  2.5D arc re-imported from DXF/SVG) and converts each into a **live fillet arc**
+  entity — so imported curves become editable and re-export as true arcs.
+  Conservative by design: only well-fitting circular runs bracketed by straight
+  edges are converted, so sharp corners and noisy traces are left alone. Traced hole loops can also be dragged whole, and the
   vertex control points can be toggled on/off.
 - **Screw holes** — click to place round holes (or **click-drag to size one on
   the spot**; a floating ⌀ box appears right at the hole for typing the exact
@@ -322,12 +328,10 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- **Re-idealise imported curves to arc *entities*** — imported DXF/SVG arcs now
-  round-trip as correct dense-point geometry, but they come in as plain points,
-  not as the editable fillet-arc entities the app creates internally. A pass
-  that recognises circular runs on import (or a one-click "detect arcs" like the
-  existing "all round holes") would make imported curves live-editable and
-  re-exportable as arcs — closing the loop fully.
+- *(The arc workflow is complete end-to-end: create fillets → they stay tangent
+  live → export as true arcs/circles → re-import as arcs → **Detect fillets**
+  turns imported curves back into editable arc entities.)* Open threads live in
+  the horizon/tabled lists below.
 
 ### Horizon
 

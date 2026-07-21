@@ -1394,34 +1394,125 @@ export class TraceEditor {
   makeTangentSelection() {
     const span = this._selectionSpan(3);
     if (!span) return { ok: false, reason: 'Select a run of 3+ points on one outline first.' };
-    const { loop, lo, hi, pts } = span;
-    const n = pts.length, len = hi - lo + 1;
-    if (n - len < 4) return { ok: false, reason: 'Need a straight edge on each side of the corner.' };
-    const fit = fitCircle(pts.slice(lo, hi + 1));
-    if (!fit) return { ok: false, reason: 'Could not fit an arc to that selection.' };
-
-    // Fillet of the two straight edges bracketing the run, at its current
-    // fitted radius (see measure.filletArc).
-    const P1 = pts[(lo - 1 + n) % n], P1b = pts[(lo - 2 + n) % n];
-    const P2 = pts[(hi + 1) % n], P2b = pts[(hi + 2) % n];
-    const f = filletArc(P1b, P1, P2, P2b, fit.r);
-    if (!f) return { ok: false, reason: 'Adjacent edges are parallel or the corner is too shallow.' };
-
     this.pushUndo();
-    const arc = this._arcPoints(f.C.x, f.C.y, f.r, f.T1, f.T2, f.mid);
-    // Drop any existing arc overlapping this loop's edited region, then splice.
-    this.arcs = this.arcs.filter(a => a.loop !== loop);
-    this._refsOp({ op: 'splice', loop, lo, removed: len, added: arc.length }, n);
-    pts.splice(lo, len, ...arc);
-    this._reselectRun(loop, lo, arc.length);
-    // Register a persistent, live-re-solving fillet arc for the new run.
-    this.arcs.push({ id: ++this._arcSeq, loop, lo, len: arc.length, r: Math.round(f.r * 100) / 100 });
-    this._lastArc = { loop, lo, len: arc.length, A: f.T1, B: f.T2, mid: f.mid };
+    const res = this._makeTangentSpan(span.loop, span.lo, span.hi);
+    if (!res.ok) { this.undoStack.pop(); return res; }
+    this._reselectRun(res.loop, res.lo, res.len);
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
     this._notifyAnnos();
     this._notifySelect();
     this._changed();
-    return { ok: true, r: Math.round(f.r * 100) / 100 };
+    return { ok: true, r: res.r };
+  }
+
+  // Convert the corner run [lo..hi] on `loop` into a fillet arc tangent to the
+  // two straight edges bracketing it, registering a live arc entity. Does NOT
+  // push undo or notify (callers batch that). With opts.auto it also gates on a
+  // clean circular fit + genuine-fillet geometry, so it can be run blind over
+  // detected candidates. Returns { ok, loop, lo, len, r } or { ok:false }.
+  _makeTangentSpan(loop, lo, hi, { auto = false } = {}) {
+    const pts = this._loop(loop);
+    if (!pts) return { ok: false, reason: 'No such outline.' };
+    const n = pts.length, len = hi - lo + 1;
+    if (len < 3) return { ok: false, reason: 'Select a run of 3+ points on one outline first.' };
+    if (n - len < 4) return { ok: false, reason: 'Need a straight edge on each side of the corner.' };
+    const runPts = pts.slice(lo, hi + 1);
+    const fit = fitCircle(runPts);
+    if (!fit) return { ok: false, reason: 'Could not fit an arc to that selection.' };
+    const P1 = pts[(lo - 1 + n) % n], P1b = pts[(lo - 2 + n) % n];
+    const P2 = pts[(hi + 1) % n], P2b = pts[(hi + 2) % n];
+    const f = filletArc(P1b, P1, P2, P2b, fit.r);
+    if (!f) return { ok: false, reason: 'Adjacent edges are parallel or the corner is too shallow.' };
+    if (auto) {
+      // Only convert a run that is genuinely a clean circular fillet.
+      if (!(fit.r > 0.3)) return { ok: false };
+      if (fit.rms > Math.max(0.15, fit.r * 0.04)) return { ok: false };
+      // The derived tangent points must land near the run's own endpoints, else
+      // this isn't the fillet of these two edges.
+      const near = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) <= Math.max(0.6, fit.r * 0.25);
+      const okEnds = (near(f.T1, runPts[0]) && near(f.T2, runPts[runPts.length - 1])) ||
+        (near(f.T2, runPts[0]) && near(f.T1, runPts[runPts.length - 1]));
+      if (!okEnds) return { ok: false };
+    }
+    const arc = this._arcPoints(f.C.x, f.C.y, f.r, f.T1, f.T2, f.mid);
+    // Drop only arcs overlapping this edited region (so detect can add several).
+    this.arcs = this.arcs.filter(a => a.loop !== loop || a.lo + a.len <= lo || a.lo > hi);
+    this._refsOp({ op: 'splice', loop, lo, removed: len, added: arc.length }, n);
+    pts.splice(lo, len, ...arc);
+    this.arcs.push({ id: ++this._arcSeq, loop, lo, len: arc.length, r: Math.round(f.r * 100) / 100 });
+    this._lastArc = { loop, lo, len: arc.length, A: f.T1, B: f.T2, mid: f.mid };
+    return { ok: true, loop, lo, len: arc.length, r: Math.round(f.r * 100) / 100 };
+  }
+
+  // Signed turn angle at each vertex of a closed loop (+ = left/CCW).
+  _turnAngles(pts) {
+    const n = pts.length, turn = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      const a = pts[(i - 1 + n) % n], b = pts[i], c = pts[(i + 1) % n];
+      const v1x = b.x - a.x, v1y = b.y - a.y, v2x = c.x - b.x, v2y = c.y - b.y;
+      if (Math.hypot(v1x, v1y) < 1e-9 || Math.hypot(v2x, v2y) < 1e-9) continue;
+      turn[i] = Math.atan2(v1x * v2y - v1y * v2x, v1x * v2x + v1y * v2y);
+    }
+    return turn;
+  }
+
+  // Maximal runs [lo,hi] of consistently-curving vertices that look like a
+  // circular arc (moderate, same-sign turns; total sweep 15°–165°), i.e.
+  // fillet candidates — not sharp corners (one big turn) or full circles.
+  _arcRuns(pts) {
+    const n = pts.length;
+    const turn = this._turnAngles(pts);
+    const TMIN = 2 * Math.PI / 180, TMAX = 60 * Math.PI / 180;
+    const curved = i => Math.abs(turn[i]) > TMIN && Math.abs(turn[i]) < TMAX;
+    const runs = [];
+    let i = 0;
+    while (i < n) {
+      if (!curved(i)) { i++; continue; }
+      const sign = Math.sign(turn[i]);
+      let j = i, sweep = 0;
+      while (j < n && curved(j) && Math.sign(turn[j]) === sign) { sweep += turn[j]; j++; }
+      const abs = Math.abs(sweep);
+      if (j - i >= 3 && abs >= 15 * Math.PI / 180 && abs <= 165 * Math.PI / 180) runs.push([i, j - 1]);
+      i = j;
+    }
+    return runs;
+  }
+
+  // Auto-detect fillet arcs across the outline, traced holes and sections, and
+  // convert each clean circular run into a live fillet-arc entity. Returns the
+  // number converted. (Mirrors convertAllRoundHoles for the outline.)
+  detectFillets() {
+    const candidates = [];
+    const scan = loop => {
+      const pts = this._loop(loop);
+      if (!pts || pts.length < 8) return;
+      for (const [lo, hi] of this._arcRuns(pts)) candidates.push({ loop, lo, hi });
+    };
+    scan(-1);
+    for (let h = 0; h < this.holes.length; h++) scan(h);
+    for (let s = 1; s < this.sections.length; s++) if (this.sections[s].pts) scan(REGION_LOOP_BASE + s);
+    if (!candidates.length) return 0;
+    // A detected run includes its two tangent-transition vertices; trim them so
+    // they become the straight-edge anchors the fillet math reads from.
+    for (const c of candidates) {
+      if (c.hi - c.lo + 1 >= 5) { c.lo += 1; c.hi -= 1; }
+    }
+    this.pushUndo();
+    // Convert back-to-front within each loop so a splice never shifts an
+    // as-yet-unprocessed (lower-index) candidate on the same loop.
+    candidates.sort((a, b) => a.loop !== b.loop ? b.loop - a.loop : b.lo - a.lo);
+    let count = 0;
+    for (const c of candidates) {
+      if (this._makeTangentSpan(c.loop, c.lo, c.hi, { auto: true }).ok) count++;
+    }
+    if (!count) { this.undoStack.pop(); return 0; }
+    this.selection = null;
+    this.selectedVerts = [];
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifyAnnos();
+    this._notifySelect();
+    this._changed();
+    return count;
   }
 
   // The arc entity owning the current selection span, or null.

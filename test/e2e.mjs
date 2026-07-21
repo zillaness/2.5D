@@ -1676,6 +1676,46 @@ check('DXF encodes the fillet as a polyline bulge (group 42)', exp.dxfHasBulge, 
 check('DXF emits a true CIRCLE entity for the hole', exp.dxfHasCircle, '');
 check('DXF stays valid R12 (AC1009 + POLYLINE + EOF)', exp.dxfStillValid, '');
 
+// Auto-detect fillets: dense arc runs → live fillet-arc entities.
+const detect = await page.evaluate(async () => {
+  const { fitCircle } = await import('/js/contour.js');
+  const ed = window.__app.traceEditor;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 400;
+  ed.setRectified(c, 4);
+
+  // Build a rectangle whose top-right corner is a dense 90° fillet arc of r=6
+  // (as an imported/flattened arc would look), bracketed by straight edges.
+  // Centre (44,44); tangent points (50,44) at angle 0 and (44,50) at 90°.
+  const cx = 44, cy = 44, r = 6;
+  const arcPts = [];
+  for (let k = 0; k <= 12; k++) {
+    const a = (Math.PI / 2) * (k / 12); // 0°→90°: (50,44)→(44,50)
+    arcPts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+  }
+  const outline = [
+    { x: 0, y: 0 }, { x: 50, y: 0 }, // bottom edge
+    ...arcPts,                        // right edge tangent → rounded corner → top edge tangent
+    { x: 0, y: 50 },                  // top edge back to start
+  ];
+  ed.setTrace(outline.map(p => ({ ...p })), []);
+  ed.setCircles([]); ed.measurements = []; ed.constraints = []; ed.arcs = []; ed.lines = [];
+  const nMade = ed.detectFillets();
+  const arcR = ed.arcs.length ? ed.arcs[0].r : null;
+
+  // A plain square must NOT be converted (no rounded corners).
+  ed.setTrace([{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 40 }, { x: 0, y: 40 }].map(p => ({ ...p })), []);
+  ed.arcs = [];
+  const nSquare = ed.detectFillets();
+
+  return { nMade, arcR, nSquare, arcsCount: ed.arcs.length };
+});
+
+console.log('\nAuto-detect fillets');
+check('detects the rounded corner and registers a fillet arc', detect.nMade === 1, `${detect.nMade}`);
+check('recovers the fillet radius (~6 mm)', detect.arcR !== null && near(detect.arcR, 6, 0.3), `r ${detect.arcR}`);
+check('leaves a plain square alone', detect.nSquare === 0 && detect.arcsCount === 0, `${detect.nSquare} converted`);
+
 console.log('\nDXF bulge round-trip (arc-aware import)');
 check('exported fillet re-imports as a flattened arc (many points)', rt.nNear > 5, `${rt.nNear} pts`);
 check('round-tripped arc recovers the fillet radius',
