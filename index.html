@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Blueprint — drawing to printable solid</title>
 <link rel="stylesheet" href="css/style.css">
+<style>
+  /* Blueprint-only: hole-callout confirm list (shared css/style.css stays 2.5D). */
+  .callout-list { margin: 6px 0 10px; padding-left: 20px; max-height: 40vh; overflow-y: auto; }
+  .callout-list li { margin: 3px 0; line-height: 1.35; }
+</style>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📐</text></svg>">
 <script src="vendor/clipper.js"></script>
 <script src="vendor/pdf.min.js"></script>
@@ -472,6 +477,23 @@
     <p class="hint">Each box is a closed region found in the file (a multi-view
     sheet has several). Click the plan/top view, then Use it. You can clean it
     up with the trace tools afterwards.</p>
+  </div>
+</div>
+
+<div id="calloutModal" class="modal-overlay" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>Apply hole callouts?</h3>
+      <button id="calloutCloseBtn" class="btn small">✕</button>
+    </div>
+    <p class="hint">These holes were read from the drawing's callouts and matched
+    to circles in the geometry:</p>
+    <ul id="calloutList" class="callout-list"></ul>
+    <p id="calloutNote" class="hint"></p>
+    <div class="btn-row">
+      <button id="calloutApplyBtn" class="btn primary">Apply as holes</button>
+      <button id="calloutSkipBtn" class="btn">Keep as traced loops</button>
+    </div>
   </div>
 </div>
 

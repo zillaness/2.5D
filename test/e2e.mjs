@@ -1395,6 +1395,162 @@ if (pdfHasLib) {
     `row ${unitsUi.rowShown}, units ${unitsUi.value}, width ${unitsUi.width}`);
 }
 
+// ---------- 17. Hole callouts (#23): parse → match → apply as holes ----------
+
+// An inches drawing (UNITS Inches, 1:1 so 3.15 in = 80 mm outer). Holes are
+// drawn at their true mm sizes; the callouts are in inches, so matching must
+// convert via mmPerUnit = 25.4. Every callout is a single Tj string, and uses
+// only Ø + ASCII keywords (all that survive the minimal Helvetica fixture font):
+//   2X Ø.206 THRU                     → two ⌀5.23 through holes
+//   Ø.201 THRU CBORE Ø.375 DEEP .200  → ⌀5.11 counterbored ⌀9.53 ▼5.08 (concentric)
+//   Ø.150 CSK Ø.300 X 82              → ⌀3.81 countersunk ⌀7.62 × 82° (concentric)
+//   Ø.190 DEEP .250                   → ⌀4.83 blind ▼6.35
+const IN = 25.4;
+const dTHRU = 0.206 * IN, dCB = 0.201 * IN, dCBrim = 0.375 * IN;
+const dCS = 0.150 * IN, dCSrim = 0.300 * IN, dBLIND = 0.190 * IN;
+const txt = (sz, xmm, ymm, s) => `BT /F1 ${sz} Tf ${xmm*72/25.4} ${ymm*72/25.4} Td (${s}) Tj ET`;
+const CALLOUT_PDF = buildPDF(
+  `1 w\n${rectMM(10, 10, 80, 50)}\n` +
+  `${pdfCircle(25, 25, dTHRU)}\n${pdfCircle(45, 25, dTHRU)}\n` +
+  `${pdfCircle(65, 25, dCB)}\n${pdfCircle(65, 25, dCBrim)}\n` +          // counterbore: bore + rim
+  `${pdfCircle(25, 45, dCS)}\n${pdfCircle(25, 45, dCSrim)}\n` +          // countersink: bore + rim
+  `${pdfCircle(55, 45, dBLIND)}\n` +
+  `${txt(7, 5, 2, 'UNITS Inches')}\n` +
+  `${txt(7, 40, 2, '3.15')}\n` +
+  `${txt(6, 5, 6, '2X \xD8.206 THRU')}\n` +                             // \xD8 = Ø
+  `${txt(6, 5, 9, '\xD8.201 THRU CBORE \xD8.375 DEEP .200')}\n` +
+  `${txt(6, 40, 6, '\xD8.150 CSK \xD8.300 X 82')}\n` +
+  `${txt(6, 55, 9, '\xD8.190 DEEP .250')}`,   // clear of the cbore text's x-extent
+  [0, 0, 300, 240]
+);
+
+if (pdfHasLib) {
+  console.log('\nHole callouts (#23) — parse / match / apply');
+
+  // Parse unit test: callout grammar over the text layer.
+  const parsed = await page.evaluate(async (b64) => {
+    const { importPDF } = await import('./js/import/pdfImport.js');
+    const { parseCallouts } = await import('./js/import/holeCallouts.js');
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const r = await importPDF(bytes);
+    return parseCallouts(r.texts);
+  }, CALLOUT_PDF.toString('base64'));
+  const byType = t => parsed.filter(c => c.type === t);
+  const thru = byType('through')[0], cb = byType('cb')[0], cs = byType('cs')[0], bl = byType('blind')[0];
+  check('parse: four callouts (through/cbore/csink/blind) recognised',
+    parsed.length === 4 && thru && cb && cs && bl,
+    parsed.map(c => `${c.count}x${c.dia}/${c.type}`).join(' '));
+  check('parse: "2X Ø.206 THRU" → count 2, ⌀.206, through',
+    thru && thru.count === 2 && near(thru.dia, 0.206, 1e-4) && thru.thru === true,
+    thru ? `count ${thru.count}, dia ${thru.dia}` : 'missing');
+  check('parse: counterbore reads bore ⌀.201, ⌴⌀.375, depth .200',
+    cb && near(cb.dia, 0.201, 1e-4) && near(cb.cbDia, 0.375, 1e-4) && near(cb.cbDepth, 0.200, 1e-4),
+    cb ? `bore ${cb.dia}, cb ${cb.cbDia}×${cb.cbDepth}` : 'missing');
+  check('parse: countersink reads bore ⌀.150, ⌵⌀.300, angle 82',
+    cs && near(cs.dia, 0.150, 1e-4) && near(cs.csDia, 0.300, 1e-4) && cs.csAngle === 82,
+    cs ? `bore ${cs.dia}, cs ${cs.csDia}×${cs.csAngle}` : 'missing');
+  check('parse: blind reads ⌀.190, depth .250',
+    bl && near(bl.dia, 0.190, 1e-4) && near(bl.depth, 0.250, 1e-4),
+    bl ? `dia ${bl.dia}, depth ${bl.depth}` : 'missing');
+
+  // Match unit test: callouts → hole loops (diameter + multiplicity + rim).
+  const matched = await page.evaluate(async (b64) => {
+    const { importPDF } = await import('./js/import/pdfImport.js');
+    const { parseCallouts, matchCallouts } = await import('./js/import/holeCallouts.js');
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const r = await importPDF(bytes);
+    const res = matchCallouts(parseCallouts(r.texts), r.views[0].holes, 25.4);
+    return {
+      nCircles: res.circles.length,
+      nConsumed: res.consumed.size,
+      types: res.circles.map(c => c.type).sort(),
+      cb: res.circles.find(c => c.type === 'cb') || null,
+      cs: res.circles.find(c => c.type === 'cs') || null,
+      bl: res.circles.find(c => c.type === 'blind') || null,
+      through: res.circles.filter(c => c.type === 'through').map(c => c.d),
+      unmatched: res.unmatched.length,
+    };
+  }, CALLOUT_PDF.toString('base64'));
+  check('match: 5 holes produced, 7 loops consumed (2 rims folded in)',
+    matched.nCircles === 5 && matched.nConsumed === 7 && matched.unmatched === 0,
+    `${matched.nCircles} circles, ${matched.nConsumed} loops, ${matched.unmatched} unmatched`);
+  check('match: two through holes at ⌀~5.23 mm',
+    matched.through.length === 2 && matched.through.every(d => near(d, dTHRU, 0.15)),
+    `d = ${matched.through.map(d => d.toFixed(2)).join(', ')}`);
+  check('match: counterbore ⌀~5.11 mm, ⌴ ⌀~9.53 mm ▼~5.08 mm',
+    matched.cb && near(matched.cb.d, dCB, 0.15) && near(matched.cb.cbDia, dCBrim, 0.2) &&
+    near(matched.cb.cbDepth, 0.200*IN, 0.15),
+    matched.cb ? `⌀${matched.cb.d.toFixed(2)} cb⌀${matched.cb.cbDia.toFixed(2)}×${matched.cb.cbDepth.toFixed(2)}` : 'missing');
+  check('match: countersink ⌀~3.81 mm, ⌵ ⌀~7.62 mm × 82°',
+    matched.cs && near(matched.cs.d, dCS, 0.15) && near(matched.cs.csDia, dCSrim, 0.2) && matched.cs.csAngle === 82,
+    matched.cs ? `⌀${matched.cs.d.toFixed(2)} cs⌀${matched.cs.csDia.toFixed(2)}×${matched.cs.csAngle}` : 'missing');
+  check('match: blind ⌀~4.83 mm, depth ~6.35 mm',
+    matched.bl && near(matched.bl.d, dBLIND, 0.15) && near(matched.bl.depth, 0.250*IN, 0.15),
+    matched.bl ? `⌀${matched.bl.d.toFixed(2)} ▼${matched.bl.depth.toFixed(2)}` : 'missing');
+
+  // Integration: file input → view modal → Use → callout modal → Apply →
+  // parametric holes in the trace, no leftover loops, watertight solid.
+  await page.setInputFiles('#cadFileInput',
+    { name: 'holes.pdf', mimeType: 'application/pdf', buffer: CALLOUT_PDF });
+  await page.waitForSelector('#cadModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => { document.getElementById('cadWidth').value = '80'; });
+  await page.click('#cadUseBtn');
+  await page.waitForSelector('#calloutModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  const calloutUp = await page.evaluate(() => ({
+    up: !document.getElementById('calloutModal').hidden,
+    rows: document.getElementById('calloutList').children.length,
+  }));
+  check('callout modal lists the four matched callouts',
+    calloutUp.up && calloutUp.rows === 4, `up ${calloutUp.up}, rows ${calloutUp.rows}`);
+
+  await page.click('#calloutApplyBtn');
+  await page.waitForFunction(() => window.__app.state.step === 2 && window.__app.traceEditor.circles.length >= 5,
+    null, { timeout: 8000 }).catch(() => {});
+  const applied = await page.evaluate(async () => {
+    const app = window.__app;
+    const t = app.traceEditor.getTrace();
+    const types = t.circles.map(c => c.type).sort();
+    // 8 mm plate so the ⌴5.08 counterbore and ▼6.35 blind hole shape real geometry.
+    app.state.regions[0].thickness = 8;
+    const { buildModel } = await import('./js/mesh.js');
+    const mesh = buildModel(t.outer, t.holes, t.circles, app.state.regions, { arcSegments: 12, chordTol: 0.3 });
+    let bad = 0;
+    if (mesh) {
+      const { positions, indices } = mesh;
+      const edge = new Map();
+      const vk = i => `${positions[i*3].toFixed(3)},${positions[i*3+1].toFixed(3)},${positions[i*3+2].toFixed(3)}`;
+      for (let i = 0; i < indices.length; i += 3) for (let e = 0; e < 3; e++) { const a = vk(indices[i+e]), b = vk(indices[i+(e+1)%3]); const key = a<b?a+'|'+b:b+'|'+a; edge.set(key, (edge.get(key)||0)+1); }
+      for (const n of edge.values()) if (n !== 2) bad++;
+    }
+    return { circles: t.circles.length, holes: t.holes.length, types, tris: mesh ? mesh.stats.triangles : 0, bad };
+  });
+  check('apply: 5 parametric holes, 0 leftover traced loops',
+    applied.circles === 5 && applied.holes === 0,
+    `${applied.circles} circles, ${applied.holes} loops`);
+  check('apply: hole types are blind, cb, cs, through, through',
+    JSON.stringify(applied.types) === JSON.stringify(['blind', 'cb', 'cs', 'through', 'through']),
+    applied.types.join(','));
+  check('apply: model with parametric holes is watertight',
+    applied.tris > 100 && applied.bad === 0, `${applied.tris} tris, ${applied.bad} bad`);
+
+  // Skip path: re-import and choose "keep as traced loops" → loops, no circles.
+  await page.setInputFiles('#cadFileInput',
+    { name: 'holes2.pdf', mimeType: 'application/pdf', buffer: CALLOUT_PDF });
+  await page.waitForSelector('#cadModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => { document.getElementById('cadWidth').value = '80'; });
+  await page.click('#cadUseBtn');
+  await page.waitForSelector('#calloutModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  await page.click('#calloutSkipBtn');
+  await page.waitForFunction(() => window.__app.state.step === 2 && window.__app.traceEditor.outer.length >= 4,
+    null, { timeout: 8000 }).catch(() => {});
+  const skipped = await page.evaluate(() => {
+    const t = window.__app.traceEditor.getTrace();
+    return { circles: t.circles.length, holes: t.holes.length };
+  });
+  check('skip: keeps 7 traced loops, no parametric holes',
+    skipped.circles === 0 && skipped.holes === 7, `${skipped.circles} circles, ${skipped.holes} loops`);
+}
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 

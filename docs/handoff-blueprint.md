@@ -27,10 +27,10 @@ Blueprint = "drawing → printable solid." Steps 1–3 are shipped and pushed to
 `claude/blueprint-seed`: (1) fork seed + rebrand, (2) inline pdf.js + PDF vector
 geometry → view picker → trace, (3) read the drawing (title-block units/scale/
 part-name, dimension-derived true scale, trust-label cross-check) + a mixed
-inch/mm units picker. 94 tests pass, 0 fail; `file://` PDF-import smoke passes on
-the single-file build. The next increment (hole-callout parsing, #23) is fully
-planned. The eventual acceptance test is a Picatinny/STANAG rail (#27), and the
-long-term endgame is 3D-from-multiple-views.
+inch/mm units picker. Step 4 (S2a) shipped hole-callout parsing (#23). 109 tests
+pass, 0 fail; `file://` PDF-import smoke passes on the single-file build. The
+eventual acceptance test is a Picatinny/STANAG rail (#27), and the long-term
+endgame is 3D-from-multiple-views.
 
 ## Skills in play
 
@@ -75,22 +75,27 @@ Latest commits on the branch:
 `b0fef29` units picker · `f8a7f95` read-the-drawing · `974532a` PDF vector import
 · `3d998af` seed fork.
 
-**Planned, not started — hole callouts (#23):** full plan at
-`/root/.claude/plans/tingly-baking-clarke.md`. New module
-`js/import/holeCallouts.js` (`parseCallouts` + `matchCallouts`), matched by
-diameter + multiplicity + concentric-rim (no text-coordinate reconciliation
-needed), grammar accepts glyphs **and** ASCII synonyms (`CBORE`/`CSK`/`THRU`/
-`DEEP`), convert matched hole loops → parametric circles, apply behind a
-`#calloutModal` confirm step. Reuses `fitCircle`/`resampleClosed` (`js/contour.js`),
-`holeTemplate` + `setTrace`/`setCircles`/`pushUndo` (`js/ui/traceEditor.js`),
-`parseNumberLoose` (`js/import/pdfScale.js`). Hook point: end of `useCadView`
-(`js/main.js:1609`) for PDFs.
+**Shipped — hole callouts (#23) [S2a]:** `js/import/holeCallouts.js` exports
+`parseCallouts(texts)` (glyph + ASCII grammar: `⌀`/`Ø`, `THRU`, `CBORE`/`⌴`,
+`CSK`/`⌵`, `DEEP`/`▼`, `nX`; values in drawing units), `matchCallouts(callouts,
+holes, mmPerUnit)` (fits each loop with `fitCircle`, clusters concentric loops
+into bore+rim groups, assigns by diameter + multiplicity + concentric-rim, folds
+rims in, emits `holeTemplate`-shaped circles), and `reassembleRuns(texts)` (pdf.js
+splits a leading `Ø` into its own item — this regroups items per line by y and
+joins by x-gap so callouts read as whole strings). `pdfImport.js` now carries
+`w/h/page` on each text item to support that. `useCadView` (`js/main.js`) runs
+parse→match on the selected view's page for PDFs, and when circles match raises a
+`#calloutModal` (Apply as holes / Keep as traced loops) via `openCalloutModal` →
+`finishCadImport`. `.callout-list` styled in a scoped `<style>` in `index.html`
+(keeps shared `css/style.css` byte-identical). Tests: `test/e2e.mjs` §17 — parse,
+match, file-input Apply + Skip integration; **109 pass / 0 fail**; `file://` smoke
+on `dist/blueprint-local.html` confirmed (callout modal + Apply, no page errors).
 
 ## The queue — Blueprint work items
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| **23** | **Hole callout parsing** (⌀ / counterbore / countersink / depth / `nX`) → auto-apply with confirm | **NEXT — fully planned** | Plan in `tingly-baking-clarke.md`. PDF text layer only in v1. |
+| **23** | **Hole callout parsing** (⌀ / counterbore / countersink / depth / `nX`) → auto-apply with confirm | **SHIPPED (S2a)** | `js/import/holeCallouts.js` (`parseCallouts`+`matchCallouts`+`reassembleRuns`), `#calloutModal` confirm, wired into `useCadView`. PDF text layer only. Suite 109/0. |
 | 27 | Picatinny / STANAG rail PDF acceptance test (mixed inch/mm) end-to-end | Pending | **Blocked: needs the actual vector PDF files** — only drawing images exist so far (images won't parse as geometry). Callout notation is known: `5X Ø.206 ▼ .374`, `⌴ Ø.448 ▼ .151`, `17x .21`; one sheet inches, one mm. |
 | — | OCR for scanned PDFs (v1.1) | Deferred | Detect image-only pages, vectorize linework, read numbers with Tesseract.js (inline, ~+2–4 MB). Separate release once the vector path is proven. |
 | — | 3D-from-views (endgame) | Long-term | Multi-view (plan + section) → solid; needs a CSG kernel, unrelated to the 2.5D extrude path. |

@@ -113,7 +113,11 @@ export async function parsePDF(bytes) {
     const tc = await page.getTextContent();
     const texts = tc.items
       .filter(it => it.str && it.str.trim())
-      .map(it => { const d = apply(vp.transform, it.transform[4], it.transform[5]); return { str: it.str, x: d.x, y: d.y }; });
+      .map(it => {
+        const d = apply(vp.transform, it.transform[4], it.transform[5]);
+        // w/h (points) let downstream reassemble split runs into lines.
+        return { str: it.str, x: d.x, y: d.y, w: it.width || 0, h: it.height || 0 };
+      });
     pages.push({ polylines, texts, w: vp.width, h: vp.height });
   }
   return { numPages: doc.numPages, pages };

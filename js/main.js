@@ -32,6 +32,7 @@ import { Viewer3D } from './viewer3d.js';
 import { importCad } from './import/cadImport.js';
 import { importPDF } from './import/pdfImport.js';
 import { readTitleBlock, suggestScale } from './import/pdfScale.js';
+import { parseCallouts, matchCallouts } from './import/holeCallouts.js';
 
 const $ = id => document.getElementById(id);
 
@@ -1606,9 +1607,58 @@ function useCadView() {
   const sc = pts => pts.map(p => ({ x: p.x * scale, y: p.y * scale }));
   const name = (cadImportState.pdfName || cadImportState.name || 'drawing')
     .replace(/\.[^.]+$/, '').replace(/[^\w.\- ]+/g, '').trim() || 'drawing';
-  loadOutlineIntoSession({ name, outer: sc(v.outer), holes: v.holes.map(sc), circles: [] });
+  const outer = sc(v.outer);
+  const holes = v.holes.map(sc);
+
+  // For PDFs, read the hole callouts and offer to turn matched loops into
+  // parametric holes (⌀ / counterbore / countersink / depth). The user confirms.
+  if (cadImportState.format === 'pdf' && cadImportState.texts) {
+    const mmPerUnit = $('cadUnits').value === 'in' ? 25.4 : 1;
+    const texts = v.page != null
+      ? cadImportState.texts.filter(t => (t.page || 0) === v.page)
+      : cadImportState.texts;
+    const res = matchCallouts(parseCallouts(texts), holes, mmPerUnit);
+    if (res.circles.length) {
+      openCalloutModal({ name, outer, holes, res });
+      return;
+    }
+  }
+  finishCadImport({ name, outer, holes, circles: [] });
+}
+
+// Commit an imported view into the session and close the import modals.
+function finishCadImport({ name, outer, holes, circles }) {
+  loadOutlineIntoSession({ name, outer, holes, circles });
   $('cadModal').hidden = true;
-  toast(`Imported “${name}” from ${(cadImportState.format || 'cad').toUpperCase()}.`);
+  $('calloutModal').hidden = true;
+  const fmt = (cadImportState.format || 'cad').toUpperCase();
+  toast(circles && circles.length
+    ? `Imported “${name}” with ${circles.length} hole${circles.length > 1 ? 's' : ''} from ${fmt}.`
+    : `Imported “${name}” from ${fmt}.`);
+}
+
+// Show the matched hole callouts and let the user apply or skip them. Applying
+// replaces the matched (consumed) loops with parametric holes; skipping keeps
+// every loop as a traced outline.
+function openCalloutModal(pending) {
+  const { name, outer, holes, res } = pending;
+  const list = $('calloutList');
+  list.innerHTML = '';
+  for (const a of res.applied) {
+    const li = document.createElement('li');
+    li.textContent = a.label;
+    list.appendChild(li);
+  }
+  const extra = res.unmatched.filter(u => u.got < u.wanted).length;
+  $('calloutNote').textContent = extra
+    ? 'Some callouts had no matching circle and were left as traced loops.'
+    : 'Matched by diameter, count and concentric rims.';
+  $('calloutApplyBtn').onclick = () => {
+    const kept = holes.filter((_, i) => !res.consumed.has(i));
+    finishCadImport({ name, outer, holes: kept, circles: res.circles });
+  };
+  $('calloutSkipBtn').onclick = () => finishCadImport({ name, outer, holes, circles: [] });
+  $('calloutModal').hidden = false;
 }
 
 // Route an import result into the picker (or straight to trace when a single
@@ -1662,6 +1712,8 @@ $('cadCloseBtn').addEventListener('click', () => { $('cadModal').hidden = true; 
 $('cadModal').addEventListener('pointerdown', e => { if (e.target === $('cadModal')) $('cadModal').hidden = true; });
 $('cadUnits').addEventListener('change', () => { if (cadImportState && cadImportState.format === 'pdf') recomputePdfScale(); });
 $('cadUseBtn').addEventListener('click', useCadView);
+$('calloutCloseBtn').addEventListener('click', () => { $('calloutModal').hidden = true; });
+$('calloutModal').addEventListener('pointerdown', e => { if (e.target === $('calloutModal')) $('calloutModal').hidden = true; });
 
 // Step tab buttons
 for (const btn of document.querySelectorAll('.step-btn')) {
