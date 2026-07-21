@@ -546,6 +546,9 @@ const unitRes = await page.evaluate(async () => {
     ftInWords: parseLength('1 ft 6 in', 'mm'),
     ftInFrac: parseLength(`1' 6-1/2"`, 'mm'),
     inchWord: parseLength('3 inches', 'mm'),
+    commaDec: parseLength('12,7', 'mm'),
+    commaCm: parseLength('1,2 cm', 'mm'),
+    commaFtIn: parseLength(`1' 6,5"`, 'mm'),
   };
 });
 
@@ -569,6 +572,9 @@ check('unit parsing: feet (2ft=609.6, 2\'=609.6) and inch word (3in=76.2)',
 check("unit parsing: feet+inches (1' 6\"=457.2, words=457.2, 1' 6-1/2\"=469.9)",
   near(unitRes.ftIn, 457.2, 1e-6) && near(unitRes.ftInWords, 457.2, 1e-6) && near(unitRes.ftInFrac, 469.9, 1e-6),
   `${unitRes.ftIn}, ${unitRes.ftInWords}, ${unitRes.ftInFrac}`);
+check('unit parsing: comma decimal (12,7=12.7, 1,2cm=12, 1\' 6,5"=469.9)',
+  near(unitRes.commaDec, 12.7, 1e-9) && near(unitRes.commaCm, 12, 1e-9) && near(unitRes.commaFtIn, 469.9, 1e-6),
+  `${unitRes.commaDec}, ${unitRes.commaCm}, ${unitRes.commaFtIn}`);
 
 // Drag-to-size: place a hole at (90, 145) mm and drag 4 mm outward.
 await page.evaluate(() => window.__app.goStep(2));
@@ -1084,6 +1090,35 @@ check('importing a DXF file lands an 80×50 trace with 1 hole in step 2',
   `${cadInt.w.toFixed(1)}×${cadInt.h.toFixed(1)}, ${cadInt.holes} hole`);
 check('imported DXF builds a watertight solid', cadInt.tris > 100 && cadInt.bad === 0,
   `${cadInt.tris} tris, ${cadInt.bad} bad edges`);
+
+// ---------- 13. Step-1 photo rotate (carries corners) ----------
+
+const rotPhoto = await page.evaluate(async () => {
+  const app = window.__app;
+  // Load a 200×100 image and set known corners.
+  const c = document.createElement('canvas');
+  c.width = 200; c.height = 100;
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#ccc'; ctx.fillRect(0, 0, 200, 100);
+  await new Promise(res => app.loadImageFromURL(c.toDataURL('image/png'), res));
+  app.state.reference = 'rect';
+  document.getElementById('refType').value = 'rect';
+  app.cornerEditor.setRefMode('corners');
+  app.state.corners = [{ x: 10, y: 20 }, { x: 190, y: 20 }, { x: 190, y: 80 }, { x: 10, y: 80 }];
+  app.cornerEditor.setCorners(app.state.corners);
+  const before = { w: app.state.image.naturalWidth || app.state.image.width,
+                   h: app.state.image.naturalHeight || app.state.image.height,
+                   c0: { ...app.state.corners[0] } };
+  document.getElementById('rotatePhotoRightBtn').click();  // cw: (x,y)->(H - y, x); H=100
+  const after = { w: app.state.image.width, h: app.state.image.height, c0: { ...app.state.corners[0] } };
+  return { before, after };
+});
+
+console.log('\nStep-1 photo rotate');
+check('rotate photo right swaps image dims (200×100 → 100×200)',
+  rotPhoto.after.w === 100 && rotPhoto.after.h === 200, `${rotPhoto.after.w}×${rotPhoto.after.h}`);
+check('corner maps with the rotation ((10,20) → (80,10))',
+  near(rotPhoto.after.c0.x, 80, 1e-6) && near(rotPhoto.after.c0.y, 10, 1e-6),
+  `(${rotPhoto.after.c0.x}, ${rotPhoto.after.c0.y})`);
 
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;

@@ -40,7 +40,8 @@ export class CornerEditor {
 
   setImage(image) {
     this.image = image;
-    this.vp.setContent(image.naturalWidth, image.naturalHeight);
+    // Accept an HTMLImageElement (naturalWidth) or a canvas (width).
+    this.vp.setContent(image.naturalWidth || image.width, image.naturalHeight || image.height);
     if (this.canvas.clientWidth > 0 && this.canvas.clientHeight > 0) this.vp.fit();
     else this._pendingFit = true;
     this.draw();
@@ -125,7 +126,8 @@ export class CornerEditor {
     }
     if (this.dragIdx >= 0) {
       const wp = this.vp.toWorld(sp);
-      const iw = this.image.naturalWidth, ih = this.image.naturalHeight;
+      const iw = this.image.naturalWidth || this.image.width;
+      const ih = this.image.naturalHeight || this.image.height;
       this.corners[this.dragIdx] = {
         x: Math.max(0, Math.min(iw, wp.x)),
         y: Math.max(0, Math.min(ih, wp.y)),

@@ -202,6 +202,7 @@ function loadImageFromURL(url, done) {
     state.image = img;
     state.rectDirty = true;
     $('dropHint').hidden = true;
+    $('rotatePhotoRow').hidden = false;
     cornerEditor.setImage(img);
     if (state.reference === 'coin') {
       cornerEditor.setRefMode('coin');
@@ -651,6 +652,36 @@ $('refType').addEventListener('change', e => {
   }
   state.rectDirty = true;
 });
+
+// Rotate the source photo 90° in step 1, carrying the corners (or coin) with
+// it. 90° rotation of the bitmap is lossless. Lets a sideways photo be
+// uprighted before/while placing corners.
+function rotatePhoto(dir) {
+  if (!state.image) { toast('Load a photo first.'); return; }
+  const cur = state.image;
+  const W = cur.naturalWidth || cur.width, H = cur.naturalHeight || cur.height;
+  const cw = dir === 'cw';
+  const out = document.createElement('canvas');
+  out.width = H; out.height = W;
+  const ctx = out.getContext('2d');
+  if (cw) { ctx.translate(out.width, 0); ctx.rotate(Math.PI / 2); }
+  else { ctx.translate(0, out.height); ctx.rotate(-Math.PI / 2); }
+  ctx.drawImage(cur, 0, 0);
+  const map = p => cw ? { x: H - p.y, y: p.x } : { x: p.y, y: W - p.x };
+
+  state.image = out;
+  cornerEditor.setImage(out);
+  if (state.reference === 'coin') {
+    const coin = cornerEditor.getCoin();
+    if (coin) { const m = map({ x: coin.cx, y: coin.cy }); cornerEditor.setCoin({ cx: m.x, cy: m.y, r: coin.r }); }
+  } else if (state.corners) {
+    state.corners = state.corners.map(map);
+    cornerEditor.setCorners(state.corners);
+  }
+  state.rectDirty = true;
+}
+$('rotatePhotoLeftBtn').addEventListener('click', () => rotatePhoto('ccw'));
+$('rotatePhotoRightBtn').addEventListener('click', () => rotatePhoto('cw'));
 
 $('fileInput').addEventListener('change', e => loadFile(e.target.files[0]));
 $('detectBtn').addEventListener('click', () => autoDetect(true));

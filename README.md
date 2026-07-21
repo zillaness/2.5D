@@ -72,7 +72,9 @@ the fully offline option.
   since a coin can't correct perspective. Best for small objects where a full
   sheet of paper is overkill.
 
-Or skip the photo entirely and **import a vector drawing** — see below.
+A **Rotate photo** control uprights a sideways shot in 90° steps (the corners
+rotate with it). Or skip the photo entirely and **import a vector drawing** —
+see below.
 
 ### Import a CAD drawing (DXF / SVG)
 
@@ -138,8 +140,9 @@ the object is segmented against the background colour. You get:
 
 **Units** — display defaults to millimetres with an mm/in toggle in the
 header, but every dimension field parses any unit regardless of the toggle and
-converts to mm: `12.7`, `.5"`, `1/2 in`, `1 1/2"`, `3/8"`, `12 mm`, `1.2 cm`,
-`0.3 m`, `2 ft`, and feet-inches like `1' 6"` or `1 ft 6-1/2 in`.
+converts to mm: `12.7`, `12,7` (comma decimal), `.5"`, `1/2 in`, `1 1/2"`,
+`3/8"`, `12 mm`, `1.2 cm`, `0.3 m`, `2 ft`, and feet-inches like `1' 6"` or
+`1 ft 6-1/2 in`.
 
 **Projects** — the 💾 Project button (header) saves or restores everything:
 the reference/paper settings, corners (or coin), the trace with all holes and
@@ -237,8 +240,8 @@ Card/bill/coin references, **vector CAD import (DXF/SVG)** with a multi-view
 picker, heat-set inserts, DXF export, STL quality presets, hole drag rework
 (centre = move, rim = resize), point multi-select (Ctrl-click + marquee) with
 group move/delete, arc/line fitting and densify/reduce on a selected run,
-rotate view 90°, and the container outline library are all **done** and in the
-app.
+rotate view 90° (both the trace step and the corner-setting step), and the
+container outline library are all **done** and in the app.
 
 ### Next up
 
@@ -249,12 +252,6 @@ app.
   drawing → CAD out" path.
 - **Radial lens-distortion estimation** from the reference's edges (they
   should be straight — their curvature measures the distortion).
-
-### Small / low priority
-
-- **Rotate on the corner-setting step** (step 1) — the trace-step rotate is
-  already shipped; this adds it earlier in the flow.
-- **Comma-as-decimal input** (`12,7`) — European decimal notation.
 
 ### Horizon
 

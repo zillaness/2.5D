@@ -31,6 +31,9 @@ export function parseLength(input, displayUnit = 'mm') {
   if (!s) return null;
   // Normalize smart quotes to " and '.
   s = s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
+  // Comma as a decimal separator (European), e.g. "12,7" → "12.7". Only
+  // between digits, so list/thousands commas elsewhere are left alone.
+  s = s.replace(/(\d),(\d)/g, '$1.$2');
 
   // Feet (with optional inches): 1' 6", 1ft, 1 ft 6 in, 1'6-1/2"
   const feet = s.match(/^(-?\d*\.?\d+)\s*(?:'|ft|feet|foot)/);
