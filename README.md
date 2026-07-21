@@ -238,6 +238,19 @@ countersink/counterbore/blind feature automatically lands on the true entry
 face — the topmost section for "from top" holes, the bottommost for "from
 bottom".
 
+**Suggest regions.** In step 2, **▨ Suggest regions** scans the photo for
+visually-distinct areas inside the object — a boss catching the light, a
+shadowed pocket, a differently-coloured pad — and drops each in as an **editable
+section** (drag its control points like any trace). It's the footprint helper
+for sections, the counterpart to hole-detection and Detect fillets: conservative
+(only reasonably large, compact patches that stand out from the object's median
+brightness), user-confirmed, and fully editable or deletable. **It can only
+guess the *where*, never the *how tall*** — a single flat photo carries no depth,
+so each suggested region comes in at the base thickness and **you set its
+thickness / floor offset** in step 3 (taller = a raised boss; floor offset > 0 =
+an overhang). For true auto-height you'd need multiple views (photogrammetry —
+see the horizon).
+
 **Export.** A binary **STL** (millimetres, z-up, centred at the origin), or
 the outline as **SVG** or **DXF** at true scale (for laser cutting or CAD; the
 2D exports use the base outline). The 2D exports are **arc-aware**: fillet arcs

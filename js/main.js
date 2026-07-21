@@ -16,6 +16,7 @@ import {
 } from './screws.js';
 import { parseLength, formatLength, formatLengthLabelled } from './units.js';
 import { measureInfo, loopStats, REGION_LOOP_BASE } from './measure.js';
+import { suggestRegions } from './regions.js';
 import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
 import { APP_VERSION } from './version.js';
 
@@ -1109,6 +1110,39 @@ $('detectFilletsBtn').addEventListener('click', () => {
   toast(n ? `${n} rounded corner${n > 1 ? 's' : ''} converted to live fillet arcs.`
           : 'No clean rounded corners found to convert.');
   refreshSelectionTools();
+});
+$('suggestRegionsBtn').addEventListener('click', () => {
+  if (!state.rect) { toast('Rectify a photo first — regions are read from the image.'); return; }
+  const { outer, holes, circles } = traceEditor.getTrace();
+  if (!outer || outer.length < 3) { toast('Trace the object first.'); return; }
+  const circPoly = c => {
+    const pts = [];
+    for (let k = 0; k < 24; k++) { const a = k / 24 * Math.PI * 2; pts.push({ x: c.cx + c.d / 2 * Math.cos(a), y: c.cy + c.d / 2 * Math.sin(a) }); }
+    return pts;
+  };
+  const holePolys = [...holes, ...circles.map(circPoly)];
+  const cands = suggestRegions(state.rect.canvas, outer, holePolys, state.rect.pxPerMm);
+  if (!cands.length) {
+    toast('No distinct raised/recessed areas found — draw sections by hand with the ▱ tool.');
+    return;
+  }
+  traceEditor.pushUndo();
+  for (const c of cands) {
+    state.regions.push({
+      name: `Region ${state.regions.length}`,
+      pts: c.pts,
+      thickness: state.regions[0].thickness,
+      zBase: 0,
+      top: { mode: 'none', size: 1 },
+      bottom: { mode: 'none', size: 1 },
+      suggested: true,
+    });
+  }
+  state.selRegion = state.regions.length - 1;
+  traceEditor.setSections(state.regions);
+  refreshModelFields();
+  traceEditor.draw();
+  toast(`${cands.length} region${cands.length > 1 ? 's' : ''} suggested — tweak the control points, then set each one's thickness / floor offset in step 3. A flat photo can't measure height, so that part's on you.`, 6000);
 });
 
 // Multi-select selection tools.

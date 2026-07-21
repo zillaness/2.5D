@@ -1737,6 +1737,33 @@ const clip = await page.evaluate(async () => {
   };
 });
 
+// Suggest regions: a bright raised patch inside a grey object is detected as a
+// candidate section footprint, and a uniform object yields nothing.
+const regionRes = await page.evaluate(async () => {
+  const { suggestRegions } = await import('/js/regions.js');
+  const make = withPatch => {
+    const cv = document.createElement('canvas');
+    cv.width = 200; cv.height = 200;
+    const g = cv.getContext('2d');
+    g.fillStyle = '#8a8a8a'; g.fillRect(0, 0, 200, 200);      // object body (grey)
+    if (withPatch) { g.fillStyle = '#e8e8e8'; g.fillRect(120, 120, 60, 60); } // bright raised pad
+    return cv;
+  };
+  const pxPerMm = 2;
+  const outer = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+  const withP = suggestRegions(make(true), outer, [], pxPerMm);
+  const plain = suggestRegions(make(false), outer, [], pxPerMm);
+  let cx = 0, cy = 0;
+  if (withP[0]) { for (const p of withP[0].pts) { cx += p.x; cy += p.y; } cx /= withP[0].pts.length; cy /= withP[0].pts.length; }
+  return { nPatch: withP.length, nPlain: plain.length, cx, cy, kind: withP[0] && withP[0].kind };
+});
+console.log('\nSuggest section regions');
+check('finds the bright pad as a candidate region', regionRes.nPatch >= 1, `${regionRes.nPatch} found`);
+check('candidate sits over the pad (~75,75 mm)',
+  regionRes.nPatch >= 1 && near(regionRes.cx, 75, 6) && near(regionRes.cy, 75, 6),
+  `centroid (${regionRes.cx.toFixed(1)},${regionRes.cy.toFixed(1)})`);
+check('a uniform object suggests nothing', regionRes.nPlain === 0, `${regionRes.nPlain} found`);
+
 console.log('\nSection clipping (bed vs overhang)');
 check('bed-level section is clipped to the outline (no body past x=40)',
   clip.bedMaxX <= 40.5, `max x ${clip.bedMaxX.toFixed(2)}`);
