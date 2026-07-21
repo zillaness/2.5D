@@ -7,7 +7,8 @@
 
 import { BLANKS, getBlank, wardingFor, IN_TO_MM } from './blanks.js';
 import { cutCentre, rootDepthForCode, codeRange } from './blanks.js';
-import { decode, rootDepthMm, snapDepthMm, spacingMm } from './decode.js';
+import { decode, findValleys, rootDepthMm, snapDepthMm, spacingMm } from './decode.js';
+import { checkMACS } from './bitting.js';
 import { buildKeyMesh } from './keyMesh.js';
 import { Viewer3D } from '../viewer3d.js';
 import { toBinarySTL, downloadBlob } from '../exporters.js';
@@ -33,7 +34,7 @@ function initBlanks() {
   const sel = $('blankSel');
   sel.innerHTML = BLANKS.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
   sel.value = 'SC1';
-  sel.onchange = () => { state.blank = getBlank(sel.value); state.overrides = {}; initWarding(); redecode(); };
+  sel.onchange = () => { state.blank = getBlank(sel.value); state.overrides = {}; state.manualScale = null; initWarding(); redecode(true); };
   initWarding();
 }
 function initWarding() {
@@ -63,8 +64,8 @@ function loadImage(src) {
     state.sample = { data: id.data, w: off.width, h: off.height };
     fitCanvas();
     autoPlace();
-    draw();
-    status('Set scale, then adjust the shoulder/tip and cuts.');
+    redecode(true);
+    status('Adjust the shoulder/tip if needed, then confirm/drag the cut depths.');
   };
   img.src = src;
 }
@@ -131,29 +132,68 @@ function autoPlace() {
 }
 const median = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
-// ── build the height profile along the current axis, then decode ─────────────
-function buildProfile() {
-  if (!state.shoulder || !state.tip || !state.pxPerMm) return null;
-  const o = state.shoulder, t = state.tip;
+// ── build the blade profile along the current axis ───────────────────────────
+// Scan perpendicular to the shoulder→tip axis; the bright extent at each step is
+// the blade height there. Self-calibrate the mm scale from the uncut blade height
+// (a known blank dimension), so depths don't depend on a perfect card scale, and
+// register the cuts to the ACTUAL valleys (robust to perspective drift).
+function reprofile() {
+  state.profile = null; state.cutUs = null;
+  if (!state.shoulder || !state.tip || !state.sample) return;
+  const spec = state.blank.spec, o = state.shoulder, t = state.tip;
   const dx = t.x - o.x, dy = t.y - o.y, L = Math.hypot(dx, dy) || 1;
   const d = { x: dx / L, y: dy / L }, n = { x: -dy / L, y: dx / L };
-  const spanPx = state.blank.spec.bladeHeight * IN_TO_MM * state.pxPerMm * 1.6;
-  const prof = [];
-  for (let up = 0; up <= L; up += 1) {
-    const px = o.x + up * d.x, py = o.y + up * d.y;
-    let lo = null, hi = null;
-    for (let k = -spanPx; k <= spanPx; k += 1) {
-      if (bright(px + k * n.x, py + k * n.y)) { if (lo === null) lo = k; hi = k; }
-    }
-    if (lo !== null) prof.push({ u: up / state.pxPerMm, h: (hi - lo) / state.pxPerMm });
+  const at = (up) => ({ px: o.x + up * d.x, py: o.y + up * d.y });
+  const centre = (px, py) => { const on = (k) => bright(px + k * n.x, py + k * n.y); if (on(0)) return 0; for (let s = 1; s <= 60; s++) { if (on(s)) return s; if (on(-s)) return -s; } return null; };
+  // Two passes. Pass 1: bright run through the axis centre (gap-bridged) → a rough
+  // scale. Pass 2: min/max within a TIGHT span (~1.2× the blade height) — wide
+  // enough to span the warding groove, tight enough to exclude the far card
+  // scratches and the wood.
+  const uncutOf = (raw) => {
+    const mid = raw.filter(r => r.up > 0.12 * L && r.up < 0.95 * L).map(r => r.ext).sort((a, b) => a - b);
+    const src = mid.length > 5 ? mid : raw.map(r => r.ext).sort((a, b) => a - b);
+    return src[Math.floor(src.length * 0.85)] || 1;
+  };
+  const rough = [];
+  for (let up = 0; up <= L; up++) {
+    const { px, py } = at(up), on = (k) => bright(px + k * n.x, py + k * n.y);
+    const cen = centre(px, py); if (cen === null) continue;
+    let hi = cen, lo = cen;
+    for (let k = cen + 1, g = 0; k <= L * 0.4; k++) { if (on(k)) { hi = k; g = 0; } else if (++g > 40) break; }
+    for (let k = cen - 1, g = 0; k >= -L * 0.4; k--) { if (on(k)) { lo = k; g = 0; } else if (++g > 40) break; }
+    rough.push({ up, ext: hi - lo });
   }
-  return prof;
+  if (rough.length < 5) return;
+  state.axis = { o, d, n };
+  const px0 = (state.manualScale || uncutOf(rough) / (spec.bladeHeight * IN_TO_MM));
+  const tight = spec.bladeHeight * IN_TO_MM * px0 * 0.62; // half-height × 1.24
+  const raw = [];
+  for (let up = 0; up <= L; up++) {
+    const { px, py } = at(up), on = (k) => bright(px + k * n.x, py + k * n.y);
+    const cen = centre(px, py); if (cen === null) continue;
+    let lo = null, hi = null;
+    for (let k = cen - tight; k <= cen + tight; k++) if (on(k)) { if (lo === null) lo = k; hi = k; }
+    if (lo !== null) raw.push({ up, ext: hi - lo });
+  }
+  if (raw.length < 5) return;
+  const uncutPx = uncutOf(raw);
+  const pxPerMm = state.manualScale || uncutPx / (spec.bladeHeight * IN_TO_MM);
+  state.pxPerMm = pxPerMm;
+  $('scaleReadout').textContent = `${pxPerMm.toFixed(2)} px/mm` + (state.manualScale ? '' : ' (auto)');
+  state.profile = raw.map(r => ({ u: r.up / pxPerMm, h: r.ext / pxPerMm }));
+  // Look for the cuts only in the cut region — past the shoulder flat, short of
+  // the tip taper — so tapering/edge effects aren't mistaken for cuts.
+  const cutLo = cutCentre(spec, 0) * IN_TO_MM - spacingMm(spec) * 0.7;
+  const cutHi = cutCentre(spec, spec.positions - 1) * IN_TO_MM + spacingMm(spec) * 0.7;
+  const region = state.profile.filter(p => p.u >= cutLo && p.u <= cutHi);
+  state.cutUs = findValleys(region, spec.positions, spacingMm(spec) * 0.55);
 }
 
-function redecode() {
-  const prof = buildProfile();
-  if (!prof || !prof.length) { state.decoded = null; showBitting(); draw(); return; }
-  state.decoded = decode(state.blank.spec, prof, { overrides: state.overrides });
+function redecode(reprof = false) {
+  if (reprof) reprofile();
+  if (!state.profile) { state.decoded = null; showBitting(); draw(); return; }
+  const cutUs = state.cutUs && state.cutUs.length === state.blank.spec.positions ? state.cutUs : undefined;
+  state.decoded = decode(state.blank.spec, state.profile, { cutUs, overrides: state.overrides });
   showBitting();
   $('genBtn').disabled = false;
   draw();
@@ -250,7 +290,7 @@ canvas.addEventListener('pointermove', (e) => {
   if (state.drag.kind === 'depth') redecode(); else draw();
 });
 window.addEventListener('pointerup', () => {
-  if (state.drag && state.drag.kind !== 'depth') redecode();
+  if (state.drag && state.drag.kind !== 'depth') redecode(true);
   state.drag = null;
 });
 
@@ -262,21 +302,33 @@ function finishScale() {
   const mm = parseFloat(prompt('Distance between the two points (mm)?', '85.6'));
   state.scaleClicks = null;
   if (mm > 0) {
-    state.pxPerMm = px / mm;
-    $('scaleReadout').textContent = `${state.pxPerMm.toFixed(2)} px/mm`;
-    status('Scale set. Adjust the shoulder/tip and cut depths.');
-    redecode();
+    state.manualScale = px / mm;
+    status('Scale set (overrides auto). Adjust cut depths.');
+    redecode(true);
   } else draw();
 }
 
 // ── buttons ──────────────────────────────────────────────────────────────────
 $('fileInput').onchange = (e) => { const f = e.target.files[0]; if (f) loadImage(URL.createObjectURL(f)); };
-$('autoBtn').onclick = () => { autoPlace(); redecode(); };
+$('autoBtn').onclick = () => { autoPlace(); redecode(true); };
 $('genBtn').onclick = () => generate();
 $('exportBtn').onclick = () => {
   if (!state.mesh) return;
   const name = `${state.blank.id}_${state.decoded.code.join('')}`;
   downloadBlob(toBinarySTL(state.mesh.positions, state.mesh.indices, name), `${name}.stl`);
+};
+
+// Direct code entry — type a known bitting, with or without a photo.
+$('bittingInput').oninput = (e) => {
+  const spec = state.blank.spec, [lo, hi] = codeRange(spec);
+  const digits = (e.target.value.match(/\d/g) || []).map(Number);
+  if (digits.length !== spec.positions || !digits.every(d => d >= lo && d <= hi)) return;
+  state.decoded = {
+    code: digits, ambiguous: [], macs: checkMACS(spec, digits),
+    cuts: digits.map((c, i) => ({ i, code: c, overridden: true, depthMm: rootDepthMm(spec, c), u: cutCentre(spec, i) * IN_TO_MM })),
+  };
+  state.overrides = Object.fromEntries(digits.map((c, i) => [i, c]));
+  showBitting(); $('genBtn').disabled = false; draw();
 };
 
 function generate() {
@@ -300,7 +352,8 @@ window.addEventListener('resize', () => { if (state.img) { fitCanvas(); draw(); 
 
 // Expose for headless testing.
 window.keyUI = {
-  state, loadImage, redecode, generate, buildProfile,
-  setScale: (v) => { state.pxPerMm = v; },
+  state, loadImage, redecode, generate,
+  setScale: (v) => { state.manualScale = v; },
   setHandles: (sh, tp) => { state.shoulder = sh; state.tip = tp; },
+  reprofile,
 };
