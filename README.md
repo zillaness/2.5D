@@ -96,6 +96,9 @@ the object is segmented against the background colour. You get:
   rounding) for the traced outline.
 - **Rotate 90° left/right** — reorient the rectified image and all traced
   geometry together, handy when the shot came out sideways.
+- **Lens distortion** — a slider (with an **Auto** button that reads the
+  paper's edges) that straightens barrel/pincushion bowing so measurements stay
+  accurate to the corners, not just the centre. See the note under Tips.
 - **Hole detection** — enclosed background regions become holes automatically.
 - **Trace correction** — drag any vertex, click an edge to insert one,
   right/Alt-click (or Delete) to remove one, delete whole holes, and undo with
@@ -179,8 +182,11 @@ exports).
 ## Tips for good photos
 
 - Shoot from directly above, with the object roughly centred over the paper.
-  The homography corrects perspective and skew exactly, but ordinary lens
-  (radial) distortion isn't modelled — it's smallest near the image centre.
+  The homography corrects perspective and skew exactly. Ordinary lens (radial)
+  distortion — smallest near the image centre — is now correctable: nudge the
+  **Lens distortion** slider in step 2 until the paper edges look straight, or
+  press **Auto** to estimate it from those edges. Helps most with wide-angle /
+  phone-macro shots and objects near the frame edge.
 - Use flat, diffuse light. Hard shadows next to the object are the main cause
   of a fat trace; if a shadow gets picked up, raise the threshold or fix the
   outline by hand.
@@ -240,8 +246,9 @@ Card/bill/coin references, **vector CAD import (DXF/SVG)** with a multi-view
 picker, heat-set inserts, DXF export, STL quality presets, hole drag rework
 (centre = move, rim = resize), point multi-select (Ctrl-click + marquee) with
 group move/delete, arc/line fitting and densify/reduce on a selected run,
-rotate view 90° (both the trace step and the corner-setting step), and the
-container outline library are all **done** and in the app.
+rotate view 90° (both the trace step and the corner-setting step), radial
+lens-distortion correction, and the container outline library are all **done**
+and in the app.
 
 ### Next up
 
@@ -250,8 +257,6 @@ container outline library are all **done** and in the app.
   (Tesseract) only as a fallback for scanned/image PDFs. Heavy deps (pdf.js +
   Tesseract) inlined into the single file. This is the "picture of a CAD
   drawing → CAD out" path.
-- **Radial lens-distortion estimation** from the reference's edges (they
-  should be straight — their curvature measures the distortion).
 
 ### Horizon
 

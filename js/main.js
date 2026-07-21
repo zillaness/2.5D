@@ -3,6 +3,7 @@
 
 import { PAPER_SIZES, COIN_SIZES, DEFAULT_SIZE, DEFAULT_COIN, paperDims } from './paperSizes.js';
 import { rectify } from './homography.js';
+import { estimateDistortion } from './lens.js';
 import { detectPaperCorners } from './detectPaper.js';
 import { computeDiffMap, otsuThreshold, segmentObject } from './segment.js';
 import {
@@ -39,6 +40,7 @@ const state = {
   reference: 'rect', // 'rect' (paper/card, perspective-corrected) | 'coin' (scale only)
   paper: { size: DEFAULT_SIZE, orientation: 'portrait', customW: 210, customH: 297 },
   coin: { size: DEFAULT_COIN, customD: 24.26 },
+  lens: { k1: 0, k2: 0 }, // radial lens-distortion correction (rectangle path)
   rect: null,             // { canvas, pxPerMm }
   rectDirty: true,
   diffMap: null,
@@ -156,7 +158,11 @@ function goStep(n) {
     $('stepBtn' + i).classList.toggle('active', i === n);
   }
   positionHoleTag();
-  if (n === 2) traceEditor.draw();
+  if (n === 2) {
+    $('lensRow').hidden = state.reference !== 'rect';
+    $('lensVal').textContent = state.lens.k1.toFixed(3);
+    traceEditor.draw();
+  }
   if (n === 3) {
     // A failed 3D preview (e.g. WebGL unavailable) must never block mesh
     // building or export.
@@ -270,7 +276,7 @@ function doRectify() {
   if (!state.image) return false;
   if (state.reference === 'coin') return rectifyCoin();
   const { w, h } = currentPaper();
-  const res = rectify(state.image, state.corners, w, h);
+  const res = rectify(state.image, state.corners, w, h, { k1: state.lens.k1, k2: state.lens.k2 });
   if (!res) {
     toast('Corner layout is degenerate — adjust the corners.');
     return false;
@@ -892,6 +898,37 @@ function rotateView(dir) {
 $('rotateLeftBtn').addEventListener('click', () => rotateView('ccw'));
 $('rotateRightBtn').addEventListener('click', () => rotateView('cw'));
 
+// ---------- lens-distortion correction (rectangle path) ----------
+let lensTimer = null;
+function reRectifyLens() {
+  clearTimeout(lensTimer);
+  lensTimer = setTimeout(() => {
+    // Re-rectify from the original photo with the new coefficient, then retrace.
+    if (!state.image || state.reference !== 'rect') return;
+    state.rectDirty = true;
+    if (doRectify()) retrace();
+  }, 160);
+}
+$('lensSlider').addEventListener('input', e => {
+  state.lens.k1 = parseInt(e.target.value, 10) / 1000;
+  $('lensVal').textContent = state.lens.k1.toFixed(3);
+  reRectifyLens();
+});
+$('lensAutoBtn').addEventListener('click', () => {
+  if (!state.image || state.reference !== 'rect') { toast('Auto-straighten needs a rectangle reference.'); return; }
+  let est = null;
+  try { est = estimateDistortion(state.image, state.corners); }
+  catch (err) { console.error('estimateDistortion failed', err); }
+  if (!est) { toast('Could not read the paper edges — adjust the slider by eye instead.'); return; }
+  state.lens.k1 = est.k1;
+  $('lensSlider').value = Math.round(est.k1 * 1000);
+  $('lensVal').textContent = est.k1.toFixed(3);
+  reRectifyLens();
+  toast(est.improved > 0.05
+    ? `Auto-straightened (k=${est.k1.toFixed(3)}, edges ${Math.round(est.improved * 100)}% straighter).`
+    : `Little distortion detected (k=${est.k1.toFixed(3)}).`);
+});
+
 $('normalizeBtn').addEventListener('click', () => {
   const fit = traceEditor.convertSelectedToCircle();
   if (fit) {
@@ -1169,6 +1206,7 @@ function serializeProject(includePhoto) {
     reference: state.reference,
     paper: state.paper,
     coin: state.coin,
+    lens: state.lens,
     corners: state.corners,
     seg: state.seg,
     model: state.model,
@@ -1201,6 +1239,7 @@ function loadProject(p) {
     $('customH').value = fmtDim(state.paper.customH);
   }
   if (p.coin) { state.coin = { ...state.coin, ...p.coin }; $('coinSize').value = state.coin.size; }
+  if (p.lens) { state.lens = { k1: p.lens.k1 || 0, k2: p.lens.k2 || 0 }; }
   if (p.reference === 'rect' || p.reference === 'coin') {
     state.reference = p.reference;
     $('refType').value = p.reference;

@@ -154,6 +154,18 @@
         <button id="rotateRightBtn" class="btn small" title="Rotate the whole trace and image 90° right">⟳ Rotate right</button>
       </div>
 
+      <div id="lensRow" hidden>
+        <div class="field">
+          <label>Lens distortion <span id="lensVal" class="val"></span></label>
+          <div class="slider-row">
+            <input type="range" id="lensSlider" min="-350" max="350" value="0">
+            <button id="lensAutoBtn" class="btn small" title="Estimate correction from the paper edges (they should be straight)">Auto</button>
+          </div>
+        </div>
+        <p class="hint">Straightens lens-bowed edges. Nudge until the paper's
+        edges look straight, or let Auto read them. 0 = off.</p>
+      </div>
+
       <h3>Edit</h3>
       <div class="tool-row" id="toolRow">
         <button class="tool-btn active" data-tool="edit" title="Drag vertices; click an edge to add one; right/Alt-click deletes">✎ Edit</button>

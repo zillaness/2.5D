@@ -2,7 +2,10 @@
 //
 // The paper defines a world plane with known physical size. Mapping the four
 // photographed corners onto the paper rectangle removes perspective and skew,
-// and gives every rectified pixel a real size in millimetres.
+// and gives every rectified pixel a real size in millimetres. Optional radial
+// lens-distortion correction straightens lens-bowed edges (see lens.js).
+
+import { lensParams, distortPixel, undistortPixel } from './lens.js';
 
 // Solve A x = b for an 8x8 system with partial-pivot Gaussian elimination.
 function solve8(A, b) {
@@ -53,17 +56,28 @@ export function applyHomography(H, x, y) {
 // Render the perspective-corrected paper into a new canvas.
 //
 // corners: 4 source-image pixel positions ordered TL, TR, BR, BL matching the
-// paper's (0,0), (W,0), (W,H), (0,H) in millimetres. Returns { canvas, pxPerMm }.
-export function rectify(image, corners, paperWmm, paperHmm, maxLongSidePx = 1600) {
+// paper's (0,0), (W,0), (W,H), (0,H) in millimetres.
+// opts.k1/opts.k2: radial lens-distortion coefficients (Brown model). When set,
+// the clicked corners are undistorted before building the homography and each
+// output pixel is re-distorted before sampling, so lens-bowed edges come out
+// straight. Returns { canvas, pxPerMm }.
+export function rectify(image, corners, paperWmm, paperHmm, opts = {}) {
+  const { maxLongSidePx = 1600, k1 = 0, k2 = 0 } = opts;
   const pxPerMm = Math.min(maxLongSidePx / Math.max(paperWmm, paperHmm), 8);
   const outW = Math.round(paperWmm * pxPerMm);
   const outH = Math.round(paperHmm * pxPerMm);
 
-  // Map rectified pixels -> source pixels, so we can sample per output pixel.
+  const iw = image.naturalWidth || image.width, ih = image.naturalHeight || image.height;
+  const lp = lensParams(iw, ih);
+  const distort = (k1 || k2);
+  // Straighten the clicked corners so the homography maps to undistorted space.
+  const corr = distort ? corners.map(c => undistortPixel(c, k1, k2, lp)) : corners;
+
+  // Map rectified pixels -> (undistorted) source pixels.
   const dstQuad = [
     { x: 0, y: 0 }, { x: outW, y: 0 }, { x: outW, y: outH }, { x: 0, y: outH },
   ];
-  const H = computeHomography(dstQuad, corners);
+  const H = computeHomography(dstQuad, corr);
   if (!H) return null;
 
   const srcCanvas = document.createElement('canvas');
@@ -84,8 +98,9 @@ export function rectify(image, corners, paperWmm, paperHmm, maxLongSidePx = 1600
   for (let v = 0; v < outH; v++) {
     for (let u = 0; u < outW; u++) {
       const d = H[6] * u + H[7] * v + H[8];
-      const sx = (H[0] * u + H[1] * v + H[2]) / d;
-      const sy = (H[3] * u + H[4] * v + H[5]) / d;
+      let sx = (H[0] * u + H[1] * v + H[2]) / d;
+      let sy = (H[3] * u + H[4] * v + H[5]) / d;
+      if (distort) { const p = distortPixel({ x: sx, y: sy }, k1, k2, lp); sx = p.x; sy = p.y; }
       const o = (v * outW + u) * 4;
       if (sx < 0 || sy < 0 || sx > sw - 1 || sy > sh - 1) {
         op[o] = op[o + 1] = op[o + 2] = 0; op[o + 3] = 255;

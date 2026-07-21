@@ -1120,6 +1120,89 @@ check('corner maps with the rotation ((10,20) → (80,10))',
   near(rotPhoto.after.c0.x, 80, 1e-6) && near(rotPhoto.after.c0.y, 10, 1e-6),
   `(${rotPhoto.after.c0.x}, ${rotPhoto.after.c0.y})`);
 
+// ---------- 14. Radial lens-distortion correction ----------
+
+const lens = await page.evaluate(async () => {
+  const { lensParams, distortPixel, undistortPixel, estimateDistortion } = await import('./js/lens.js');
+  const { rectify, computeHomography, applyHomography } = await import('./js/homography.js');
+
+  // Round-trip: undistort(distort(p)) ≈ p.
+  const lp = lensParams(1000, 800);
+  const p = { x: 900, y: 120 };
+  const rt = undistortPixel(distortPixel(p, 0.12, 0, lp), 0.12, 0, lp);
+  const rtErr = Math.hypot(rt.x - p.x, p.y - rt.y);
+
+  // Build a synthetic distorted photo: an 80×50 object on A4, viewed with a
+  // mild perspective, then radially distorted by a known k1.
+  const K1 = 0.10;
+  const paperW = 210, paperH = 297;
+  const W = 1000, Hh = 1400;
+  const lp2 = lensParams(W, Hh);
+  const quad = [{ x: 150, y: 180 }, { x: 850, y: 150 }, { x: 900, y: 1250 }, { x: 120, y: 1280 }];
+  const H = computeHomography(
+    [{ x: 0, y: 0 }, { x: paperW, y: 0 }, { x: paperW, y: paperH }, { x: 0, y: paperH }], quad);
+  const c = document.createElement('canvas'); c.width = W; c.height = Hh;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#38342e'; ctx.fillRect(0, 0, W, Hh);
+  // Draw paper + object by mapping mm → ideal pixel (H) → distorted pixel.
+  const mm2dist = (x, y) => { const q = applyHomography(H, x, y); return distortPixel(q, K1, 0, lp2); };
+  const poly = (pts, fill) => {
+    ctx.beginPath();
+    pts.forEach((pt, i) => { const d = mm2dist(pt.x, pt.y); if (i === 0) ctx.moveTo(d.x, d.y); else ctx.lineTo(d.x, d.y); });
+    ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+  };
+  // Dense edges so the distortion curves render (not just 4 straight segments).
+  const dense = corners => {
+    const out = [];
+    for (let i = 0; i < corners.length; i++) {
+      const a = corners[i], b = corners[(i + 1) % corners.length];
+      for (let s = 0; s < 24; s++) out.push({ x: a.x + (b.x - a.x) * s / 24, y: a.y + (b.y - a.y) * s / 24 });
+    }
+    return out;
+  };
+  poly(dense([{ x: 0, y: 0 }, { x: paperW, y: 0 }, { x: paperW, y: paperH }, { x: 0, y: paperH }]), '#f4f2ec');
+  poly(dense([{ x: 65, y: 120 }, { x: 145, y: 120 }, { x: 145, y: 170 }, { x: 65, y: 170 }]), '#23364a');
+
+  // The 4 paper corners as they appear in the distorted photo (what the user clicks).
+  const distCorners = [{ x: 0, y: 0 }, { x: paperW, y: 0 }, { x: paperW, y: paperH }, { x: 0, y: paperH }]
+    .map(pt => mm2dist(pt.x, pt.y));
+
+  // Measure the object width after rectify, with and without correction.
+  const measure = (k1) => {
+    const r = rectify(c, distCorners, paperW, paperH, { k1, maxLongSidePx: 1000 });
+    const ctx2 = r.canvas.getContext('2d');
+    const { data } = ctx2.getImageData(0, 0, r.canvas.width, r.canvas.height);
+    const w2 = r.canvas.width, h2 = r.canvas.height;
+    // Scan the object's mid-row (y≈145mm) for the dark span; width in mm.
+    const yPx = Math.round(145 * r.pxPerMm);
+    let lo = -1, hi = -1;
+    for (let x = 0; x < w2; x++) {
+      const i = (yPx * w2 + x) * 4;
+      const dark = data[i] < 120 && data[i + 1] < 120;
+      if (dark) { if (lo < 0) lo = x; hi = x; }
+    }
+    return lo < 0 ? null : (hi - lo) / r.pxPerMm;
+  };
+  const wNone = measure(0);
+  const wCorr = measure(K1);
+
+  const est = estimateDistortion(c, distCorners);
+
+  return {
+    rtErr, wNone, wCorr, estK: est ? est.k1 : null, estImproved: est ? est.improved : 0, injected: K1,
+  };
+});
+
+console.log('\nLens distortion — correction + auto-estimate');
+check('distort/undistort round-trips to sub-pixel', lens.rtErr < 0.05, `${lens.rtErr.toFixed(4)} px`);
+check('correction recovers 80 mm object width better than none',
+  lens.wCorr !== null && Math.abs(lens.wCorr - 80) < Math.abs((lens.wNone ?? 0) - 80) &&
+  Math.abs(lens.wCorr - 80) < 1.2,
+  `uncorrected ${(lens.wNone||0).toFixed(1)} → corrected ${(lens.wCorr||0).toFixed(1)} mm`);
+check('auto-estimate recovers the injected k1 (~0.10)',
+  lens.estK !== null && Math.abs(lens.estK - lens.injected) < 0.04,
+  `est ${lens.estK}, injected ${lens.injected}`);
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 
