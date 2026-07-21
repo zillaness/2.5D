@@ -115,9 +115,12 @@ function addBlade(mesh, blank, code) {
   for (let L = 0; L <= tipL; L += 0.4) bp.add(L);
   const stations = [...bp].sort((a, b) => a - b);
 
+  // Clean the source cross-section once (drop rounding-duplicate closing points
+  // that would otherwise leave a degenerate triangle in each end cap).
+  const wprofile = dedupe(w.profile);
   // Clipped, tip-scaled cross-section at each station.
   const ringLoops = stations.map(L => {
-    const loop = clipProfileAtTop(w.profile, hTopAt(L));
+    const loop = clipProfileAtTop(wprofile, hTopAt(L));
     const oriented = area2(loop) < 0 ? loop.slice().reverse() : loop; // CCW in t,h
     const f = scaleAt(L);
     return f === 1 ? oriented : oriented.map(([t, h]) => [t, hMid + (h - hMid) * f]);
@@ -149,16 +152,26 @@ function addBlade(mesh, blank, code) {
 }
 
 // Extrude a closed (x,h) outline (+ optional holes) along thickness y by ±t/2.
+const DUP = 1e-3; // mm — past 4-decimal rounding noise in the source data
 function dedupe(loop) {
-  const out = [];
+  let out = [];
   for (const p of loop) {
     const q = out[out.length - 1];
-    if (!q || Math.abs(p[0] - q[0]) > 1e-4 || Math.abs(p[1] - q[1]) > 1e-4) out.push(p);
+    if (!q || Math.abs(p[0] - q[0]) > DUP || Math.abs(p[1] - q[1]) > DUP) out.push(p);
   }
-  // drop a closing duplicate (earcut treats the loop as implicitly closed)
   const f = out[0], l = out[out.length - 1];
-  if (out.length > 1 && Math.abs(f[0] - l[0]) < 1e-4 && Math.abs(f[1] - l[1]) < 1e-4) out.pop();
-  return out;
+  if (out.length > 1 && Math.abs(f[0] - l[0]) < DUP && Math.abs(f[1] - l[1]) < DUP) out.pop();
+  // Drop collinear vertices (a straight run of ≥3 points) — redundant boundary
+  // points make the earcut cap and the wall loop disagree and leak edges.
+  const cross = (a, b, c) =>
+    Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+  const keep = [];
+  const n = out.length;
+  for (let i = 0; i < n; i++) {
+    const a = out[(i - 1 + n) % n], b = out[i], c = out[(i + 1) % n];
+    if (cross(a, b, c) > 1e-6) keep.push(b);
+  }
+  return keep.length >= 3 ? keep : out;
 }
 
 function extrudePolyXH(mesh, outline, holes, thick) {
