@@ -1358,6 +1358,41 @@ if (pdfHasLib) {
   check('scaled PDF: width prefilled ~80 and trace rescaled to ~80 mm',
     near(prefill, 80, 1) && near(scaled.w, 80, 1.5), `prefill ${prefill}, trace ${scaled.w.toFixed(1)}`);
   check('part name from title block used as project name', /BRACKET-01/.test(scaled.name), scaled.name);
+
+  // Mixed-unit reality (like the Picatinny rail set): an inches drawing.
+  // Geometry printed at 80 mm (= 3.15 in at 1:1); title says UNITS Inches.
+  const INCH_PDF = buildPDF(
+    `1 w\n${rectMM(10, 10, 80, 50)}\n` +
+    `BT /F1 8 Tf ${28*72/25.4} ${6*72/25.4} Td (3.15) Tj ET\n` +
+    `BT /F1 7 Tf ${10*72/25.4} ${64*72/25.4} Td (UNITS Inches   SCALE 1) Tj ET`
+  );
+  const inchRes = await page.evaluate(async (b64) => {
+    const { importPDF } = await import('./js/import/pdfImport.js');
+    const { readTitleBlock, suggestScale } = await import('./js/import/pdfScale.js');
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const r = await importPDF(bytes);
+    const tb = readTitleBlock(r.texts);
+    const asIn = suggestScale(r.views[0], r.texts, { ...tb, units: 'in' }).realWidthMm;
+    const asMm = suggestScale(r.views[0], r.texts, { ...tb, units: 'mm' }).realWidthMm;
+    return { units: tb.units, asIn, asMm };
+  }, INCH_PDF.toString('base64'));
+  check('inch drawing: units detected "in", 3.15 in interpreted as ~80 mm',
+    inchRes.units === 'in' && near(inchRes.asIn, 80, 0.6),
+    `detected ${inchRes.units}, 3.15in→${inchRes.asIn.toFixed(1)}mm`);
+
+  // The import modal offers the units picker for PDFs.
+  await page.setInputFiles('#cadFileInput',
+    { name: 'inch.pdf', mimeType: 'application/pdf', buffer: INCH_PDF });
+  await page.waitForSelector('#cadModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  const unitsUi = await page.evaluate(() => ({
+    rowShown: !document.getElementById('cadUnitsRow').hidden,
+    value: document.getElementById('cadUnits').value,
+    width: parseFloat(document.getElementById('cadWidth').value),
+  }));
+  await page.evaluate(() => { document.getElementById('cadCloseBtn').click(); });
+  check('modal shows units picker defaulted to detected "in", width ~80',
+    unitsUi.rowShown && unitsUi.value === 'in' && near(unitsUi.width, 80, 1),
+    `row ${unitsUi.rowShown}, units ${unitsUi.value}, width ${unitsUi.width}`);
 }
 
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');

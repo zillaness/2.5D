@@ -452,10 +452,17 @@
       <button id="cadCloseBtn" class="btn small">✕</button>
     </div>
     <p id="cadUnitsNote" class="hint"></p>
+    <div class="field" id="cadUnitsRow" hidden>
+      <label for="cadUnits">Drawing units <span id="cadUnitsHint" class="val"></span></label>
+      <select id="cadUnits">
+        <option value="mm">Millimetres (mm)</option>
+        <option value="in">Inches (in)</option>
+      </select>
+    </div>
     <div class="field" id="cadWidthRow" hidden>
       <label for="cadWidth">Overall width of the chosen view (mm)</label>
       <input type="text" inputmode="decimal" id="cadWidth"
-        title="The file has no real units — type the drawing's overall width to set scale">
+        title="Type the drawing's overall width to set scale; prefilled from the dimension text when found">
     </div>
     <div id="cadViews" class="cad-views"></div>
     <p id="cadWarn" class="warn" hidden></p>

@@ -1549,34 +1549,50 @@ function openCadModal(result, name) {
       for (const el of grid.children) el.classList.remove('sel');
       cell.classList.add('sel');
       $('cadUseBtn').disabled = false;
+      if (cadImportState.format === 'pdf') recomputePdfScale();
     });
     grid.appendChild(cell);
     requestAnimationFrame(() => drawViewThumb(cv, v));
   });
-  let unitsNote = result.unitsKnown
-    ? `Units from file: ${result.unitName}. ${result.views.length} view(s) found.`
-    : `The file has no real units — set the overall width below. ${result.views.length} view(s) found.`;
 
-  // PDF: read the title block + a dimension to suggest the true overall width.
+  const isPdf = result.format === 'pdf' && result.texts && result.views[0];
   cadImportState.pdfName = null;
-  if (result.format === 'pdf' && result.texts && result.views[0]) {
+  $('cadUnitsRow').hidden = !isPdf;
+
+  if (isPdf) {
+    // Read the title block once; let the user override units for mixed-unit
+    // drawings (they're common — one sheet in inches, another in mm).
     const tb = readTitleBlock(result.texts);
-    const sg = suggestScale(result.views[0], result.texts, tb);
-    cadImportState.suggestWidthMm = sg.realWidthMm;
+    cadImportState.tbBase = tb;
     cadImportState.pdfName = tb.name;
-    unitsNote = `${sg.note}. ${result.views.length} view(s) found.`;
+    $('cadUnits').value = tb.units || 'mm';
+    $('cadUnitsHint').textContent = tb.units ? `(read: ${tb.units})` : '(unclear — please pick)';
+    recomputePdfScale();
+  } else {
+    $('cadUnitsNote').textContent = result.unitsKnown
+      ? `Units from file: ${result.unitName}. ${result.views.length} view(s) found.`
+      : `The file has no real units — set the overall width below. ${result.views.length} view(s) found.`;
+    if (!result.unitsKnown && result.views[0]) $('cadWidth').value = fmtDim(result.views[0].w);
   }
 
-  $('cadUnitsNote').textContent = unitsNote;
-  $('cadWidthRow').hidden = result.unitsKnown;
-  if (!result.unitsKnown && result.views[0]) {
-    const prefill = cadImportState.suggestWidthMm || result.views[0].w;
-    $('cadWidth').value = fmtDim(prefill);
-  }
+  $('cadWidthRow').hidden = result.unitsKnown && !isPdf;
   $('cadWarn').hidden = !(result.warnings && result.warnings.length);
   $('cadWarn').textContent = (result.warnings || []).join('\n');
   $('cadUseBtn').disabled = cadSelected < 0;
   $('cadModal').hidden = false;
+}
+
+// Recompute the suggested true width for the selected PDF view using the
+// currently chosen units, and refresh the prefill + note.
+function recomputePdfScale() {
+  const st = cadImportState;
+  if (!st || !st.tbBase || cadSelected < 0) return;
+  const tb = { ...st.tbBase, units: $('cadUnits').value };
+  const view = st.views[cadSelected];
+  const sg = suggestScale(view, st.texts, tb);
+  st.suggestWidthMm = sg.realWidthMm;
+  $('cadWidth').value = fmtDim(sg.realWidthMm);
+  $('cadUnitsNote').textContent = `${sg.note}. ${st.views.length} view(s) found — pick one.`;
 }
 
 function useCadView() {
@@ -1644,6 +1660,7 @@ $('cadFileInput').addEventListener('change', async e => {
 });
 $('cadCloseBtn').addEventListener('click', () => { $('cadModal').hidden = true; });
 $('cadModal').addEventListener('pointerdown', e => { if (e.target === $('cadModal')) $('cadModal').hidden = true; });
+$('cadUnits').addEventListener('change', () => { if (cadImportState && cadImportState.format === 'pdf') recomputePdfScale(); });
 $('cadUseBtn').addEventListener('click', useCadView);
 
 // Step tab buttons
