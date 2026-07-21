@@ -124,9 +124,9 @@ the object is segmented against the background colour. You get:
     typed exactly in mm.
 
 **Units** — display defaults to millimetres with an mm/in toggle in the
-header, and every dimension field understands both notations regardless of the
-toggle: `12.7`, `.5"`, `1/2 in`, `1 1/2"`, `3/8"`, or `12mm` all parse and
-convert.
+header, but every dimension field parses any unit regardless of the toggle and
+converts to mm: `12.7`, `.5"`, `1/2 in`, `1 1/2"`, `3/8"`, `12 mm`, `1.2 cm`,
+`0.3 m`, `2 ft`, and feet-inches like `1' 6"` or `1 ft 6-1/2 in`.
 
 **Projects** — the 💾 Project button (header) saves or restores everything:
 the reference/paper settings, corners (or coin), the trace with all holes and

@@ -1,30 +1,59 @@
 // Length parsing/formatting with mm ↔ inch support.
 //
 // parseLength accepts decimals ("12.7", ".5"), fractions ("1/2", "3/8"),
-// mixed numbers ("1 1/2"), and unit suffixes (`"` or "in" for inches, "mm").
+// mixed numbers ("1 1/2"), and unit suffixes:
+//   millimetres   mm
+//   centimetres   cm
+//   metres        m
+//   inches        in / inch / inches / "
+//   feet          ft / foot / feet / '
+//   feet+inches   1' 6"  ·  1 ft 6 in  ·  1'6-1/2"
 // A bare number is read in `displayUnit`. Always returns millimetres.
+
+const MM_PER = { mm: 1, cm: 10, m: 1000, in: 25.4, ft: 304.8 };
+
+// Parse a decimal / fraction / mixed-number token into a plain number.
+function parseNumberToken(s) {
+  s = s.trim();
+  if (!s) return null;
+  let m = s.match(/^(-?\d+)\s+(\d+)\s*\/\s*(\d+)$/);        // mixed: 1 1/2
+  if (m) {
+    const whole = parseInt(m[1], 10), frac = parseInt(m[2], 10) / parseInt(m[3], 10);
+    return whole < 0 ? whole - frac : whole + frac;
+  }
+  if ((m = s.match(/^(-?\d+)\s*\/\s*(\d+)$/))) return parseInt(m[1], 10) / parseInt(m[2], 10);
+  if (/^-?(\d+\.?\d*|\.\d+)$/.test(s)) return parseFloat(s);
+  return null;
+}
 
 export function parseLength(input, displayUnit = 'mm') {
   let s = String(input).trim().toLowerCase();
   if (!s) return null;
-  let unit = displayUnit;
-  if (/["”]/.test(s) || /in(ch(es)?)?\s*\.?\s*$/.test(s)) unit = 'in';
-  if (/mm\s*$/.test(s)) unit = 'mm';
-  s = s.replace(/["”]/g, '').replace(/(inch(es)?|in|mm)\s*\.?\s*$/, '').trim();
+  // Normalize smart quotes to " and '.
+  s = s.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
 
-  let val = null;
-  let m = s.match(/^(-?\d+)\s+(\d+)\s*\/\s*(\d+)$/);       // mixed: 1 1/2
-  if (m) {
-    const whole = parseInt(m[1], 10);
-    const frac = parseInt(m[2], 10) / parseInt(m[3], 10);
-    val = whole < 0 ? whole - frac : whole + frac;
-  } else if ((m = s.match(/^(-?\d+)\s*\/\s*(\d+)$/))) {     // fraction: 3/8
-    val = parseInt(m[1], 10) / parseInt(m[2], 10);
-  } else if (/^-?(\d+\.?\d*|\.\d+)$/.test(s)) {             // decimal
-    val = parseFloat(s);
+  // Feet (with optional inches): 1' 6", 1ft, 1 ft 6 in, 1'6-1/2"
+  const feet = s.match(/^(-?\d*\.?\d+)\s*(?:'|ft|feet|foot)/);
+  if (feet) {
+    const ft = parseFloat(feet[1]);
+    let rest = s.slice(feet.index + feet[0].length)
+      .replace(/["]|in(?:ch(?:es)?)?/g, ' ').replace(/[-]/g, ' ').trim();
+    const inches = rest ? (parseNumberToken(rest) || 0) : 0;
+    const sign = /^-/.test(s) ? -1 : 1;
+    return sign * (Math.abs(ft) * 12 + inches) * 25.4;
   }
+
+  // Single unit suffix (check cm / mm before bare m).
+  let unit = displayUnit, body = s;
+  if (/"$/.test(s) || /in(?:ch(?:es)?)?\.?$/.test(s)) {
+    unit = 'in'; body = s.replace(/"|in(?:ch(?:es)?)?\.?$/, '');
+  } else if (/cm\.?$/.test(s)) { unit = 'cm'; body = s.replace(/cm\.?$/, ''); }
+  else if (/mm\.?$/.test(s)) { unit = 'mm'; body = s.replace(/mm\.?$/, ''); }
+  else if (/m\.?$/.test(s)) { unit = 'm'; body = s.replace(/m\.?$/, ''); }
+
+  const val = parseNumberToken(body);
   if (val === null || !isFinite(val)) return null;
-  return unit === 'in' ? val * 25.4 : val;
+  return val * MM_PER[unit];
 }
 
 // mm -> display string in the given unit (no suffix; fields label the unit).

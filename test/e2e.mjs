@@ -537,6 +537,15 @@ const unitRes = await page.evaluate(async () => {
     bare_in_mode: parseLength('0.5', 'in'),
     three_eighths: parseLength('3/8"', 'mm'),
     mm_suffix_in_mode: parseLength('12mm', 'in'),
+    cm: parseLength('1.2 cm', 'mm'),
+    cm_nospace: parseLength('5cm', 'in'),
+    metre: parseLength('0.3 m', 'mm'),
+    ft: parseLength('2 ft', 'mm'),
+    ftTick: parseLength("2'", 'mm'),
+    ftIn: parseLength(`1' 6"`, 'mm'),
+    ftInWords: parseLength('1 ft 6 in', 'mm'),
+    ftInFrac: parseLength(`1' 6-1/2"`, 'mm'),
+    inchWord: parseLength('3 inches', 'mm'),
   };
 });
 
@@ -551,6 +560,15 @@ check('unit parsing: 1 1/2" = 38.1, 3/8" = 9.525, bare-in-inch-mode 0.5 = 12.7',
 check('unit parsing: bare mm + explicit mm-in-inch-mode',
   near(unitRes.bare_mm, 12.7, 1e-9) && near(unitRes.mm_suffix_in_mode, 12, 1e-9),
   `${unitRes.bare_mm}, ${unitRes.mm_suffix_in_mode}`);
+check('unit parsing: cm and m (1.2cm=12, 5cm=50, 0.3m=300)',
+  near(unitRes.cm, 12, 1e-9) && near(unitRes.cm_nospace, 50, 1e-9) && near(unitRes.metre, 300, 1e-9),
+  `${unitRes.cm}, ${unitRes.cm_nospace}, ${unitRes.metre}`);
+check('unit parsing: feet (2ft=609.6, 2\'=609.6) and inch word (3in=76.2)',
+  near(unitRes.ft, 609.6, 1e-6) && near(unitRes.ftTick, 609.6, 1e-6) && near(unitRes.inchWord, 76.2, 1e-6),
+  `${unitRes.ft}, ${unitRes.ftTick}, ${unitRes.inchWord}`);
+check("unit parsing: feet+inches (1' 6\"=457.2, words=457.2, 1' 6-1/2\"=469.9)",
+  near(unitRes.ftIn, 457.2, 1e-6) && near(unitRes.ftInWords, 457.2, 1e-6) && near(unitRes.ftInFrac, 469.9, 1e-6),
+  `${unitRes.ftIn}, ${unitRes.ftInWords}, ${unitRes.ftInFrac}`);
 
 // Drag-to-size: place a hole at (90, 145) mm and drag 4 mm outward.
 await page.evaluate(() => window.__app.goStep(2));
