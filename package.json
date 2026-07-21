@@ -9,6 +9,7 @@
     "build": "node build.mjs",
     "test": "node test/e2e.mjs",
     "test:keys": "node test/keys.mjs",
+    "test:keymesh": "node test/keymesh_check.mjs",
     "warding": "node scripts/extract-warding.mjs"
   },
   "devDependencies": {
