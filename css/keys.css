@@ -1,0 +1,34 @@
+/* Key-decode page layout — rides on top of css/style.css. */
+.keys-layout {
+  display: grid;
+  grid-template-columns: 320px 1fr 1fr;
+  gap: 12px;
+  padding: 12px;
+  height: calc(100vh - 60px);
+  box-sizing: border-box;
+}
+.keys-layout .panel { overflow-y: auto; }
+.keys-layout .stage {
+  position: relative;
+  background: #0e1216;
+  border: 1px solid #232b34;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+}
+.keys-layout canvas, .keys-layout .view3d { width: 100%; height: 100%; display: block; }
+.stage-label {
+  position: absolute; top: 6px; left: 8px;
+  font-size: 11px; color: #7c8a99; letter-spacing: .04em; text-transform: uppercase;
+  pointer-events: none;
+}
+.hint { font-size: 11px; color: #8a97a5; margin: 4px 0 0; line-height: 1.35; }
+.hint.warn { color: #d8a24a; }
+.mono, .bitting-code { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.bitting-code { font-size: 26px; letter-spacing: .12em; color: #eaf0f6; margin: 2px 0; }
+.macs { font-size: 12px; }
+.macs.ok { color: #5fbf7f; }
+.macs.bad { color: #e5705a; }
+.ambig { font-size: 11px; color: #d8a24a; margin-top: 2px; }
+.status { font-size: 12px; color: #8a97a5; margin-top: 8px; min-height: 16px; }
+.field.bitting { border-top: 1px solid #232b34; padding-top: 10px; margin-top: 6px; }

@@ -11,6 +11,7 @@
     "test:keys": "node test/keys.mjs",
     "test:keymesh": "node test/keymesh_check.mjs",
     "test:decode": "node test/decode.mjs",
+    "test:ui": "node test/keyui_smoke.mjs",
     "warding": "node scripts/extract-warding.mjs"
   },
   "devDependencies": {

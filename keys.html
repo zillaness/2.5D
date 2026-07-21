@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MockRock — photograph a key → print a spare</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/keys.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔑</text></svg>">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js"
+  }
+}
+</script>
+</head>
+<body>
+<header>
+  <h1>MockRock <span class="tagline">photograph a key → print a spare</span></h1>
+  <a class="btn small" href="index.html" title="The general photo→solid tool">← 2.5D</a>
+</header>
+
+<main class="keys-layout">
+  <section class="panel" id="controls">
+    <div class="field">
+      <label>Key blank</label>
+      <select id="blankSel"></select>
+    </div>
+    <div class="field" id="wardingField" hidden>
+      <label>Keyway section (Schlage)</label>
+      <select id="wardingSel"></select>
+    </div>
+
+    <div class="field">
+      <label>1 · Photo</label>
+      <input type="file" id="fileInput" accept="image/*">
+      <p class="hint">Key flat on a card (85.60 × 53.98 mm), shoulder and cuts visible.</p>
+    </div>
+
+    <div class="field">
+      <label>2 · Scale</label>
+      <button class="btn small" id="scaleBtn">Set scale — click 2 points</button>
+      <span id="scaleReadout" class="mono"></span>
+      <p class="hint">Click the two long edges of the card, then enter 85.6 mm (or any known length).</p>
+    </div>
+
+    <div class="field">
+      <label>3 · Datum &amp; cuts</label>
+      <p class="hint">Drag the <b>shoulder</b> line to the stop, the <b>tip</b> dot to the tip.
+      Then drag each cut's <b>depth</b> marker onto its cut bottom — it snaps to the nearest depth.</p>
+      <button class="btn small" id="autoBtn">Auto-place from photo</button>
+    </div>
+
+    <div class="field bitting">
+      <label>Bitting <span class="hint">(bow→tip)</span></label>
+      <div id="bittingOut" class="bitting-code">—</div>
+      <div id="macsOut" class="macs"></div>
+      <div id="ambigOut" class="ambig"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn primary" id="genBtn" disabled>Generate key</button>
+      <button class="btn" id="exportBtn" disabled>Export STL</button>
+    </div>
+    <p class="hint warn">Printed keys are fragile — print on-edge in PETG/nylon/resin,
+    treat as an emergency spare. Copy only keys you're authorized to duplicate.</p>
+    <div id="status" class="status"></div>
+  </section>
+
+  <section class="stage">
+    <canvas id="photo"></canvas>
+    <div class="stage-label">Photo &amp; decode</div>
+  </section>
+
+  <section class="stage">
+    <div id="view3d" class="view3d"></div>
+    <div class="stage-label">3D key</div>
+  </section>
+</main>
+
+<script type="module" src="js/keys/keyUI.js"></script>
+</body>
+</html>
