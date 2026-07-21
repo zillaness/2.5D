@@ -1,7 +1,7 @@
 {
-  "name": "2.5d",
+  "name": "blueprint",
   "version": "0.1.0",
-  "description": "Photograph an object on a sheet of paper, trace it at real-world scale, extrude it into a printable solid with chamfers, fillets and holes.",
+  "description": "Import a CAD drawing (DXF/SVG/PDF) — or photograph an object — read its dimensions, and extrude it into a printable solid. Forked from 2.5D.",
   "private": true,
   "type": "module",
   "scripts": {

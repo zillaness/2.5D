@@ -1651,7 +1651,7 @@ for (const btn of document.querySelectorAll('#unitToggle button')) {
 updateStepButtons();
 
 $('appVersion').textContent = `v${APP_VERSION}`;
-document.title = `2.5D v${APP_VERSION} — photo to printable solid`;
+document.title = `Blueprint v${APP_VERSION} — drawing to printable solid`;
 
 // Test hook (used by the headless test-suite; harmless in normal use).
 window.__app = {

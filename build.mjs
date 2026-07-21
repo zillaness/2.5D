@@ -2,7 +2,7 @@
 // file:// — just double-click it. No hosting, no build tools needed by the
 // person you send it to.
 //
-//   node build.mjs                      -> dist/2.5d-local.html
+//   node build.mjs                      -> dist/blueprint-local.html
 //   node build.mjs --fragment out.html  -> also writes a body-only fragment
 //                                          (used for publishing as an artifact)
 
@@ -53,17 +53,17 @@ const full =
   `<!DOCTYPE html>\n<html lang="en">\n<head>\n` +
   `<meta charset="UTF-8">\n` +
   `<meta name="viewport" content="width=device-width, initial-scale=1.0">\n` +
-  `<title>2.5D — photo to printable solid</title>\n` +
+  `<title>Blueprint — drawing to printable solid</title>\n` +
   `</head>\n<body>\n${inner}</body>\n</html>\n`;
 
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
-const outFile = path.join(root, 'dist', '2.5d-local.html');
+const outFile = path.join(root, 'dist', 'blueprint-local.html');
 fs.writeFileSync(outFile, full);
 console.log(`${outFile}: ${(full.length / 1024).toFixed(0)} KB`);
 
 const fragIdx = process.argv.indexOf('--fragment');
 if (fragIdx !== -1 && process.argv[fragIdx + 1]) {
   const fragOut = path.resolve(process.argv[fragIdx + 1]);
-  fs.writeFileSync(fragOut, `<title>2.5D — photo to printable solid</title>\n${inner}`);
+  fs.writeFileSync(fragOut, `<title>Blueprint — drawing to printable solid</title>\n${inner}`);
   console.log(`${fragOut}: ${(inner.length / 1024).toFixed(0)} KB`);
 }

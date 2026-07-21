@@ -1,31 +1,34 @@
-# 2.5D — photo → traced outline → printable solid
+# Blueprint — drawing / photo → traced outline → printable solid
 
-Take a picture of an object lying on a sheet of paper, type in the object's
-thickness, and get a 3D-printable STL back.
+> **Working name / fork in progress.** Blueprint is a **drawing → CAD** tool
+> forked from [2.5D](https://github.com/zillaness/2.5d) (photograph an object →
+> printable solid). It inherits 2.5D's whole trace editor, hole/section model,
+> mesh, and exporters, and adds importers that start from an existing drawing —
+> **DXF/SVG today, PDF (with title-block units and dimension reading) next.**
+> Seeded on a branch of the 2.5D repo; will move to its own repo.
+>
+> **Why a fork?** 2.5D's job is measuring a *physical object* from a photo.
+> Blueprint's job is turning a *drawing you already have* into a solid — a
+> different user, and it pulls in heavy dependencies (pdf.js, later OCR) that
+> the lean photo tool shouldn't carry. The shared core files are kept identical
+> to 2.5D so fixes port across easily.
 
-The paper is the trick: its size is known (A4, US Letter, any ISO sheet, or a
-custom size), so once you mark its four corners the app removes the camera's
-perspective and skew with a homography and knows the real size of every pixel.
-The object is then traced automatically at millimetre scale, you clean up the
-trace and add holes, and the outline is extruded by the thickness — with
-optional chamfers or fillets on the top and bottom edges.
+Import a CAD drawing (or photograph an object on a known-size reference), get a
+true-scale outline, extrude it by a thickness, add holes/sections/chamfers, and
+export a 3D-printable **STL** (or **DXF/SVG**). Everything runs in the browser —
+no server, no uploads.
 
-Tools like TraceFinity go the other way — scanning an object to carve a
-matching *cutout* (for foam inserts, organizers). This app is the opposite: it
-builds the **positive solid** of the object itself, so you can reprint a flat
-part, a bracket, a gasket, a game piece, a knob backplate…
-
-Everything runs in the browser. No server, no build step, no uploads — your
-photo never leaves your machine.
-
-| 1 — Photo & paper | 2 — Trace & holes | 3 — Model & export |
+| 1 — Drawing / photo | 2 — Trace & holes | 3 — Model & export |
 | --- | --- | --- |
 | ![corners](docs/step1-corners.png) | ![trace](docs/step2-trace.png) | ![model](docs/step3-model.png) |
 
+The rest of this README documents the inherited photo pipeline; the
+drawing-import specifics live in [`docs/cad-import-spec.md`](docs/cad-import-spec.md).
+
 ## Running it
 
-**No hosting needed** — grab [`dist/2.5d-local.html`](dist/2.5d-local.html)
-(one self-contained ~700 KB file, everything inlined) and double-click it. It
+**No hosting needed** — build `dist/blueprint-local.html` with `npm run build`
+(one self-contained file, everything inlined) and double-click it. It
 runs entirely offline; rebuild it after source changes with `npm run build`.
 
 For development, the un-bundled source needs a static server (browsers block
