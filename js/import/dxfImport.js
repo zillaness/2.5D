@@ -24,6 +24,48 @@ function flattenArc(cx, cy, r, a0, a1) {
   return pts;
 }
 
+// Flatten a bulged polyline edge (p1→p2 with DXF bulge b) into arc points,
+// appended to `out` (excluding p1, including p2). bulge = tan(sweep/4), signed
+// (+ = CCW). This is how fillet arcs survive a DXF round-trip.
+function bulgeArc(p1, p2, b, out) {
+  const theta = 4 * Math.atan(b);                 // signed included angle
+  const dx = p2.x - p1.x, dy = p2.y - p1.y;
+  const chord = Math.hypot(dx, dy);
+  if (chord < 1e-9 || Math.abs(b) < 1e-12) { out.push({ x: p2.x, y: p2.y }); return; }
+  const r = chord / (2 * Math.sin(Math.abs(theta) / 2));
+  const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+  const apo = Math.sqrt(Math.max(0, r * r - (chord / 2) * (chord / 2)));
+  // Centre sits off the chord midpoint along the left normal; the side flips
+  // for CW bulges and for major (>180°) arcs.
+  const nx = -dy / chord, ny = dx / chord;
+  const side = (Math.abs(theta) > Math.PI ? -1 : 1) * Math.sign(b);
+  const cx = mx + nx * apo * side, cy = my + ny * apo * side;
+  const a0 = Math.atan2(p1.y - cy, p1.x - cx);
+  const n = Math.max(2, Math.ceil(Math.abs(theta) / ARC_STEP));
+  for (let i = 1; i <= n; i++) {
+    const a = a0 + theta * (i / n);
+    out.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+  }
+}
+
+// Vertices [{x,y,bulge}] → flattened point list, honouring per-vertex bulges
+// (the closing edge too, when the polyline is closed).
+function flattenBulged(verts, closed) {
+  if (verts.length < 2) return verts.map(v => ({ x: v.x, y: v.y }));
+  const out = [{ x: verts[0].x, y: verts[0].y }];
+  const segs = closed ? verts.length : verts.length - 1;
+  for (let i = 0; i < segs; i++) {
+    const a = verts[i], b = verts[(i + 1) % verts.length];
+    if (a.bulge && Math.abs(a.bulge) > 1e-12) bulgeArc(a, b, a.bulge, out);
+    else out.push({ x: b.x, y: b.y });
+  }
+  if (closed && out.length > 1) {
+    const f = out[0], l = out[out.length - 1];
+    if (Math.hypot(f.x - l.x, f.y - l.y) < 1e-6) out.pop();
+  }
+  return out;
+}
+
 export function parseDXF(text) {
   // Tokenize into [code, value] pairs.
   const lines = text.split(/\r\n|\r|\n/);
@@ -105,14 +147,17 @@ export function parseDXF(text) {
         break;
       }
       case 'LWPOLYLINE': {
-        const pts = [];
+        // Collect vertices with their optional bulge (code 42 follows the
+        // vertex it belongs to), then flatten any arc segments.
+        const verts = [];
         let curX = null;
         for (const [c, v] of r.g) {
           if (c === 10) curX = parseFloat(v);
-          else if (c === 20 && curX !== null) { pts.push({ x: curX, y: parseFloat(v) }); curX = null; }
+          else if (c === 20 && curX !== null) { verts.push({ x: curX, y: parseFloat(v), bulge: 0 }); curX = null; }
+          else if (c === 42 && verts.length) verts[verts.length - 1].bulge = parseFloat(v);
         }
         const closed = (num(r, 70, 0) & 1) === 1;
-        push(pts, closed, r);
+        push(flattenBulged(verts, closed), closed, r);
         break;
       }
       case 'POLYLINE': {
@@ -166,18 +211,18 @@ export function parseDXF(text) {
     }
   }
 
-  // Second pass: old-style POLYLINE + VERTEX + SEQEND.
+  // Second pass: old-style POLYLINE + VERTEX + SEQEND (VERTEX bulges honoured).
   for (let i = 0; i < records.length; i++) {
     if (records[i].type !== 'POLYLINE') continue;
     const closed = records[i]._polyClosed;
     const layerRec = records[i];
-    const pts = [];
+    const verts = [];
     let j = i + 1;
     for (; j < records.length && records[j].type === 'VERTEX'; j++) {
       const x = num(records[j], 10), y = num(records[j], 20);
-      if (Number.isFinite(x) && Number.isFinite(y)) pts.push({ x, y });
+      if (Number.isFinite(x) && Number.isFinite(y)) verts.push({ x, y, bulge: num(records[j], 42, 0) });
     }
-    push(pts, closed, layerRec);
+    push(flattenBulged(verts, closed), closed, layerRec);
   }
 
   return { polylines, unitScale, unitName, unitsKnown, layers, warnings };

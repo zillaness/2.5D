@@ -83,7 +83,10 @@ geometry lands straight in the trace at true scale (units come from the file —
 DXF `$INSUNITS`, SVG `width`/`viewBox`). Segments are stitched into closed
 loops, obvious annotation layers/linetypes (dimensions, centre/hidden lines,
 hatching, title block) are filtered out, and the outer boundary + holes are
-detected automatically. A multi-view sheet shows a **view picker** — click the
+detected automatically. Curves come in as curves: DXF `ARC`/`CIRCLE`/`ELLIPSE`
+**and polyline vertex bulges**, plus SVG `A` arcs and `<circle>`/`<ellipse>`,
+are all flattened — so a 2.5D SVG/DXF export (fillet arcs as bulges/`A`, holes
+as true circles) re-imports as the same curved geometry, not faceted chamfers. A multi-view sheet shows a **view picker** — click the
 plan/top view to use it. Everything then edits and exports like any other
 trace. (`.dwg` is binary and unsupported — export it as DXF from your CAD app.)
 
@@ -319,10 +322,12 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- **Arc-aware *import*** — the DXF/SVG exports now emit true arcs and circles;
-  the importer still reads them as polylines. Teaching `dxfImport`/`svgImport`
-  to recognise `ARC`/bulge/`CIRCLE` (and SVG `A`/`<circle>`) — registering them
-  as fillet-arc entities on the way in — would make a full round-trip lossless.
+- **Re-idealise imported curves to arc *entities*** — imported DXF/SVG arcs now
+  round-trip as correct dense-point geometry, but they come in as plain points,
+  not as the editable fillet-arc entities the app creates internally. A pass
+  that recognises circular runs on import (or a one-click "detect arcs" like the
+  existing "all round holes") would make imported curves live-editable and
+  re-exportable as arcs — closing the loop fully.
 
 ### Horizon
 

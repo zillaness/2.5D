@@ -1631,6 +1631,43 @@ const exp = await page.evaluate(async () => {
   };
 });
 
+// DXF bulge round-trip: a fillet exported as a bulge re-imports as an arc.
+const rt = await page.evaluate(async () => {
+  const { toDXF } = await import('./js/exporters.js');
+  const { parseDXF } = await import('./js/import/dxfImport.js');
+  const { fitCircle } = await import('./js/contour.js');
+  const ed = window.__app.traceEditor;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 400;
+  ed.setRectified(c, 4);
+  ed.setTrace([
+    { x: 0, y: 50 }, { x: 30, y: 50 },
+    { x: 44, y: 50 }, { x: 50, y: 46 }, { x: 50, y: 40 },
+    { x: 50, y: 20 }, { x: 50, y: 0 }, { x: 0, y: 0 },
+  ].map(p => ({ ...p })), []);
+  ed.setCircles([]); ed.measurements = []; ed.constraints = []; ed.arcs = []; ed.lines = [];
+  ed.selectedVerts = [2, 3, 4].map(i => ({ loop: -1, idx: i }));
+  ed.makeTangentSelection();
+  const arc = ed.arcs[0];
+  const orig = fitCircle(ed.outer.slice(arc.lo, arc.lo + arc.len));
+
+  const paperH = 200;
+  const spans = ed.arcExportSpans();
+  const dxf = await toDXF(ed.outer, ed.holes, paperH,
+    { outerArcs: spans.outer, holeArcs: spans.holes, circles: [] }).text();
+  const parsed = parseDXF(dxf);
+  const loop = parsed.polylines.reduce((a, b) => (b.pts.length > (a ? a.pts.length : 0) ? b : a), null);
+  // Flip DXF Y-up back to image space, then fit the fillet region to a circle.
+  const back = loop.pts.map(p => ({ x: p.x, y: paperH - p.y }));
+  const near = back.filter(p => p.x >= 42.9 && p.y >= 42.9);
+  const rtFit = fitCircle(near);
+  return {
+    origR: orig.r, origCx: orig.cx, origCy: orig.cy,
+    rtR: rtFit ? rtFit.r : null, rtCx: rtFit ? rtFit.cx : null, rtCy: rtFit ? rtFit.cy : null,
+    nNear: near.length,
+  };
+});
+
 console.log('\nArc-aware exports');
 check('trace reports one outer arc span', exp.nOuterArcs === 1, `${exp.nOuterArcs}`);
 check('SVG emits an A (arc) command for the fillet', exp.svgHasArc, '');
@@ -1638,6 +1675,14 @@ check('SVG renders the circle hole as true arcs', exp.svgHasCircleArcs, '');
 check('DXF encodes the fillet as a polyline bulge (group 42)', exp.dxfHasBulge, '');
 check('DXF emits a true CIRCLE entity for the hole', exp.dxfHasCircle, '');
 check('DXF stays valid R12 (AC1009 + POLYLINE + EOF)', exp.dxfStillValid, '');
+
+console.log('\nDXF bulge round-trip (arc-aware import)');
+check('exported fillet re-imports as a flattened arc (many points)', rt.nNear > 5, `${rt.nNear} pts`);
+check('round-tripped arc recovers the fillet radius',
+  rt.rtR !== null && near(rt.rtR, rt.origR, 0.1), `r ${rt.rtR?.toFixed(3)} vs ${rt.origR.toFixed(3)}`);
+check('round-tripped arc recovers the fillet centre',
+  rt.rtCx !== null && near(rt.rtCx, rt.origCx, 0.1) && near(rt.rtCy, rt.origCy, 0.1),
+  `(${rt.rtCx?.toFixed(2)},${rt.rtCy?.toFixed(2)}) vs (${rt.origCx.toFixed(2)},${rt.origCy.toFixed(2)})`);
 
 console.log('\nMeasure/constrain UI pipeline');
 check('vertex picks produce a p2p, rim pick a radius measurement',
