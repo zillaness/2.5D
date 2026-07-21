@@ -109,6 +109,11 @@ the object is segmented against the background colour. You get:
   radius), **Fit line** (straighten), **Tangent** (round a blunt/rough corner
   into a **live fillet arc** — see below), **Densify** (add points), **Reduce**
   (thin points).
+- **Straighten (reversible)** — Ctrl-click any two points and **Straighten**
+  collapses the run between them to a single straight segment, removing the
+  in-between points but **stashing** them: **Restore points** brings them back.
+  The result is a managed straight line (tinted), which pairs with the tangent
+  constraint below.
 - **Live tangent fillets** — the **Tangent** button turns a selected corner run
   into a first-class fillet arc that *stays* tangent to both adjacent edges as
   you edit: drag a neighbouring vertex, or apply an H/V/perpendicular
@@ -174,6 +179,9 @@ eye. Pick one or two entities (corner, edge, hole), then apply:
 - **⊥ Perpendicular / ∥ Parallel / = Equal length / ⋯ Collinear** — between
   two edges.
 - **◎ Concentric** — two placed holes share a centre.
+- **◠ Tangent to ⌀** — pick a straight edge + a hole/circle and the edge is
+  driven tangent to that circle (its distance to the centre equals the radius),
+  re-solving live as you move things.
 - **Length… / Angle… / Distance…** — dimension constraints with a typed value
   (prefilled with the current measurement): fix an edge's length, the angle
   between two edges, or the distance point↔point / point↔edge /

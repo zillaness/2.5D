@@ -64,6 +64,10 @@ export class TraceEditor {
     // at radius r on every solve, so they stay tangent live. Dropped (reverting
     // to plain points) if a structural edit disturbs the run or its neighbours.
     this.arcs = [];
+    // First-class straight segments: a run collapsed to its two endpoints,
+    // with the removed interior points stashed so Release can restore them
+    // (a reversible straighten). Each is { loop, lo, len:2, stash:[{x,y}] }.
+    this.lines = [];
     this._reprojecting = false;
     this._pendingPick = null; // measure mode: first of a two-entity pick
     this._picks = [];         // constrain mode: up to two picked entities
@@ -166,7 +170,7 @@ export class TraceEditor {
       outer: this.outer, holes: this.holes, circles: this.circles,
       sections: this.sections,
       measurements: this.measurements, constraints: this.constraints,
-      arcs: this.arcs,
+      arcs: this.arcs, lines: this.lines,
     });
   }
 
@@ -189,6 +193,7 @@ export class TraceEditor {
     this.measurements = s.measurements || [];
     this.constraints = s.constraints || [];
     this.arcs = s.arcs || [];
+    this.lines = s.lines || [];
     this._notifyAnnos();
     this.selection = null;
     this.selectedVerts = [];
@@ -234,35 +239,39 @@ export class TraceEditor {
   // Remap both annotation sets across a structural edit; notify if pruned.
   _refsOp(op, loopLen = 0) {
     const m0 = this.measurements.length, c0 = this.constraints.length, a0 = this.arcs.length;
+    const l0 = this.lines.length;
     this.measurements = remapRefs(this.measurements, op, loopLen);
     this.constraints = remapRefs(this.constraints, op, loopLen);
-    this.arcs = this._remapArcs(op);
+    this.arcs = this._remapSpans(this.arcs, op);
+    this.lines = this._remapSpans(this.lines, op);
     if (this.measurements.length !== m0 || this.constraints.length !== c0 ||
-        this.arcs.length !== a0 || op.op !== 'splice') this._notifyAnnos();
+        this.arcs.length !== a0 || this.lines.length !== l0 || op.op !== 'splice') this._notifyAnnos();
   }
 
-  // Arcs own a fixed vertex run + its two bracketing edges, so any structural
-  // edit that overlaps that guarded span reverts the arc to plain points; an
-  // edit strictly before it just shifts the run.
-  _remapArcs(op) {
-    if (op.op === 'deleteCircle') return this.arcs;
+  // Arcs and lines both own a fixed vertex run (plus, for arcs, their two
+  // bracketing edges), so a structural edit overlapping that guarded span
+  // reverts the entity to plain points; an edit strictly before it just
+  // shifts the run. `pad` = extra guard on each side (2 for arcs' neighbours,
+  // 0 for lines).
+  _remapSpans(list, op) {
+    if (op.op === 'deleteCircle') return list;
     if (op.op === 'clearLoops') return [];
     const out = [];
-    for (const arc of this.arcs) {
+    for (const s of list) {
+      const pad = s.stash !== undefined ? 0 : 2; // lines carry a stash; arcs don't
       if (op.op === 'deleteLoop') {
-        if (arc.loop === op.loop) continue; // loop gone → arc gone
+        if (s.loop === op.loop) continue; // loop gone → entity gone
         const same = (a, b) => (a >= 0 && a < REGION_LOOP_BASE && b >= 0 && b < REGION_LOOP_BASE) ||
           (a >= REGION_LOOP_BASE && b >= REGION_LOOP_BASE);
-        out.push(same(arc.loop, op.loop) && arc.loop > op.loop ? { ...arc, loop: arc.loop - 1 } : arc);
+        out.push(same(s.loop, op.loop) && s.loop > op.loop ? { ...s, loop: s.loop - 1 } : s);
         continue;
       }
-      // splice on some loop
-      if (arc.loop !== op.loop) { out.push(arc); continue; }
-      const guardLo = arc.lo - 2, guardHi = arc.lo + arc.len + 1; // inclusive-ish span
+      if (s.loop !== op.loop) { out.push(s); continue; }
+      const guardLo = s.lo - pad, guardHi = s.lo + s.len + (pad ? pad - 1 : 0);
       const spliceHi = op.lo + op.removed;
-      if (spliceHi <= guardLo) out.push({ ...arc, lo: arc.lo + (op.added - op.removed) });
-      else if (op.lo > guardHi) out.push(arc);
-      // otherwise the edit disturbs the arc → drop it (reverts to plain points)
+      if (spliceHi <= guardLo) out.push({ ...s, lo: s.lo + (op.added - op.removed) });
+      else if (op.lo > guardHi) out.push(s);
+      // otherwise the edit disturbs the entity → drop it (reverts to points)
     }
     return out;
   }
@@ -648,6 +657,12 @@ export class TraceEditor {
         break;
       case 'conc':
         if (p.length === 2 && p.every(circ)) refs = p.map(asCircle);
+        break;
+      case 'ltan':
+        // One edge + one circle: drive the edge tangent to the circle.
+        if (p.length === 2 && edges.length === 1 && others.length === 1 && circ(others[0])) {
+          refs = [edges[0], asCircle(others[0])];
+        }
         break;
       case 'dist':
         if (p.length === 2 && edges.length <= 1 && others.every(r => r.kind === 'vert' || circ(r))) {
@@ -1369,6 +1384,60 @@ export class TraceEditor {
     return true;
   }
 
+  // Collapse the selected span to a straight segment between its two extreme
+  // points, removing (and stashing) the interior points. Reversible via
+  // releaseSelectedLine. Returns { ok, removed } or { ok:false, reason }.
+  straightenSelection() {
+    const span = this._selectionSpan(2);
+    if (!span) return { ok: false, reason: 'Ctrl-click two points on one outline first.' };
+    const { loop, lo, hi, pts } = span;
+    if (hi - lo < 1) return { ok: false, reason: 'Pick two separated points.' };
+    if (loop === -1 && pts.length - (hi - lo - 1) < 3) {
+      return { ok: false, reason: 'That would collapse the outline below a triangle.' };
+    }
+    this.pushUndo();
+    const stash = pts.slice(lo + 1, hi).map(p => ({ x: p.x, y: p.y }));
+    // Drop any managed line/arc overlapping this loop's edited region.
+    this.lines = this.lines.filter(l => l.loop !== loop);
+    this.arcs = this.arcs.filter(a => a.loop !== loop || a.lo + a.len <= lo || a.lo > hi);
+    this._refsOp({ op: 'splice', loop, lo: lo + 1, removed: hi - lo - 1, added: 0 }, pts.length);
+    pts.splice(lo + 1, hi - lo - 1);
+    this._reselectRun(loop, lo, 2);
+    this.lines.push({ loop, lo, len: 2, stash });
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifyAnnos();
+    this._notifySelect();
+    this._changed();
+    return { ok: true, removed: stash.length };
+  }
+
+  // The line entity owning the current 2-point selection span, or null.
+  _selectedLine() {
+    const span = this._selectionSpan(2);
+    if (!span) return null;
+    if (span.hi - span.lo !== 1) return null;
+    return this.lines.find(l => l.loop === span.loop && l.lo === span.lo) || null;
+  }
+
+  // Restore a straightened segment's stashed interior points.
+  releaseSelectedLine() {
+    const line = this._selectedLine();
+    if (!line) return false;
+    this.pushUndo();
+    if (line.stash && line.stash.length) {
+      const pts = this._loop(line.loop);
+      this._refsOp({ op: 'splice', loop: line.loop, lo: line.lo + 1, removed: 0, added: line.stash.length }, pts.length);
+      pts.splice(line.lo + 1, 0, ...line.stash.map(p => ({ x: p.x, y: p.y })));
+      this._reselectRun(line.loop, line.lo, line.stash.length + 2);
+    }
+    this.lines = this.lines.filter(l => l !== line);
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifyAnnos();
+    this._notifySelect();
+    this._changed();
+    return true;
+  }
+
   // Points along the arc of circle (cx,cy,r) from A to B, choosing the sweep
   // whose midpoint is nearest `nearMid`. Spacing ~ chord tolerance.
   _arcPoints(cx, cy, r, A, B, nearMid) {
@@ -1638,8 +1707,9 @@ export class TraceEditor {
     // Constrained-drag ghost: where the solver will put things on release.
     if (this._ghost) this._drawGhost(ctx);
 
-    // Live fillet arcs (owned spans), then measurement + constraint overlays.
+    // Live fillet arcs + managed straight lines, then measurement/constraint overlays.
     this._drawArcs(ctx);
+    this._drawLines(ctx);
     this._drawMeasurements(ctx);
     this._drawConstraints(ctx);
 
@@ -1720,6 +1790,26 @@ export class TraceEditor {
       }
       ctx.strokeStyle = arc === selArc ? '#ffd257' : '#8bd6c0';
       ctx.lineWidth = arc === selArc ? 3.5 : 2.5;
+      ctx.globalAlpha = 0.85;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Tint each managed straight segment so it reads as a locked line.
+  _drawLines(ctx) {
+    if (!this.lines.length) return;
+    const selLine = this._selectedLine();
+    for (const line of this.lines) {
+      const pts = this._loop(line.loop);
+      if (!pts || line.lo + 1 >= pts.length) continue;
+      const a = this._mmToScreen(pts[line.lo]);
+      const b = this._mmToScreen(pts[line.lo + 1]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.strokeStyle = line === selLine ? '#ffd257' : '#c7b4ff';
+      ctx.lineWidth = line === selLine ? 3.5 : 2.5;
       ctx.globalAlpha = 0.85;
       ctx.stroke();
       ctx.globalAlpha = 1;

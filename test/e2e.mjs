@@ -1482,6 +1482,69 @@ check('editing inside the arc span reverts it to plain points',
   arcs.preDrop === 1 && arcs.postDrop === 0, `${arcs.preDrop} → ${arcs.postDrop}`);
 check('arc entity serialises for project/library save', arcs.serialisedCount === 1, `${arcs.serialisedCount}`);
 
+// ---------------------------------------------------------------- straight lines + tangent-to-circle
+const lines = await page.evaluate(async () => {
+  const { fitCircle } = await import('/js/contour.js');
+  const C = await import('/js/constraints.js');
+  const M = await import('/js/measure.js');
+  const ed = window.__app.traceEditor;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 400;
+  ed.setRectified(c, 4);
+
+  // A wobbly top edge (indices 1..4) between two clean corners.
+  const build = () => [
+    { x: 0, y: 0 },
+    { x: 20, y: 50 }, { x: 40, y: 46 }, { x: 60, y: 53 }, { x: 80, y: 48 },
+    { x: 100, y: 0 },
+  ];
+  ed.setTrace(build().map(p => ({ ...p })), []);
+  ed.setCircles([]); ed.measurements = []; ed.constraints = []; ed.arcs = []; ed.lines = [];
+
+  // Straighten between the two endpoints of the wobble (indices 1 and 5).
+  ed.selectedVerts = [{ loop: -1, idx: 1 }, { loop: -1, idx: 5 }];
+  const before = ed.outer.length;
+  const st = ed.straightenSelection();
+  const afterLen = ed.outer.length;
+  const nLines = ed.lines.length;
+  // The three interior wobble points (2,3,4) are gone; 1→5 collapsed to 1→2.
+  const collapsedOk = afterLen === before - 3;
+
+  // Restore: the stashed points come back.
+  ed.selectedVerts = [{ loop: -1, idx: 1 }, { loop: -1, idx: 2 }];
+  const restored = ed.releaseSelectedLine();
+  const restoredLen = ed.outer.length;
+  const linesAfterRestore = ed.lines.length;
+
+  // Tangent-to-circle: a horizontal edge above a circle, driven down to touch.
+  const outer = [{ x: 0, y: 20 }, { x: 40, y: 20 }, { x: 40, y: -10 }, { x: 0, y: -10 }];
+  const circ = [{ cx: 20, cy: 0, d: 16 }]; // r = 8, centre at y=0
+  const geo = { loop: l => l === -1 ? outer : null, circle: i => circ[i] || null };
+  const res = C.solveConstraints(geo, [
+    { type: 'anchor', refs: [{ kind: 'center', idx: 0 }] }, // pin the circle
+    { type: 'ltan', refs: [{ kind: 'edge', loop: -1, idx: 0 }, { kind: 'circle', idx: 0 }] },
+  ], {});
+  // Edge 0 is the top edge; after solving its distance to centre (0,0) should = 8.
+  const edgeY = (outer[0].y + outer[1].y) / 2;
+  const tangentDist = Math.abs(edgeY - 0);
+
+  return {
+    stOk: st.ok, removed: st.removed, collapsedOk, nLines,
+    restored, restoredLen, linesAfterRestore,
+    tangentDist, tanConverged: res.converged,
+  };
+});
+
+console.log('\nStraight lines + tangent-to-circle');
+check('straighten collapses the run and registers one line',
+  lines.stOk && lines.removed === 3 && lines.collapsedOk && lines.nLines === 1,
+  `removed ${lines.removed}, lines ${lines.nLines}`);
+check('restore re-inserts the stashed points and clears the line',
+  lines.restored && lines.restoredLen === 6 && lines.linesAfterRestore === 0,
+  `len → ${lines.restoredLen}, lines ${lines.linesAfterRestore}`);
+check('edge-tangent-to-circle drives the edge to touch (dist → r=8)',
+  lines.tanConverged && near(lines.tangentDist, 8, 0.02), `dist ${lines.tangentDist.toFixed(3)}`);
+
 console.log('\nMeasure/constrain UI pipeline');
 check('vertex picks produce a p2p, rim pick a radius measurement',
   String(ui.measures) === 'p2p,rad', String(ui.measures));

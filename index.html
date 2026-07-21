@@ -290,6 +290,7 @@
         <div class="btn-row">
           <button id="conCollin" class="btn small" disabled title="Put two edges on one line">⋯ Collinear</button>
           <button id="conConc" class="btn small" disabled title="Make two holes share a centre">◎ Concentric</button>
+          <button id="conLtan" class="btn small" disabled title="Make an edge tangent to a hole/circle (edge + circle)">◠ Tangent to ⌀</button>
         </div>
         <div class="btn-row">
           <button id="conLen" class="btn small" disabled title="Fix the edge's length">Length…</button>
@@ -328,6 +329,10 @@
         <button id="fitArcBtn" class="btn small" disabled title="Replace the selected run with a fitted circular arc">◜ Fit arc</button>
         <button id="fitLineBtn" class="btn small" disabled title="Straighten the selected run to a line">╱ Fit line</button>
         <button id="tangentBtn" class="btn small" disabled title="Round the selected corner into an arc tangent to both adjacent edges">◟ Tangent</button>
+      </div>
+      <div class="btn-row">
+        <button id="straightenBtn" class="btn small" disabled title="Collapse the two selected points to a straight segment, removing (and stashing) the points between — reversible">▬ Straighten</button>
+        <button id="releaseLineBtn" class="btn small" hidden title="Restore the points removed by Straighten">Restore points</button>
       </div>
       <div class="btn-row">
         <button id="densifyBtn" class="btn small" disabled title="Add a point between each selected point">＋ Densify</button>

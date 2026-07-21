@@ -221,6 +221,28 @@ export function solveConstraints(geo, constraints, opts = {}) {
         separate(A, B, 0, 1, -(B.p.y - A.p.y));
         return;
       }
+      case 'ltan': {
+        // Edge tangent to a circle: the circle centre sits exactly its radius
+        // from the edge's line. Correct by sliding the edge (and, if free, the
+        // centre) along the edge normal toward/away from the centre.
+        const E = edgeHandles(c.refs[0]), Cc = handle(c.refs[1]);
+        const circ = geo.circle(c.refs[1].idx);
+        if (!E || !Cc || !circ) return;
+        const ex = E.b.p.x - E.a.p.x, ey = E.b.p.y - E.a.p.y;
+        const el = Math.hypot(ex, ey);
+        if (el < 1e-9) return;
+        let nx = -ey / el, ny = ex / el;
+        let d = (Cc.p.x - E.a.p.x) * nx + (Cc.p.y - E.a.p.y) * ny; // signed centre→line dist
+        if (d < 0) { nx = -nx; ny = -ny; d = -d; }
+        const err = d - (circ.d / 2); // >0: line too far from centre, pull it in
+        const wE = edgeW(E), wsum = wE + Cc.w;
+        if (wsum <= 0) return;
+        const sE = err * (wE / wsum); // move edge toward centre by +n·sE
+        for (const h of [E.a, E.b]) if (h.w > 0) h.apply(nx * sE, ny * sE);
+        const sC = -err * (Cc.w / wsum);
+        if (Cc.w > 0) Cc.apply(nx * sC, ny * sC);
+        return;
+      }
       // 'anchor' acts through the weight table only.
     }
   };

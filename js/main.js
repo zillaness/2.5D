@@ -837,7 +837,8 @@ $('measureClearBtn').addEventListener('click', () => traceEditor.clearMeasuremen
 const CON_LABELS = {
   h: 'Horizontal', v: 'Vertical', perp: '⊥ Perpendicular', para: '∥ Parallel',
   equal: '= Equal length', collin: '⋯ Collinear', conc: '◎ Concentric',
-  anchor: '⚓ Anchor', len: 'Length', angle: 'Angle', dist: 'Distance',
+  ltan: '◠ Edge tangent to ⌀', anchor: '⚓ Anchor',
+  len: 'Length', angle: 'Angle', dist: 'Distance',
 };
 
 function refreshConstraintList() {
@@ -865,6 +866,7 @@ function refreshConstrainButtons() {
   $('conPerp').disabled = $('conPara').disabled = $('conEqual').disabled =
     $('conCollin').disabled = $('conAngle').disabled = !(n === 2 && edges === 2);
   $('conConc').disabled = !(n === 2 && picks.every(isCirc));
+  $('conLtan').disabled = !(n === 2 && edges === 1 && pts === 1);
   $('conDist').disabled = !(n === 2 && edges <= 1 && pts >= 1 && pts + edges === 2);
   $('pickInfo').textContent = !n ? 'Nothing picked.'
     : picks.map(r => r.kind === 'edge' ? 'edge' : r.kind === 'vert' ? 'point' : 'hole').join(' + ') + ' picked';
@@ -874,7 +876,7 @@ function refreshConstrainButtons() {
 for (const [id, type] of [
   ['conH', 'h'], ['conV', 'v'], ['conPerp', 'perp'], ['conPara', 'para'],
   ['conEqual', 'equal'], ['conCollin', 'collin'], ['conConc', 'conc'],
-  ['conAnchor', 'anchor'],
+  ['conLtan', 'ltan'], ['conAnchor', 'anchor'],
 ]) {
   $(id).addEventListener('click', () => {
     if (!traceEditor.addConstraintFromPicks(type)) toast('That pick doesn’t fit this constraint.');
@@ -1033,6 +1035,9 @@ function rotateView(dir) {
   for (let s = 1; s < state.regions.length; s++) {
     if (state.regions[s].pts) state.regions[s].pts = state.regions[s].pts.map(map);
   }
+  // Managed-line stashes hold outline-space points too — rotate them with it
+  // so Restore lands them correctly. (Arcs store no coordinates.)
+  for (const l of traceEditor.lines) if (l.stash) l.stash = l.stash.map(map);
 
   state.rect = { canvas: out, pxPerMm };
   state.diffMap = computeDiffMap(out);
@@ -1107,6 +1112,7 @@ function refreshSelectionTools() {
   $('tangentBtn').disabled = !run3;
   $('simplifySelBtn').disabled = !run3;
   $('densifyBtn').disabled = !run2;
+  $('straightenBtn').disabled = !run2;
   $('clearSelBtn').disabled = !count;
   if (!count) $('arcRadiusField').hidden = true;
   // Reflect whether the current selection is a live tangent fillet arc.
@@ -1117,6 +1123,8 @@ function refreshSelectionTools() {
     $('arcRadiusField').hidden = false;
     $('arcRadius').value = fmtDim(traceEditor._selectedArc().r);
   }
+  // Managed straight line under the selection → offer Restore points.
+  $('releaseLineBtn').hidden = !traceEditor._selectedLine();
 }
 $('fitArcBtn').addEventListener('click', () => {
   const r = traceEditor.fitArcToSelection();
@@ -1138,6 +1146,18 @@ $('arcRadius').addEventListener('change', e => {
 $('releaseArcBtn').addEventListener('click', () => {
   if (traceEditor.releaseSelectedArc()) {
     toast('Fillet released to editable points.');
+    refreshSelectionTools();
+  }
+});
+$('straightenBtn').addEventListener('click', () => {
+  const res = traceEditor.straightenSelection();
+  if (res.ok) toast(res.removed ? `Straightened — ${res.removed} point(s) stashed (Restore to undo).` : 'Segment marked straight.');
+  else toast(res.reason);
+  refreshSelectionTools();
+});
+$('releaseLineBtn').addEventListener('click', () => {
+  if (traceEditor.releaseSelectedLine()) {
+    toast('Points restored.');
     refreshSelectionTools();
   }
 });
@@ -1400,6 +1420,7 @@ function serializeProject(includePhoto) {
     measurements: traceEditor.measurements,
     constraints: traceEditor.constraints,
     arcs: traceEditor.arcs,
+    lines: traceEditor.lines,
     holeTemplate: traceEditor.holeTemplate,
     pxPerMm: state.rect ? state.rect.pxPerMm : null,
     rectified: state.rect ? state.rect.canvas.toDataURL('image/jpeg', 0.85) : null,
@@ -1473,6 +1494,7 @@ function loadProject(p) {
       traceEditor.measurements = Array.isArray(p.measurements) ? structuredClone(p.measurements) : [];
       traceEditor.constraints = Array.isArray(p.constraints) ? structuredClone(p.constraints) : [];
       traceEditor.arcs = Array.isArray(p.arcs) ? structuredClone(p.arcs) : [];
+      traceEditor.lines = Array.isArray(p.lines) ? structuredClone(p.lines) : [];
       traceEditor.draw();
     }
     if (p.holeTemplate) traceEditor.holeTemplate = structuredClone(p.holeTemplate);
@@ -1628,6 +1650,7 @@ $('libSaveBtn').addEventListener('click', () => {
     measurements: structuredClone(traceEditor.measurements),
     constraints: structuredClone(traceEditor.constraints),
     arcs: structuredClone(traceEditor.arcs),
+    lines: structuredClone(traceEditor.lines),
   };
   const list = libLoad();
   const existing = list.findIndex(o => o.name === name);
@@ -1686,6 +1709,7 @@ function loadOutlineIntoSession(o) {
   traceEditor.measurements = Array.isArray(o.measurements) ? structuredClone(o.measurements) : [];
   traceEditor.constraints = Array.isArray(o.constraints) ? structuredClone(o.constraints) : [];
   traceEditor.arcs = Array.isArray(o.arcs) ? structuredClone(o.arcs) : [];
+  traceEditor.lines = Array.isArray(o.lines) ? structuredClone(o.lines) : [];
   traceEditor.draw();
   traceEditor.setSections(state.regions);
   refreshModelFields();
