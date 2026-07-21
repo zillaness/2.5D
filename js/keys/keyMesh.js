@@ -82,7 +82,7 @@ function area2(loop) {
 }
 
 // ── blade: loft the clipped cross-section along L ────────────────────────────
-function addBlade(mesh, blank, code) {
+function addBlade(mesh, blank, code, weld = false) {
   const s = blank.spec;
   const w = wardingFor(blank);
   const hTopAt = topHeightFn(blank, code);
@@ -147,8 +147,10 @@ function addBlade(mesh, blank, code) {
       else mesh.tri(ring[tris[i]], ring[tris[i + 1]], ring[tris[i + 2]]);
     }
   };
-  cap(rings[0], ringLoops[0], true);
-  cap(rings[rings.length - 1], ringLoops[ringLoops.length - 1], false);
+  cap(rings[rings.length - 1], ringLoops[ringLoops.length - 1], false); // tip
+  if (weld) return { ring: rings[0], loop: ringLoops[0] };               // shoulder open
+  cap(rings[0], ringLoops[0], true);                                     // shoulder cap
+  return null;
 }
 
 // Extrude a closed (x,h) outline (+ optional holes) along thickness y by ±t/2.
@@ -199,63 +201,116 @@ function extrudePolyXH(mesh, outline, holes, thick) {
   for (const h of holes) { wall(h.length, off); off += h.length; }
 }
 
-// ── bow ──────────────────────────────────────────────────────────────────────
-// Uses the real manufacturer bow (js/bows.js, from keygen) when the blank names
-// one; otherwise a generic rounded paddle with a keychain hole. Flush with the
-// blade thickness for a flat, printable key.
-function addBow(mesh, blank, opts = {}) {
-  const w = wardingFor(blank);
-  const thick = w.thickness;
-  const midH = w.height / 2;
-
-  const realId = opts.bow === false ? null : (opts.bowStyle || blank.bow);
-  const real = realId ? getBow(realId) : null;
-  if (real) {
-    // Close the open neck chain by bridging its ends WELL into the blade so the
-    // two bodies share a solid ~5mm overlap — a 1mm touch slices as two separate
-    // components. (The neck spans past the blade top/bottom = the shoulder stop.)
-    const a = real[0], b = real[real.length - 1];
-    const neck = Math.min(5, cutCentre(blank.spec, 0) * IN_TO_MM - 0.5);
-    const outline = real.concat([[neck, b[1]], [neck, a[1]]]);
-    // Keyring hole at the bow's area centroid (guaranteed inside the ornate shape),
-    // nudged toward the far end.
-    let A = 0, cx = 0, ch = 0;
-    for (let i = 0; i < real.length; i++) {
-      const [x0, h0] = real[i], [x1, h1] = real[(i + 1) % real.length];
-      const cr = x0 * h1 - x1 * h0; A += cr; cx += (x0 + x1) * cr; ch += (h0 + h1) * cr;
-    }
-    A *= 0.5; cx /= 6 * A; ch /= 6 * A;
-    const minX = Math.min(...real.map(p => p[0]));
-    const hx = cx * 0.5 + minX * 0.5, hr = Math.min(2.5, w.height / 3);
-    const hole = [];
-    for (let deg = 0; deg < 360; deg += 18) { const r = deg * Math.PI / 180; hole.push([hx + hr * Math.cos(r), ch + hr * Math.sin(r)]); }
-    extrudePolyXH(mesh, outline, [hole], thick);
-    return;
+function bowKeyringHole(real, w) {
+  // Keyring hole at the bow's area centroid (guaranteed inside the ornate shape),
+  // nudged toward the far end. Returns a polygon in (x,h).
+  let A = 0, cx = 0, ch = 0;
+  for (let i = 0; i < real.length; i++) {
+    const [x0, h0] = real[i], [x1, h1] = real[(i + 1) % real.length];
+    const cr = x0 * h1 - x1 * h0; A += cr; cx += (x0 + x1) * cr; ch += (h0 + h1) * cr;
   }
+  A *= 0.5; cx /= 6 * A; ch /= 6 * A;
+  const minX = Math.min(...real.map(p => p[0]));
+  const hx = cx * 0.5 + minX * 0.5, hr = Math.min(2.5, w.height / 3), hole = [];
+  for (let deg = 0; deg < 360; deg += 18) { const r = deg * Math.PI / 180; hole.push([hx + hr * Math.cos(r), ch + hr * Math.sin(r)]); }
+  return hole;
+}
 
-  // Generic paddle fallback. Overlap the blade by ~5mm so it welds (see above).
+// ── bow (welded) ─────────────────────────────────────────────────────────────
+// Weld the real manufacturer bow to the blade as ONE manifold — no overlapping
+// shells (which slice as separate/voided parts under even-odd fill). The bow is a
+// flat plate a touch thicker than the blade; its neck face at x=0 is the blade's
+// warded cross-section punched out (the shoulder stop), and the blade's open
+// shoulder ring plugs into that hole so the two share an edge loop.
+function addBowWeld(mesh, blank, blade, opts = {}) {
+  const src = getBow(opts.bowStyle || blank.bow).map(([x, h]) => [x, h]);
+  weldBowOutline(mesh, blank, blade, src);
+}
+
+// Weld an open bow outline (points [x,h], neck endpoints first & last) to the
+// blade's open shoulder ring, producing ONE manifold. Shared by the real
+// manufacturer bows and the generic printable bow.
+function weldBowOutline(mesh, blank, blade, src) {
+  const w = wardingFor(blank);
+  const tb = w.thickness + 1.0;                 // bow thicker so blade ⊂ neck
+  const real = [src[0]];                        // drop consecutive dups (open chain)
+  for (let i = 1; i < src.length; i++) {
+    const q = real[real.length - 1];
+    if (Math.abs(src[i][0] - q[0]) > 1e-3 || Math.abs(src[i][1] - q[1]) > 1e-3) real.push(src[i]);
+  }
+  real[0][0] = 0; real[real.length - 1][0] = 0; // pull neck ends onto x=0
+  // The neck weld face (rectangle R at x=0) must fully ENCLOSE the blade's
+  // shoulder cross-section, or R\W is not a clean annulus and the cap leaks.
+  // Some bows (Master) have a neck z-span narrower than the blade height, so
+  // stretch the neck endpoints out to bracket the blade z-range with a margin.
+  const bz0 = blade.loop.map(p => p[1]);
+  const bladeZmin = Math.min(...bz0) - 0.5, bladeZmax = Math.max(...bz0) + 0.5;
+  const nlast = real.length - 1;
+  if (real[0][1] >= real[nlast][1]) {          // real[0] = neck top, real[last] = bottom
+    real[0][1] = Math.max(real[0][1], bladeZmax);
+    real[nlast][1] = Math.min(real[nlast][1], bladeZmin);
+  } else {                                     // real[0] = neck bottom, real[last] = top
+    real[0][1] = Math.min(real[0][1], bladeZmin);
+    real[nlast][1] = Math.max(real[nlast][1], bladeZmax);
+  }
+  const hole = bowKeyringHole(real, w);
+  const n = real.length, y0 = -tb / 2, y1 = tb / 2;
+  const front = real.map(([x, h]) => mesh.v(x, y1, h));
+  const back = real.map(([x, h]) => mesh.v(x, y0, h));
+  const hf = hole.map(([x, h]) => mesh.v(x, y1, h));
+  const hb = hole.map(([x, h]) => mesh.v(x, y0, h));
+
+  // Front/back faces (bow outline with the keyring hole).
+  const capT = earcut(real.concat(hole).flat(), [n], 2);
+  const fv = (k) => k < n ? front[k] : hf[k - n], bv = (k) => k < n ? back[k] : hb[k - n];
+  for (let i = 0; i < capT.length; i += 3) {
+    mesh.tri(fv(capT[i]), fv(capT[i + 1]), fv(capT[i + 2]));
+    mesh.tri(bv(capT[i]), bv(capT[i + 2]), bv(capT[i + 1]));
+  }
+  // Perimeter walls — every edge EXCEPT the neck (last→first, the open x=0 side).
+  for (let i = 0; i < n - 1; i++) mesh.quad(front[i], back[i], back[i + 1], front[i + 1]);
+  // Keyring hole walls.
+  const hn = hole.length;
+  for (let i = 0; i < hn; i++) { const j = (i + 1) % hn; mesh.quad(hf[i], hf[j], hb[j], hb[i]); }
+
+  // Neck weld face at x=0: rectangle R (bow thickness × neck height) minus the
+  // blade cross-section W; its W hole shares the blade's shoulder ring.
+  const az = real[0][1], bz = real[n - 1][1];               // neck top / bottom z
+  const R = [[y1, bz], [y0, bz], [y0, az], [y1, az]];        // (y,z)
+  const Rv = [front[n - 1], back[n - 1], back[0], front[0]];
+  const weldT = earcut(R.concat(blade.loop).flat(), [4], 2);
+  const wv = (k) => k < 4 ? Rv[k] : blade.ring[k - 4];
+  for (let i = 0; i < weldT.length; i += 3) mesh.tri(wv(weldT[i]), wv(weldT[i + 1]), wv(weldT[i + 2]));
+}
+
+// ── bow (generic, fallback for keyways without a real bow, e.g. BEST) ─────────
+// Built as an OPEN outline (neck-bottom → rounded far end → neck-top) so it welds
+// to the blade as one manifold, same as the real bows. The keyring hole is added
+// by weldBowOutline from the outline centroid.
+function addBow(mesh, blank, blade, opts = {}) {
+  const w = wardingFor(blank), midH = w.height / 2;
   const bowLen = opts.bowLen ?? 22, bowH = opts.bowH ?? 22, rEnd = bowH / 2;
-  const neck = Math.min(5, cutCentre(blank.spec, 0) * IN_TO_MM - 0.5);
-  const outline = [[neck, midH - bowH / 2]];
+  const outline = [[0, midH - bowH / 2]];       // neck bottom at x=0
   const xc = -(bowLen - rEnd);
   for (let deg = -90; deg <= 90; deg += 12) {
     const r = deg * Math.PI / 180;
     outline.push([xc - rEnd * Math.cos(r), midH + rEnd * Math.sin(r)]);
   }
-  outline.push([neck, midH + bowH / 2]);
-  const hole = [];
-  for (let deg = 0; deg < 360; deg += 20) {
-    const r = deg * Math.PI / 180;
-    hole.push([xc + (opts.holeDia ?? 6) / 2 * Math.cos(r), midH + (opts.holeDia ?? 6) / 2 * Math.sin(r)]);
-  }
-  extrudePolyXH(mesh, outline, [hole], thick);
+  outline.push([0, midH + bowH / 2]);           // neck top at x=0
+  weldBowOutline(mesh, blank, blade, outline);
 }
 
 // ── public API ───────────────────────────────────────────────────────────────
 export function buildKeyMesh(blank, code, opts = {}) {
   const mesh = new Mesh();
-  addBlade(mesh, blank, code);
-  if (opts.bow !== false) addBow(mesh, blank, opts);
+  const wantBow = opts.bow !== false;
+  const bowId = wantBow ? (opts.bowStyle || blank.bow) : null;
+  const real = bowId ? getBow(bowId) : null;
+  // Weld whenever there's any bow (real or generic) so the shoulder ring is left
+  // open for the bow to plug into — one manifold, no overlapping shells.
+  const blade = addBlade(mesh, blank, code, wantBow);
+  if (real) addBowWeld(mesh, blank, blade, opts);
+  else if (wantBow) addBow(mesh, blank, blade, opts);
   return { positions: new Float32Array(mesh.pos), indices: new Uint32Array(mesh.idx) };
 }
 
