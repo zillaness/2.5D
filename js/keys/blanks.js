@@ -48,6 +48,8 @@
 // charts. bladeThickness (and Kwikset bladeHeight) are approximate and refined
 // at mesh time; they don't affect decoding, which uses the blade-back datum.
 
+import { getWarding } from './warding.js';
+
 export const IN_TO_MM = 25.4;
 
 // Schlage Classic — SC1 (5-pin) / SC4 (6-pin) share one spec, differing only in
@@ -106,10 +108,12 @@ const MASTER_M1_SPEC = {
 
 // Roadmap order (per product owner): KW1, SC1, M1, SC4 first; then WR5, Y1, S1,
 // A1, KW10 as the next wave. `verified` marks whether every spec number has been
-// checked against an authoritative chart. All four below are verified against
-// the charts in docs/key-refs/. The warded `sectionProfile` (blade cross-section)
-// is still null — it's sourced separately (see docs/key-refs/PULL-LIST item 4);
-// the mesh can start from a plain blade until real profiles land.
+// checked against an authoritative chart — all four below are verified.
+//
+// `warding` names the default warded cross-section (from js/warding.js) that the
+// mesh extrudes to make a key that actually enters the lock. Schlage is sectional
+// so `wardingOptions` lists the whole C-family; a flat blade won't reliably enter
+// a paracentric Schlage keyway, which is why the real section matters.
 export const BLANKS = [
   {
     id: 'KW1',
@@ -118,7 +122,8 @@ export const BLANKS = [
     name: 'Kwikset KW1 (5-pin)',
     positions: 5,
     verified: true,
-    sectionProfile: null,
+    warding: 'kwikset:kw1',
+    wardingOptions: ['kwikset:kw1'],
     spec: { ...KWIKSET_SPEC, positions: 5 },
   },
   {
@@ -128,7 +133,10 @@ export const BLANKS = [
     name: 'Schlage SC1 (5-pin)',
     positions: 5,
     verified: true,
-    sectionProfile: null,
+    warding: 'schlage:c',
+    wardingOptions: ['schlage:c', 'schlage:ce', 'schlage:e', 'schlage:ef',
+      'schlage:f', 'schlage:fg', 'schlage:g', 'schlage:h', 'schlage:j',
+      'schlage:k', 'schlage:l'],
     spec: { ...SCHLAGE_SPEC, positions: 5 },
   },
   {
@@ -138,7 +146,8 @@ export const BLANKS = [
     name: 'Master Lock M1 (4-pin)',
     positions: 4,
     verified: true,
-    sectionProfile: null,
+    warding: 'master:k1',
+    wardingOptions: ['master:k1'],
     spec: { ...MASTER_M1_SPEC, positions: 4 },
   },
   {
@@ -148,7 +157,10 @@ export const BLANKS = [
     name: 'Schlage SC4 (6-pin)',
     positions: 6,
     verified: true,
-    sectionProfile: null,
+    warding: 'schlage:c',
+    wardingOptions: ['schlage:c', 'schlage:ce', 'schlage:e', 'schlage:ef',
+      'schlage:f', 'schlage:fg', 'schlage:g', 'schlage:h', 'schlage:j',
+      'schlage:k', 'schlage:l'],
     spec: { ...SCHLAGE_SPEC, positions: 6 },
   },
 ];
@@ -160,6 +172,12 @@ export function getBlank(id) {
 // Blanks whose every spec number is confirmed — the ones safe to cut from.
 export function verifiedBlanks() {
   return BLANKS.filter(b => b.verified);
+}
+
+// Resolve a blank's warded cross-section polygon (mm). `wardingId` overrides the
+// blank default — use it to pick a Schlage section from blank.wardingOptions.
+export function wardingFor(blank, wardingId = null) {
+  return getWarding(wardingId || blank.warding);
 }
 
 // Inclusive [min, max] code digits allowed by a spec.

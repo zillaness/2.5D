@@ -25,19 +25,19 @@ BCC .156, step .015, angle 100°, flat .031, MACS 7.
 Thomas p.57. Confirmed root depths (.329→.191), TFC .247, BCC .150, step .023,
 angle 90°, flat **.084"** (corrected from the earlier .030 estimate), MACS 4.
 
-## 🟠 4. Warded cross-section profiles — STILL NEEDED (the make-or-break data)
+## ✅ 4. Warded cross-section profiles — DONE (for SC / KW / M)
 
-For KW1, SC1, M1, SC4: the blade **cross-section** (width, thickness, side-groove
-shape/positions). Without it the mesh is a geometry proof that won't enter a lock.
-The charts we now have give depth-and-spacing but **not** the warding.
+Sourced from **ervanalb/keygen** (github.com/ervanalb/keygen, **CC0 1.0 / public
+domain**). Extracted every warding polygon → `derived/warding-profiles.json`
+(full raw dump) and wired the in-scope ones into **`js/keys/warding.js`**:
+- **Schlage** full C-family: C, CE, E, EF, F, FG, G, H, J, K, L (1.910mm × 8.712mm)
+- **Kwikset** KW1 (2.0mm × 8.509mm)
+- **Master** K1 = M1 (1.98mm × 7.136mm = .281")
 
-- **Best single source:** the MakerWorld model *"Kwikset KW1 Key Maker — Make
-  real working keys"* (`makerworld.com/en/models/1569331`). Drop its **STL** here
-  and I'll measure the KW1 warded section off the solid.
-- Or: keyway cross-section diagrams (Ilco/JMA blank catalog cutaways, Lishi
-  decoding diagrams), or a traced SVG/DXF from calipers on a blank.
-- Or: the self-bootstrapping loop — once decode works, generate a known code on a
-  keygen, export its STL, drop it here.
+These are true paracentric sections — SC1 needs the real **C** section (a flat
+blade won't enter a paracentric Schlage keyway). keygen does NOT cover Yale,
+Weiser, Sargent, Arrow, Dexter — those are still needed for the next wave
+(see WARDING-TO-GRAB). Best/Medeco sections exist in keygen but are out of scope.
 
 ## ✅ 5. Next-wave blanks (WR5, Y1, S1, A1, KW10) — SOURCE IN HAND
 

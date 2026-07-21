@@ -10,7 +10,7 @@
 
 import {
   getBlank, cutCentre, rootDepthForCode, codeForRootDepth, removalForCode,
-  codeRange, verifiedBlanks,
+  codeRange, verifiedBlanks, wardingFor,
 } from '../js/keys/blanks.js';
 import {
   encodeToProfile, decodeBitting, checkMACS, codeInRange,
@@ -80,6 +80,18 @@ console.log('Blank library — verified against docs/key-refs/ charts');
     near(cutCentre(sc1.spec, 2), 0.231 + 2 * 0.156, 1e-9));
   check('SC1 removal(9) = bladeHeight − rootDepth(9) = 0.135"',
     near(removalForCode(sc1.spec, 9), 0.335 - 0.200, 1e-9));
+
+  // Warded cross-sections (from ervanalb/keygen, CC0) resolve for each blank.
+  const wc = wardingFor(sc1);
+  check('SC1 default warding is the C section (~1.91mm thick, ~8.7mm tall)',
+    sc1.warding === 'schlage:c' && wc && wc.profile.length >= 3 &&
+    near(wc.thickness, 1.91, 0.02) && near(wc.height, 8.71, 0.02));
+  check('SC1 exposes the full C-family as warding options',
+    sc1.wardingOptions.length === 11 && sc1.wardingOptions.includes('schlage:e'));
+  check('SC1 can switch to the E section', wardingFor(sc1, 'schlage:e') != null);
+  check('KW1 warding kw1 (~2.0mm), M1 warding k1 (~7.14mm tall = .281")',
+    near(wardingFor(kw1).thickness, 2.0, 0.02) &&
+    near(wardingFor(m1).height, 7.14, 0.03));
 }
 
 console.log('\nClean round-trip: code → profile → decode');

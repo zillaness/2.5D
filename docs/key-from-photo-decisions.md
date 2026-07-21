@@ -25,10 +25,14 @@ trope. Alternates: SpareKey, DupliKey. Not final; used informally until locked.
 
 - **Depth-and-spacing: verified** for KW1, SC1, M1, SC4 against the charts in
   `key-refs/` (Thomas 2025 + Master 7000-0031). See `js/keys/blanks.js`.
-- **Flat geometry:** KW1 flat outline + bow extracted from `KWIKSET-MODULAR-v2.step`
-  → `key-refs/derived/KW1-flat-outline.json` (thickness 2.0 mm; raw, arcs need a
-  cleanup pass at mesh time). Need equivalent flat models/cross-sections for SC1,
-  M1 (see `key-refs/WARDING-TO-GRAB.md`).
+- **Warding cross-sections: sourced** from ervanalb/keygen (CC0) →
+  `js/keys/warding.js` (Schlage C-family, Kwikset KW1, Master K1) + full raw
+  dump `key-refs/derived/warding-profiles.json`. Each blank references a default
+  `warding` + `wardingOptions`; `wardingFor(blank)` resolves the polygon.
+- **First test target: SC1.** Schlage C is **paracentric** → a flat blade won't
+  reliably enter, so SC1 uses the real C cross-section (not a flat blade). The
+  earlier flat-key note still holds for open keyways (Kwikset), but Schlage needs
+  its section. KW1 flat outline from the STEP is kept as reference.
 
 ## Ingest formats
 
