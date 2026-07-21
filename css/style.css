@@ -229,6 +229,25 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .modal-head { display: flex; justify-content: space-between; align-items: center; }
 .modal-head h3 { font-size: 14px; }
+.cad-views {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.cad-view {
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  cursor: pointer;
+  background: var(--bg3);
+  text-align: center;
+}
+.cad-view.sel { border-color: var(--accent); background: rgba(83, 169, 255, 0.12); }
+.cad-view canvas { width: 100%; height: 90px; display: block; }
+.cad-view .cap { font-size: 11px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
 #projText {
   width: 100%;
   background: var(--bg3);

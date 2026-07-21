@@ -72,6 +72,19 @@ the fully offline option.
   since a coin can't correct perspective. Best for small objects where a full
   sheet of paper is overkill.
 
+Or skip the photo entirely and **import a vector drawing** — see below.
+
+### Import a CAD drawing (DXF / SVG)
+
+Step 1 has an **Import CAD file** button: drop a `.dxf` or `.svg` and its
+geometry lands straight in the trace at true scale (units come from the file —
+DXF `$INSUNITS`, SVG `width`/`viewBox`). Segments are stitched into closed
+loops, obvious annotation layers/linetypes (dimensions, centre/hidden lines,
+hatching, title block) are filtered out, and the outer boundary + holes are
+detected automatically. A multi-view sheet shows a **view picker** — click the
+plan/top view to use it. Everything then edits and exports like any other
+trace. (`.dwg` is binary and unsupported — export it as DXF from your CAD app.)
+
 **2 — Trace & holes.** The photo is rectified to a flat, true-scale image and
 the object is segmented against the background colour. You get:
 

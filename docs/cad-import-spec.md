@@ -206,3 +206,6 @@ pdf.js (~1–2 MB) and Tesseract.js (~2–4 MB) ship, given the offline file is
 
 Recommendation: **start Phase 1 now regardless** (no bundle impact), and pick
 **B** for the eventual heavy deps.
+
+**Decided: A** — inline everything into the single self-contained file, even as
+it grows to several MB. (Phase 3 packaging only; Phases 1–2 add no heavy deps.)

@@ -992,6 +992,99 @@ check('card reference resolves to ISO ID-1 dims',
   near(groupC.cardDims.w, 53.98, 0.01) && near(groupC.cardDims.h, 85.60, 0.01),
   `${groupC.cardDims.w} × ${groupC.cardDims.h}`);
 
+// ---------- 12. Phase 1: vector CAD import (DXF + SVG) ----------
+
+// 80 × 50 rectangle with a ⌀12 hole. DXF is Y-up; SVG carries real mm units.
+const DXF = [
+  '0','SECTION','2','HEADER','9','$INSUNITS','70','4','0','ENDSEC',
+  '0','SECTION','2','ENTITIES',
+  '0','LWPOLYLINE','8','0','90','4','70','1',
+  '10','0','20','0','10','80','20','0','10','80','20','50','10','0','20','50',
+  '0','CIRCLE','8','0','10','40','20','25','40','6',
+  // a dimension on an annotation layer that must be filtered out
+  '0','LINE','8','DIMENSIONS','10','0','20','-10','11','80','21','-10',
+  '0','ENDSEC','0','EOF',
+].join('\n');
+
+const DXF_TWOVIEW = [
+  '0','SECTION','2','ENTITIES',
+  '0','LWPOLYLINE','8','0','90','4','70','1','10','0','20','0','10','40','20','0','10','40','20','30','10','0','20','30',
+  '0','LWPOLYLINE','8','0','90','4','70','1','10','100','20','0','10','160','20','0','10','160','20','40','10','100','20','40',
+  '0','ENDSEC','0','EOF',
+].join('\n');
+
+const SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="80mm" height="50mm" viewBox="0 0 80 50">
+  <rect x="0" y="0" width="80" height="50" fill="none" stroke="#000"/>
+  <circle cx="40" cy="25" r="6" fill="none" stroke="#000"/>
+</svg>`;
+
+const cadUnit = await page.evaluate(async ({ dxf, svg, two }) => {
+  const { importCad } = await import('./js/import/cadImport.js');
+  const dim = r => { const v = r.views[0]; return v ? { w: v.w, h: v.h, holes: v.holes.length } : null; };
+  const rDxf = importCad('part.dxf', dxf);
+  const rSvg = importCad('part.svg', svg);
+  const rDwg = importCad('part.dwg', 'PK binary');
+  const rTwo = importCad('sheet.dxf', two);
+  return {
+    dxf: dim(rDxf), dxfUnits: rDxf.unitsKnown, dxfUnitName: rDxf.unitName,
+    svg: dim(rSvg), svgUnits: rSvg.unitsKnown,
+    dwgWarn: (rDwg.warnings || [])[0] || '', dwgViews: rDwg.views.length,
+    twoCount: rTwo.views.length, twoBig: dim(rTwo),
+  };
+}, { dxf: DXF, svg: SVG, two: DXF_TWOVIEW });
+
+console.log('\nPhase 1 — vector CAD import (DXF + SVG)');
+check('DXF parses to 80×50 mm with 1 hole, units from $INSUNITS',
+  cadUnit.dxf && near(cadUnit.dxf.w, 80, 0.01) && near(cadUnit.dxf.h, 50, 0.01) &&
+  cadUnit.dxf.holes === 1 && cadUnit.dxfUnits && cadUnit.dxfUnitName === 'mm',
+  cadUnit.dxf ? `${cadUnit.dxf.w}×${cadUnit.dxf.h}, ${cadUnit.dxf.holes} hole` : 'no view');
+check('DXF annotation layer (DIMENSIONS) filtered out (1 view only)',
+  cadUnit.dxf && cadUnit.dxf.holes === 1);
+check('SVG parses to 80×50 mm with 1 hole, real units',
+  cadUnit.svg && near(cadUnit.svg.w, 80, 0.01) && near(cadUnit.svg.h, 50, 0.01) &&
+  cadUnit.svg.holes === 1 && cadUnit.svgUnits,
+  cadUnit.svg ? `${cadUnit.svg.w}×${cadUnit.svg.h}, ${cadUnit.svg.holes} hole` : 'no view');
+check('DWG is rejected with an export-to-DXF message',
+  cadUnit.dwgViews === 0 && /DXF/.test(cadUnit.dwgWarn), cadUnit.dwgWarn);
+check('multi-view sheet detected as 2 views, largest first (60×40)',
+  cadUnit.twoCount === 2 && near(cadUnit.twoBig.w, 60, 0.01) && near(cadUnit.twoBig.h, 40, 0.01),
+  `${cadUnit.twoCount} views, biggest ${cadUnit.twoBig.w}×${cadUnit.twoBig.h}`);
+
+// Integration: drive the real file input → auto-loads (1 view, known units) →
+// step 2 → build a watertight solid from the imported geometry.
+await page.setInputFiles('#cadFileInput',
+  { name: 'part.dxf', mimeType: 'application/dxf', buffer: Buffer.from(DXF) });
+await page.waitForFunction(() =>
+  window.__app.state.step === 2 && window.__app.traceEditor.outer.length >= 4, null, { timeout: 8000 });
+
+const cadInt = await page.evaluate(async () => {
+  const app = window.__app;
+  const t = app.traceEditor.getTrace();
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const p of t.outer) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+  const { buildModel } = await import('./js/mesh.js');
+  const mesh = buildModel(t.outer, t.holes, t.circles, app.state.regions, { arcSegments: 8, chordTol: 0.4 });
+  let bad = 0;
+  if (mesh) {
+    const { positions, indices } = mesh;
+    const edge = new Map();
+    const vk = i => `${positions[i*3].toFixed(3)},${positions[i*3+1].toFixed(3)},${positions[i*3+2].toFixed(3)}`;
+    for (let i = 0; i < indices.length; i += 3) {
+      const ks = [vk(indices[i]), vk(indices[i+1]), vk(indices[i+2])];
+      for (let e = 0; e < 3; e++) { const a = ks[e], b = ks[(e+1)%3]; const key = a<b?a+'|'+b:b+'|'+a; edge.set(key, (edge.get(key)||0)+1); }
+    }
+    for (const n of edge.values()) if (n !== 2) bad++;
+  }
+  return { w: maxX - minX, h: maxY - minY, holes: t.holes.length, tris: mesh ? mesh.stats.triangles : 0, bad };
+});
+
+console.log('\nPhase 1 — file-input integration');
+check('importing a DXF file lands an 80×50 trace with 1 hole in step 2',
+  near(cadInt.w, 80, 0.5) && near(cadInt.h, 50, 0.5) && cadInt.holes === 1,
+  `${cadInt.w.toFixed(1)}×${cadInt.h.toFixed(1)}, ${cadInt.holes} hole`);
+check('imported DXF builds a watertight solid', cadInt.tris > 100 && cadInt.bad === 0,
+  `${cadInt.tris} tris, ${cadInt.bad} bad edges`);
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 

@@ -28,6 +28,7 @@ const QUALITY_PRESETS = {
 import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
 import { Viewer3D } from './viewer3d.js';
+import { importCad } from './import/cadImport.js';
 
 const $ = id => document.getElementById(id);
 
@@ -1425,6 +1426,120 @@ function loadOutlineIntoSession(o) {
 }
 
 refreshLibList();
+
+// ---------- vector CAD import (DXF / SVG) ----------
+
+let cadImportState = null; // { views, unitsKnown, unitName, name }
+let cadSelected = -1;
+
+function drawViewThumb(canvas, view) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 120, h = 90;
+  canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const pad = 8;
+  const sc = Math.min((w - pad * 2) / (view.w || 1), (h - pad * 2) / (view.h || 1));
+  const ox = (w - view.w * sc) / 2, oy = (h - view.h * sc) / 2;
+  const b = view.bbox;
+  const tx = p => ({ x: ox + (p.x - b.minX) * sc, y: oy + (p.y - b.minY) * sc });
+  const drawLoop = (pts, stroke, fill) => {
+    if (pts.length < 2) return;
+    ctx.beginPath();
+    const p0 = tx(pts[0]); ctx.moveTo(p0.x, p0.y);
+    for (let i = 1; i < pts.length; i++) { const p = tx(pts[i]); ctx.lineTo(p.x, p.y); }
+    ctx.closePath();
+    if (fill) { ctx.fillStyle = fill; ctx.fill('evenodd'); }
+    ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke();
+  };
+  drawLoop(view.outer, '#37d67a', 'rgba(55,214,122,0.12)');
+  for (const hole of view.holes) drawLoop(hole, '#ff7d5c', 'rgba(20,24,30,0.6)');
+}
+
+function openCadModal(result, name) {
+  cadImportState = { ...result, name };
+  cadSelected = result.views.length ? 0 : -1;
+  const grid = $('cadViews');
+  grid.innerHTML = '';
+  result.views.forEach((v, i) => {
+    const cell = document.createElement('div');
+    cell.className = 'cad-view' + (i === cadSelected ? ' sel' : '');
+    const cv = document.createElement('canvas');
+    cell.appendChild(cv);
+    const cap = document.createElement('div');
+    cap.className = 'cap';
+    cap.textContent = `${fmtDim(v.w)} × ${fmtDim(v.h)} ${state.units}`;
+    cell.appendChild(cap);
+    cell.addEventListener('click', () => {
+      cadSelected = i;
+      for (const el of grid.children) el.classList.remove('sel');
+      cell.classList.add('sel');
+      $('cadUseBtn').disabled = false;
+    });
+    grid.appendChild(cell);
+    requestAnimationFrame(() => drawViewThumb(cv, v));
+  });
+  const unitsNote = result.unitsKnown
+    ? `Units from file: ${result.unitName}. ${result.views.length} view(s) found.`
+    : `The file has no real units — set the overall width below. ${result.views.length} view(s) found.`;
+  $('cadUnitsNote').textContent = unitsNote;
+  $('cadWidthRow').hidden = result.unitsKnown;
+  if (!result.unitsKnown && result.views[0]) $('cadWidth').value = fmtDim(result.views[0].w);
+  $('cadWarn').hidden = !(result.warnings && result.warnings.length);
+  $('cadWarn').textContent = (result.warnings || []).join('\n');
+  $('cadUseBtn').disabled = cadSelected < 0;
+  $('cadModal').hidden = false;
+}
+
+function useCadView() {
+  if (!cadImportState || cadSelected < 0) return;
+  const v = cadImportState.views[cadSelected];
+  let scale = 1;
+  if (!cadImportState.unitsKnown) {
+    const wMm = parseDim($('cadWidth').value);
+    if (wMm > 0 && v.w > 0) scale = wMm / v.w;
+  }
+  const sc = pts => pts.map(p => ({ x: p.x * scale, y: p.y * scale }));
+  const name = (cadImportState.name || 'drawing').replace(/\.[^.]+$/, '');
+  loadOutlineIntoSession({ name, outer: sc(v.outer), holes: v.holes.map(sc), circles: [] });
+  $('cadModal').hidden = true;
+  toast(`Imported “${name}” from ${cadImportState.format.toUpperCase()}.`);
+}
+
+$('cadFileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let result;
+    try {
+      result = importCad(file.name, String(reader.result));
+    } catch (err) {
+      console.error('CAD import failed', err);
+      toast('Could not read that file.');
+      return;
+    }
+    if (!result.views.length) {
+      toast((result.warnings && result.warnings[0]) ||
+        'No closed shapes found — the drawing may be open lines only.');
+      return;
+    }
+    // Single view with known units → load straight away; else pick/confirm.
+    if (result.views.length === 1 && result.unitsKnown) {
+      cadImportState = { ...result, name: file.name };
+      cadSelected = 0;
+      useCadView();
+    } else {
+      openCadModal(result, file.name);
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+$('cadCloseBtn').addEventListener('click', () => { $('cadModal').hidden = true; });
+$('cadModal').addEventListener('pointerdown', e => { if (e.target === $('cadModal')) $('cadModal').hidden = true; });
+$('cadUseBtn').addEventListener('click', useCadView);
 
 // Step tab buttons
 for (const btn of document.querySelectorAll('.step-btn')) {
