@@ -19,6 +19,7 @@ import {
   wardingFor, cutCentre, rootDepthForCode, IN_TO_MM,
 } from './blanks.js';
 import { toBinarySTL } from '../exporters.js';
+import { getBow } from './bows.js';
 
 // ── small mesh builder ───────────────────────────────────────────────────────
 class Mesh {
@@ -139,60 +140,79 @@ function addBlade(mesh, blank, code) {
   cap(rings[rings.length - 1], ringLoops[ringLoops.length - 1], false);
 }
 
-// ── bow: a generic rounded paddle, code-embossable later ─────────────────────
-function addBow(mesh, blank, opts = {}) {
-  const w = wardingFor(blank);
-  const thick = w.thickness;                 // flush with the blade for a flat key
-  const midH = w.height / 2;
-  const bowLen = opts.bowLen ?? 22;          // mm, behind the shoulder
-  const bowH = opts.bowH ?? 22;
-  const rEnd = bowH / 2;
-  const holeDia = opts.holeDia ?? 6;
-
-  // Outline in (L,h): a stadium (rounded-left rectangle) from L=x0 (slight blade
-  // overlap) back to a left semicircle centred at (xc, midH). Simple polygon,
-  // ordered CW; no duplicate vertices at the arc joins.
-  const outline = [];
-  const x0 = 0.5, top = midH + bowH / 2, bot = midH - bowH / 2;
-  const xc = -(bowLen - rEnd);
-  outline.push([x0, bot]);                   // bottom-right
-  // left semicircle, bottom → top, bulging in −L (endpoints ARE the corners)
-  for (let a = -90; a <= 90; a += 12) {
-    const r = a * Math.PI / 180;
-    outline.push([xc - rEnd * Math.cos(r), midH + rEnd * Math.sin(r)]);
+// Extrude a closed (x,h) outline (+ optional holes) along thickness y by ±t/2.
+function dedupe(loop) {
+  const out = [];
+  for (const p of loop) {
+    const q = out[out.length - 1];
+    if (!q || Math.abs(p[0] - q[0]) > 1e-4 || Math.abs(p[1] - q[1]) > 1e-4) out.push(p);
   }
-  outline.push([x0, top]);                    // top-right
+  // drop a closing duplicate (earcut treats the loop as implicitly closed)
+  const f = out[0], l = out[out.length - 1];
+  if (out.length > 1 && Math.abs(f[0] - l[0]) < 1e-4 && Math.abs(f[1] - l[1]) < 1e-4) out.pop();
+  return out;
+}
 
-  // Keychain hole.
-  const hole = [];
-  const hx = xc, hy = midH, hr = holeDia / 2;
-  for (let a = 0; a < 360; a += 20) {
-    const r = a * Math.PI / 180;
-    hole.push([hx + hr * Math.cos(r), hy + hr * Math.sin(r)]);
-  }
-
-  // Extrude the (L,h) outline (with hole) along t by ±thick/2.
-  const flat = outline.flat();
-  const holeStart = outline.length;
-  flat.push(...hole.flat());
-  const tris = earcut(flat, [holeStart], 2);
-  const pts = outline.concat(hole);
+function extrudePolyXH(mesh, outline, holes, thick) {
+  outline = dedupe(outline);
+  holes = holes.map(dedupe);
+  const pts = outline.slice();
+  const holeStarts = [];
+  for (const h of holes) { holeStarts.push(pts.length); pts.push(...h); }
+  const tris = earcut(pts.flat(), holeStarts.length ? holeStarts : null, 2);
   const y0 = -thick / 2, y1 = thick / 2;
-  const front = pts.map(([L, h]) => mesh.v(L, y1, h));
-  const back = pts.map(([L, h]) => mesh.v(L, y0, h));
+  const front = pts.map(([x, h]) => mesh.v(x, y1, h));
+  const back = pts.map(([x, h]) => mesh.v(x, y0, h));
   for (let i = 0; i < tris.length; i += 3) {
     mesh.tri(front[tris[i]], front[tris[i + 1]], front[tris[i + 2]]);
     mesh.tri(back[tris[i]], back[tris[i + 2]], back[tris[i + 1]]);
   }
-  // Side walls around outer loop and hole.
-  const wall = (ring, n, off) => {
+  const wall = (n, off) => {
     for (let i = 0; i < n; i++) {
       const a = off + i, b = off + (i + 1) % n;
       mesh.quad(front[a], back[a], back[b], front[b]);
     }
   };
-  wall(front, outline.length, 0);
-  wall(front, hole.length, outline.length);
+  wall(outline.length, 0);
+  let off = outline.length;
+  for (const h of holes) { wall(h.length, off); off += h.length; }
+}
+
+// ── bow ──────────────────────────────────────────────────────────────────────
+// Uses the real manufacturer bow (js/bows.js, from keygen) when the blank names
+// one; otherwise a generic rounded paddle with a keychain hole. Flush with the
+// blade thickness for a flat, printable key.
+function addBow(mesh, blank, opts = {}) {
+  const w = wardingFor(blank);
+  const thick = w.thickness;
+  const midH = w.height / 2;
+
+  const realId = opts.bow === false ? null : (opts.bowStyle || blank.bow);
+  const real = realId ? getBow(realId) : null;
+  if (real) {
+    // Close the open neck chain by bridging its ends into the blade (+x overlap)
+    // so bow and blade fuse into one printable body.
+    const a = real[0], b = real[real.length - 1];
+    const outline = real.concat([[1.0, b[1]], [1.0, a[1]]]);
+    extrudePolyXH(mesh, outline, [], thick);
+    return;
+  }
+
+  // Generic paddle fallback.
+  const bowLen = opts.bowLen ?? 22, bowH = opts.bowH ?? 22, rEnd = bowH / 2;
+  const outline = [[0.5, midH - bowH / 2]];
+  const xc = -(bowLen - rEnd);
+  for (let deg = -90; deg <= 90; deg += 12) {
+    const r = deg * Math.PI / 180;
+    outline.push([xc - rEnd * Math.cos(r), midH + rEnd * Math.sin(r)]);
+  }
+  outline.push([0.5, midH + bowH / 2]);
+  const hole = [];
+  for (let deg = 0; deg < 360; deg += 20) {
+    const r = deg * Math.PI / 180;
+    hole.push([xc + (opts.holeDia ?? 6) / 2 * Math.cos(r), midH + (opts.holeDia ?? 6) / 2 * Math.sin(r)]);
+  }
+  extrudePolyXH(mesh, outline, [hole], thick);
 }
 
 // ── public API ───────────────────────────────────────────────────────────────
