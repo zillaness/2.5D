@@ -5,8 +5,8 @@ Running log of decisions for the spare-key tool (fork of 2.5D). Parent spec:
 
 ## Name
 
-**MockRock** (front-runner) — rhymes, means "fake rock", nods to the hide-a-spare
-trope. Alternates: SpareKey, DupliKey. Not final; used informally until locked.
+**Funny Looking Rock** — the hide-a-spare-in-a-fake-rock joke name, now the pick.
+(Earlier alts: MockRock, SpareKey, DupliKey.)
 
 ## Product decisions
 

@@ -67,3 +67,29 @@ if (fragIdx !== -1 && process.argv[fragIdx + 1]) {
   fs.writeFileSync(fragOut, `<title>2.5D — photo to printable solid</title>\n${inner}`);
   console.log(`${fragOut}: ${(inner.length / 1024).toFixed(0)} KB`);
 }
+
+// ── Funny Looking Rock (the key-decode app) as one self-contained file ───────
+const keyBundle = (await esbuild.build({
+  entryPoints: [path.join(root, 'js/keys/keyUI.js')],
+  bundle: true, minify: true, format: 'iife',
+  alias: { three: path.join(root, 'vendor/three.module.min.js') },
+  write: false, logLevel: 'silent',
+})).outputFiles[0].text;
+
+let keyBody = read('keys.html')
+  .replace(/^[\s\S]*?<body>/, '')
+  .replace(/<\/body>[\s\S]*$/, '')
+  .replace(/<script type="importmap">[\s\S]*?<\/script>\s*/g, '')
+  .replace(/<script type="module" src="js\/keys\/keyUI\.js"><\/script>\s*/g, '');
+
+const keyFull =
+  `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n` +
+  `<meta name="viewport" content="width=device-width, initial-scale=1.0">\n` +
+  `<title>Funny Looking Rock — photograph a key → print a spare</title>\n` +
+  `<style>\n${css}\n${read('css/keys.css')}\n</style>\n</head>\n<body>\n` +
+  keyBody.trim() + '\n' +
+  `<script>${keyBundle}</script>\n</body>\n</html>\n`;
+
+const keyOut = path.join(root, 'dist', 'funny-looking-rock.html');
+fs.writeFileSync(keyOut, keyFull);
+console.log(`${keyOut}: ${(keyFull.length / 1024).toFixed(0)} KB`);

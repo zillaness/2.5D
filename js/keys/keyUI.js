@@ -1,4 +1,4 @@
-// MockRock — key-decode UI. Ties the photo to js/keys/decode.js (read the
+// Funny Looking Rock — key-decode UI. Ties the photo to js/keys/decode.js (read the
 // bitting, with draggable datum + per-cut depth handles) and js/keys/keyMesh.js
 // (build the printable key), previewing in Viewer3D and exporting an STL.
 //
