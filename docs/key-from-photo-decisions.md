@@ -52,6 +52,29 @@ PDF/photo cross-section all work.
 - `js/keys/bitting.js` — edge→snapped code + MACS (+ inverse encode).
 - `test/keys.mjs` — 32 checks (`npm run test:keys`), all passing.
 
+## Key generation — interim path (works today)
+
+Until `js/keys/keyMesh.js` exists, keys are rendered with **ervanalb/keygen +
+OpenSCAD** (both installed/cloned in the dev env). This validated the whole data
+chain end-to-end: our verified depth-and-spacing + the C warding produce a real
+watertight key.
+
+```
+git clone https://github.com/ervanalb/keygen.git      # CC0
+apt-get install -y --no-install-recommends openscad
+cd keygen
+SCAD=openscad python3 bin/keygen.py scad/schlage_classic.scad \
+    -b <BITTING> -w C -o out.stl        # bitting bow-to-tip, 0–9
+```
+
+First test key: **SC1, bitting 1-2-3-4-5, C warding** → 1.91mm thick, 52.4mm long,
+watertight (simple: yes) — saved at `docs/key-refs/derived/SC1_sample_12345.stl`.
+This is a PIPELINE PROOF with a sample code; a working key needs the real bitting
+(from the user's key, via the photo decode or a known code).
+
+`keyMesh.js` will reimplement this natively in the browser app (extrude the
+warded section, carve bitting, add bow) so no OpenSCAD/keygen dependency ships.
+
 ## Next
 
 - Clean up the KW1 flat outline (polygonise bow arcs properly), separate
