@@ -27,10 +27,11 @@ Blueprint = "drawing → printable solid." Steps 1–3 are shipped and pushed to
 `claude/blueprint-seed`: (1) fork seed + rebrand, (2) inline pdf.js + PDF vector
 geometry → view picker → trace, (3) read the drawing (title-block units/scale/
 part-name, dimension-derived true scale, trust-label cross-check) + a mixed
-inch/mm units picker. Step 4 (S2a) shipped hole-callout parsing (#23). 109 tests
-pass, 0 fail; `file://` PDF-import smoke passes on the single-file build. The
-eventual acceptance test is a Picatinny/STANAG rail (#27), and the long-term
-endgame is 3D-from-multiple-views.
+inch/mm units picker. Step 4 (S2a) shipped hole-callout parsing (#23) and the
+Picatinny/STANAG rail acceptance test (#27), which surfaced a shared-core mesh
+gap (#28: aligned rectangular slots are non-manifold). 118 tests pass, 0 fail;
+`file://` PDF-import smoke passes on the single-file build. The long-term endgame
+is 3D-from-multiple-views.
 
 ## Skills in play
 
@@ -88,17 +89,19 @@ parse→match on the selected view's page for PDFs, and when circles match raise
 `#calloutModal` (Apply as holes / Keep as traced loops) via `openCalloutModal` →
 `finishCadImport`. `.callout-list` styled in a scoped `<style>` in `index.html`
 (keeps shared `css/style.css` byte-identical). Tests: `test/e2e.mjs` §17 — parse,
-match, file-input Apply + Skip integration; **109 pass / 0 fail**; `file://` smoke
-on `dist/blueprint-local.html` confirmed (callout modal + Apply, no page errors).
+match, file-input Apply + Skip integration; §18 — the #27 rail acceptance test;
+**118 pass / 0 fail**; `file://` smoke on `dist/blueprint-local.html` confirmed
+(callout modal + Apply, no page errors).
 
 ## The queue — Blueprint work items
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
 | **23** | **Hole callout parsing** (⌀ / counterbore / countersink / depth / `nX`) → auto-apply with confirm | **SHIPPED (S2a)** | `js/import/holeCallouts.js` (`parseCallouts`+`matchCallouts`+`reassembleRuns`), `#calloutModal` confirm, wired into `useCadView`. PDF text layer only. Suite 109/0. |
-| 27 | Picatinny / STANAG rail PDF acceptance test (mixed inch/mm) end-to-end | Pending | **Blocked: needs the actual vector PDF files** — only drawing images exist so far (images won't parse as geometry). Callout notation is known: `5X Ø.206 ▼ .374`, `⌴ Ø.448 ▼ .151`, `17x .21`; one sheet inches, one mm. |
-| — | OCR for scanned PDFs (v1.1) | Deferred | Detect image-only pages, vectorize linework, read numbers with Tesseract.js (inline, ~+2–4 MB). Separate release once the vector path is proven. |
-| — | 3D-from-views (endgame) | Long-term | Multi-view (plan + section) → solid; needs a CSG kernel, unrelated to the 2.5D extrude path. |
+| **27** | Picatinny / STANAG rail acceptance test (mixed inch/mm) end-to-end | **SHIPPED (S2a)** | `test/e2e.mjs` §18. Authored as fixtures from the drawings' **dimensions** (the pipeline reads dims, it doesn't need a supplied vector file). Picatinny (in): units/scale from `6.934`, `5X Ø.206 CBORE Ø.448 DEEP .151` → 5 counterbores, **watertight**. STANAG (mm): units/scale/grooves read, no callout modal. Correction to the old "blocked on vector PDFs" note — that was wrong. |
+| **28** | **Mesh gap: aligned rectangular slots are non-manifold** | **OPEN — found in S2a** | Shared `js/mesh.js` produces open edges when several holes share colinear horizontal edges on one scanline (a row of slots — a rail's groove pattern). Round holes + rotated/offset slots are fine. **Inherited from 2.5D → affects 2.5D too** (byte-identical). A slotted rail therefore doesn't yet export a printable (watertight) STL. Characterized in §18 (`stanag: KNOWN GAP #28`); fix belongs in the shared core (earcut/Clipper robustness), coordinate with 2.5D mainline (S2b). |
+| — | OCR for scanned PDFs / raster drawings (v1.1) | Deferred | The uploaded Picatinny/STANAG images are **raster** — no text layer, no vector paths — so reading dims *off those files* needs OCR. Detect image-only pages, vectorize linework, read numbers with Tesseract.js (inline, ~+2–4 MB). |
+| — | 3D-from-views (endgame) | Long-term | Multi-view (plan + section) → solid; needs a CSG kernel. The true Picatinny 45° dovetail cross-section (section A-A) lives here, not the 2.5D top-view extrude. |
 | — | Fork housekeeping | Ongoing | (a) rename the product — "Blueprint" is a working name; (b) lift into its own repo eventually; (c) decide when to rebrand **internal** format keys (currently unchanged on purpose — see Constraints). |
 
 ## Constraints

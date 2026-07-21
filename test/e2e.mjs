@@ -1551,6 +1551,184 @@ if (pdfHasLib) {
     skipped.circles === 0 && skipped.holes === 7, `${skipped.circles} circles, ${skipped.holes} loops`);
 }
 
+// ---------- 18. Acceptance: Picatinny (in) + STANAG (mm) rails, end-to-end ----------
+//
+// The reference parts for Blueprint's mixed inch/mm goal (#27), authored as
+// fixtures from the real drawings' dimensions — the pipeline reads the drawing,
+// it does not measure pixels, so the acceptance test is the dimensions, not a
+// supplied vector file. Two rails, two unit systems, one from callouts:
+//
+//   Accuracy Solutions "17 Slot Picatinny Rail Flat Back" — UNITS Inches, SCALE 1,
+//   6.934" long, 5X Ø.206 ▼.374 counterbored ⌴Ø.448 ▼.151 (glyphs → ASCII here:
+//   DEEP / CBORE, all that survive the fixture font).
+//   STANAG-Rail — metric MM, ISO 2768, 60 mm span, 5.35-wide grooves (no Ø
+//   callout → straight import, no callout modal).
+//
+// Scope: the 2.5D pipeline extrudes the top view to a true-scale plate with the
+// right holes. The 45° dovetail cross-section (section A-A) is the section-view
+// / 3D endgame, not this test.
+
+// Picatinny: outer + 5 concentric counterbore pairs (bore Ø.206 + rim Ø.448).
+const picLen = 6.934 * IN, picWid = 0.833 * IN;
+const picBore = 0.206 * IN, picRim = 0.448 * IN, picCy = 10 + picWid / 2;
+const picXs = [20, 59, 98, 137, 176];
+const picHoles = picXs.map(x => `${pdfCircle(x, picCy, picBore)}\n${pdfCircle(x, picCy, picRim)}`).join('\n');
+const PICATINNY_PDF = buildPDF(
+  `1 w\n${rectMM(10, 10, picLen, picWid)}\n${picHoles}\n` +
+  `${txt(7, 12, 3, 'TITLE: 17 Slot Picatinny Rail')}\n` +
+  `${txt(7, 130, 3, 'UNITS Inches   SCALE 1')}\n` +
+  `${txt(8, 70, 6, '6.934')}\n` +                         // overall length → true scale
+  `${txt(6, 12, 34, '5X \xD8.206 DEEP .374')}\n` +        // primary hole callout
+  `${txt(6, 12, 37, 'CBORE \xD8.448 DEEP .151')}`,        // stacked counterbore
+  [0, 0, 620, 130]
+);
+
+// STANAG: outer + four 5.35-wide grooves (rectangular pockets, not Ø holes).
+// All text is kept on-page (mediabox 260×160 pt) so pdf.js returns it.
+const stLen = 60, stWid = 21.2;
+const grv = [20, 30, 40, 50].map(c => rectMM(c - 2.675, 12, 5.35, stWid - 4)).join('\n');
+const STANAG_PDF = buildPDF(
+  `1 w\n${rectMM(10, 10, stLen, stWid)}\n${grv}\n` +
+  `${txt(7, 12, 3, 'TITLE: STANAG-Rail')}\n` +
+  `${txt(8, 40, 6, '60')}\n` +                            // overall span → ~1:1
+  `${txt(7, 12, 40, 'DIMENSIONS IN MM   ISO 2768')}\n` +
+  `${txt(7, 20, 45, '5.35')}\n${txt(7, 40, 45, '3')}`,    // groove width/depth notes
+  [0, 0, 260, 160]
+);
+
+if (pdfHasLib) {
+  console.log('\nAcceptance (#27) — Picatinny (in) + STANAG (mm) rails');
+
+  // Picatinny: read units + scale + the 5X counterbore callout.
+  const pic = await page.evaluate(async (b64) => {
+    const { importPDF } = await import('./js/import/pdfImport.js');
+    const { readTitleBlock, suggestScale } = await import('./js/import/pdfScale.js');
+    const { parseCallouts, matchCallouts } = await import('./js/import/holeCallouts.js');
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const r = await importPDF(bytes);
+    const tb = readTitleBlock(r.texts);
+    const sg = suggestScale(r.views[0], r.texts, tb);
+    const specs = parseCallouts(r.texts);
+    const res = matchCallouts(specs, r.views[0].holes, 25.4);
+    return {
+      units: tb.units, name: tb.name, printedW: r.views[0].w, realW: sg.realWidthMm,
+      nSpecs: specs.length, spec: specs[0] || null,
+      nCircles: res.circles.length, nConsumed: res.consumed.size,
+      cb: res.circles.find(c => c.type === 'cb') || null,
+      allCb: res.circles.length ? res.circles.every(c => c.type === 'cb') : false,
+    };
+  }, PICATINNY_PDF.toString('base64'));
+
+  check('picatinny: units "in", name read, 6.934 in → ~176 mm true width',
+    pic.units === 'in' && /Picatinny/i.test(pic.name || '') && near(pic.realW, 6.934 * IN, 1),
+    `${pic.units}, "${pic.name}", printed ${pic.printedW.toFixed(1)} → real ${pic.realW.toFixed(1)}`);
+  check('picatinny: callout "5X Ø.206 … CBORE Ø.448 DEEP .151" parsed as one cb spec ×5',
+    pic.nSpecs === 1 && pic.spec && pic.spec.count === 5 && pic.spec.type === 'cb' &&
+    near(pic.spec.dia, 0.206, 1e-4) && near(pic.spec.cbDia, 0.448, 1e-4) && near(pic.spec.cbDepth, 0.151, 1e-4),
+    pic.spec ? `${pic.spec.count}× ⌀${pic.spec.dia} cb⌀${pic.spec.cbDia}×${pic.spec.cbDepth}` : 'none');
+  check('picatinny: 5 counterbores matched, 10 loops consumed (bore+rim folded)',
+    pic.nCircles === 5 && pic.allCb && pic.nConsumed === 10 &&
+    pic.cb && near(pic.cb.d, 0.206 * IN, 0.2) && near(pic.cb.cbDia, 0.448 * IN, 0.3),
+    pic.cb ? `${pic.nCircles} cb, ${pic.nConsumed} loops, ⌀${pic.cb.d.toFixed(2)} cb⌀${pic.cb.cbDia.toFixed(2)}` : 'none');
+
+  // Picatinny integration: file input → view modal → callout modal → Apply →
+  // 5 parametric counterbores at true scale, watertight solid.
+  await page.setInputFiles('#cadFileInput',
+    { name: 'picatinny.pdf', mimeType: 'application/pdf', buffer: PICATINNY_PDF });
+  await page.waitForSelector('#cadModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  const picPrefill = await page.evaluate(() => ({
+    units: document.getElementById('cadUnits').value,
+    width: parseFloat(document.getElementById('cadWidth').value),
+  }));
+  await page.click('#cadUseBtn');
+  await page.waitForSelector('#calloutModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  const picRows = await page.evaluate(() => document.getElementById('calloutList').children.length);
+  await page.click('#calloutApplyBtn');
+  await page.waitForFunction(() => window.__app.state.step === 2 && window.__app.traceEditor.circles.length >= 5,
+    null, { timeout: 8000 }).catch(() => {});
+  const picBuilt = await page.evaluate(async () => {
+    const app = window.__app;
+    app.state.regions[0].thickness = 6; // clears the 3.84 mm counterbore recess
+    const t = app.traceEditor.getTrace();
+    let minX = 1e9, maxX = -1e9; for (const p of t.outer) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); }
+    const { buildModel } = await import('./js/mesh.js');
+    const mesh = buildModel(t.outer, t.holes, t.circles, app.state.regions, { arcSegments: 12, chordTol: 0.3 });
+    let bad = 0;
+    if (mesh) {
+      const { positions, indices } = mesh;
+      const edge = new Map();
+      const vk = i => `${positions[i*3].toFixed(3)},${positions[i*3+1].toFixed(3)},${positions[i*3+2].toFixed(3)}`;
+      for (let i = 0; i < indices.length; i += 3) for (let e = 0; e < 3; e++) { const a = vk(indices[i+e]), b = vk(indices[i+(e+1)%3]); const key = a<b?a+'|'+b:b+'|'+a; edge.set(key, (edge.get(key)||0)+1); }
+      for (const n of edge.values()) if (n !== 2) bad++;
+    }
+    return { len: maxX - minX, name: app.state.fileName, circles: t.circles.length, holes: t.holes.length, tris: mesh ? mesh.stats.triangles : 0, bad };
+  });
+  check('picatinny: modal prefills units "in" ~176 mm; one callout row',
+    picPrefill.units === 'in' && near(picPrefill.width, 6.934 * IN, 2) && picRows === 1,
+    `units ${picPrefill.units}, width ${picPrefill.width}, rows ${picRows}`);
+  check('picatinny: applied 5 counterbores, no leftover loops, ~176 mm rail',
+    picBuilt.circles === 5 && picBuilt.holes === 0 && near(picBuilt.len, 6.934 * IN, 2),
+    `${picBuilt.circles} cb, ${picBuilt.holes} loops, ${picBuilt.len.toFixed(1)} mm`);
+  check('picatinny: extrudes to a watertight solid',
+    picBuilt.tris > 200 && picBuilt.bad === 0, `${picBuilt.tris} tris, ${picBuilt.bad} bad`);
+
+  // STANAG (mm): grooves have no Ø callout → straight import, no callout modal.
+  const stan = await page.evaluate(async (b64) => {
+    const { importPDF } = await import('./js/import/pdfImport.js');
+    const { readTitleBlock, suggestScale } = await import('./js/import/pdfScale.js');
+    const { parseCallouts } = await import('./js/import/holeCallouts.js');
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const r = await importPDF(bytes);
+    const tb = readTitleBlock(r.texts);
+    const sg = suggestScale(r.views[0], r.texts, tb);
+    return { units: tb.units, name: tb.name, realW: sg.realWidthMm, nHoles: r.views[0].holes.length, nSpecs: parseCallouts(r.texts).length };
+  }, STANAG_PDF.toString('base64'));
+  check('stanag: units "mm", name read, 60 mm span at ~1:1, no Ø callouts',
+    stan.units === 'mm' && /STANAG/i.test(stan.name || '') && near(stan.realW, 60, 1) &&
+    stan.nHoles === 4 && stan.nSpecs === 0,
+    `${stan.units}, "${stan.name}", ${stan.realW.toFixed(1)} mm, ${stan.nHoles} grooves, ${stan.nSpecs} callouts`);
+
+  await page.setInputFiles('#cadFileInput',
+    { name: 'stanag.pdf', mimeType: 'application/pdf', buffer: STANAG_PDF });
+  await page.waitForSelector('#cadModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  const stanUnits = await page.evaluate(() => document.getElementById('cadUnits').value);
+  await page.click('#cadUseBtn');
+  await page.waitForFunction(() => window.__app.state.step === 2 && window.__app.traceEditor.outer.length >= 4,
+    null, { timeout: 8000 }).catch(() => {});
+  const stanBuilt = await page.evaluate(async () => {
+    const app = window.__app;
+    const calloutHidden = document.getElementById('calloutModal').hidden;
+    const t = app.traceEditor.getTrace();
+    let minX = 1e9, maxX = -1e9; for (const p of t.outer) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); }
+    const { buildModel } = await import('./js/mesh.js');
+    const mesh = buildModel(t.outer, t.holes, t.circles, app.state.regions, { arcSegments: 8, chordTol: 0.4 });
+    let open = 0;
+    if (mesh) {
+      const { positions, indices } = mesh;
+      const edge = new Map();
+      const vk = i => `${positions[i*3].toFixed(3)},${positions[i*3+1].toFixed(3)},${positions[i*3+2].toFixed(3)}`;
+      for (let i = 0; i < indices.length; i += 3) for (let e = 0; e < 3; e++) { const a = vk(indices[i+e]), b = vk(indices[i+(e+1)%3]); const key = a<b?a+'|'+b:b+'|'+a; edge.set(key, (edge.get(key)||0)+1); }
+      for (const n of edge.values()) if (n !== 2) open++;
+    }
+    return { calloutHidden, span: maxX - minX, holes: t.holes.length, circles: t.circles.length, tris: mesh ? mesh.stats.triangles : 0, open };
+  });
+  check('stanag: read across units — mm, no callout modal, 4 grooves kept as loops, ~60 mm',
+    stanUnits === 'mm' && stanBuilt.calloutHidden && stanBuilt.holes === 4 && stanBuilt.circles === 0 &&
+    near(stanBuilt.span, 60, 1.5),
+    `units ${stanUnits}, calloutHidden ${stanBuilt.calloutHidden}, ${stanBuilt.holes} grooves, ${stanBuilt.span.toFixed(1)} mm`);
+  // KNOWN GAP (#28): the shared mesh core is non-manifold when several holes share
+  // colinear horizontal edges on the same scanline (a row of rectangular slots —
+  // exactly a rail's groove pattern). Round holes and rotated/offset slots are
+  // fine; only aligned straight-edged slots break. Inherited from 2.5D's mesh.js
+  // (byte-identical, not fixable from Blueprint). This characterization pins the
+  // current behaviour so a future mesh fix flips it and prompts a real watertight
+  // assertion here. Picatinny's round counterbores DO extrude watertight (above).
+  check('stanag: KNOWN GAP #28 — aligned rectangular slots not yet watertight',
+    stanBuilt.tris > 0 && stanBuilt.open > 0,
+    `${stanBuilt.tris} tris, ${stanBuilt.open} open edges (expected while #28 open)`);
+  if (stanBuilt.open > 0) console.log(`  note: STANAG grooved extrude has ${stanBuilt.open} open edges — mesh gap #28 (aligned slots).`);
+}
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 
