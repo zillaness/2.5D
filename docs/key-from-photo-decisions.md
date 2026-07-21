@@ -10,11 +10,16 @@ trope. Alternates: SpareKey, DupliKey. Not final; used informally until locked.
 
 ## Product decisions
 
-- **Flat key, not warded.** v1 generates a *flat* key (a flat plate blade of the
-  correct width/height/thickness + bow), the way printable-key models work. Prints
-  with a clean flat face down; KW1/SC1 keyways are open enough for a correct-width
-  flat blade. True warded side-grooves are out of scope (hard to print, marginal
-  benefit).
+- **Warded, not flat (revised).** Schlage C and BEST A are **paracentric** — a
+  flat blade won't reliably enter — so v1 extrudes the real warded cross-section
+  (from keygen). Flat blades only work for open keyways like Kwikset; we default
+  to the true section for correctness. Print orientation handled at mesh time.
+- **Size reference: CR80 card** (credit/gift/ID card, ISO-7810 ID-1 =
+  85.60 × 53.98 mm). Rigid, precise, rectangular → its 4 corners give a full
+  homography that removes perspective skew/warp and sets true scale. Already
+  supported by 2.5D's card calibration; NB cards have ~3.18 mm rounded corners,
+  so derive each corner from the straight-edge intersection, not the rounded pixel.
+- **Blank chosen from a library (picker), not auto-detected,** for v1.
 - **Blank chosen from a library (picker), not auto-detected,** for v1.
 - **Bow:** generic printable, code-embossable/labelable bow; standard shapes OK.
 - **Bitting datum:** manufacturer **root depth** (height above the blade back). The
@@ -23,8 +28,10 @@ trope. Alternates: SpareKey, DupliKey. Not final; used informally until locked.
 
 ## Data state
 
-- **Depth-and-spacing: verified** for KW1, SC1, M1, SC4 against the charts in
-  `key-refs/` (Thomas 2025 + Master 7000-0031). See `js/keys/blanks.js`.
+- **Depth-and-spacing: verified** for KW1, SC1, M1, SC4, **BEST A2 (7-pin)**
+  against the charts in `key-refs/` (Thomas 2025 + Master 7000-0031). BEST A2:
+  7 cuts, TFC .088", BCC .150", 10 depths .318→.2055 step .0125", MACS 9. See
+  `js/keys/blanks.js`.
 - **Warding cross-sections: sourced** from ervanalb/keygen (CC0) →
   `js/keys/warding.js` (Schlage C-family, Kwikset KW1, Master K1) + full raw
   dump `key-refs/derived/warding-profiles.json`. Each blank references a default

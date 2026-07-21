@@ -2,9 +2,11 @@
 // into "photograph a KEY". Each entry pairs a manufacturer keyway with its
 // depth-and-spacing spec (how the bitting code maps to physical cut geometry).
 //
-// SCOPE: ordinary US residential pin-tumbler blanks only. Restricted, patented,
-// registered, or "Do Not Duplicate" keyways (Medeco, Abloy, Mul-T-Lock, …) are
-// deliberately absent — they are legally controlled and out of scope.
+// SCOPE: ordinary US residential + common-commercial pin-tumbler blanks (incl.
+// BEST SFIC A2 — a standard, widely-available commercial keyway). Restricted,
+// patented, or registered high-security keyways (Medeco, Abloy, Mul-T-Lock, …)
+// are deliberately absent — they are legally controlled and out of scope.
+// Duplicate only keys/cores you own or are authorized to copy.
 //
 // ── Units ──────────────────────────────────────────────────────────────────
 // US key specs are published in inches, so every length in a `spec` is inches.
@@ -106,6 +108,26 @@ const MASTER_M1_SPEC = {
   macs: 5,
 };
 
+// BEST A2 — small-format interchangeable core (SFIC), 7-pin, "A" keyway.
+// A standard commercial keyway (blanks widely available; not a restricted
+// high-security system). Thomas 2025, p.41 + keygen best.scad.
+//   Read tip-to-bow; only duplicate cores/keys you own or are authorized to copy.
+const BEST_A2_SPEC = {
+  unit: 'in',
+  firstCut: 0.088,         // Thomas T.F.C (keygen models .080 from a tip datum)
+  spacing: 0.150,
+  codeMin: 0,
+  depthCount: 10,          // codes 0–9
+  depthStep: 0.0125,
+  rootDepthAtMin: 0.318,
+  rootDepths: [0.318, 0.3055, 0.293, 0.2805, 0.268, 0.2555, 0.243, 0.2305, 0.218, 0.2055],
+  bladeHeight: 0.330,      // ≈ warding A height (8.382 mm)
+  bladeThickness: 0.088,   // ≈ warding A thickness (2.235 mm)
+  cutAngle: 90,
+  cutFlat: 0.054,
+  macs: 9,
+};
+
 // Roadmap order (per product owner): KW1, SC1, M1, SC4 first; then WR5, Y1, S1,
 // A1, KW10 as the next wave. `verified` marks whether every spec number has been
 // checked against an authoritative chart — all four below are verified.
@@ -162,6 +184,17 @@ export const BLANKS = [
       'schlage:f', 'schlage:fg', 'schlage:g', 'schlage:h', 'schlage:j',
       'schlage:k', 'schlage:l'],
     spec: { ...SCHLAGE_SPEC, positions: 6 },
+  },
+  {
+    id: 'BEST-A',
+    brand: 'BEST',
+    keyway: 'A (SFIC)',
+    name: 'BEST A2 (7-pin, A keyway)',
+    positions: 7,
+    verified: true,
+    warding: 'best:a',
+    wardingOptions: ['best:a', 'best:b', 'best:c'],
+    spec: { ...BEST_A2_SPEC, positions: 7 },
   },
 ];
 

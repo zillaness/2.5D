@@ -4,11 +4,12 @@
 // domain) — extracted from its scad/*.gen.scad warding polygons. Each profile
 // is centred on X (thickness) with Y from 0 (blade back) up to the blade top.
 // These are the paracentric warding sections; extrude one along the blade to
-// make a key that actually enters the lock (a flat blade won't, for Schlage C).
+// make a key that actually enters the lock (a flat blade won't, for Schlage C or
+// BEST A).
 //
-// In-scope residential/padlock keyways only. keygen also carries Best/Medeco
-// high-security sections — deliberately excluded (see docs/key-refs/derived/
-// warding-profiles.json for the full raw extract).
+// In-scope residential + common-commercial keyways (incl. BEST SFIC). keygen
+// also carries Medeco high-security sections — deliberately excluded (patented/
+// restricted). Full raw extract: docs/key-refs/derived/warding-profiles.json.
 
 export const WARDING = {
   "schlage:c": { thickness: 1.9103, height: 8.7123, profile: [[0.9552,0.0003], [0.9548,1.5157], [-0.0003,3.5477], [-0.0003,3.8017], [0.9548,4.225], [0.9545,8.7123], [-0.0003,8.7123], [-0.0003,5.0717], [-0.9551,4.5638], [-0.9552,3.2937], [-0.0685,1.431], [-0.0685,1.177], [-0.9551,0.7536], [-0.9551,0.0]] },
@@ -24,6 +25,9 @@ export const WARDING = {
   "schlage:l": { thickness: 1.91, height: 8.7127, profile: [[0.955,0.3307], [0.5877,0.5847], [0.5877,1.8547], [-0.1469,3.1247], [-0.1469,3.802], [0.2938,4.056], [0.955,4.818], [0.955,8.7127], [-0.0735,8.7127], [-0.0735,4.9874], [-0.955,3.1247], [-0.0,1.9394], [-0.0,1.0927], [-0.955,0.6694], [-0.955,0.0], [0.955,0.0]] },
   "kwikset:kw1": { thickness: 2.0, height: 8.5091, profile: [[-1.0,2.8787], [-1.0,0.0], [1.0,0.0], [1.0,0.6773], [0.04,0.762], [0.04,2.2013], [1.0,2.2013], [1.0,3.9793], [0.44,4.7413], [0.44,8.5091], [-0.84,8.5091], [-0.84,4.572], [-0.36,4.572], [0.04,3.9793], [0.04,3.2173], [-0.52,3.2173], [-1.0,2.8786]] },
   "master:k1": { thickness: 1.98, height: 7.1359, profile: [[-0.99,7.1359], [-0.1865,7.1357], [-0.1865,3.7765], [0.99,3.0223], [0.99,0.0001], [-0.8376,0.0], [-0.9789,0.9904], [0.2935,0.9902], [0.2933,2.092], [-0.99,2.9152]] },
+  "best:a": { thickness: 2.2352, height: 8.382, profile: [[1.1176,0.5503], [1.1176,0.0], [-0.1156,0.0], [-1.1176,0.0], [-1.1176,1.1007], [0.3468,3.8947], [-1.1176,4.572], [-1.1176,8.382], [0.0385,8.382], [0.0385,4.9107], [1.1176,4.318], [1.1176,3.6407], [0.1156,1.6087], [0.1156,0.9313]] },
+  "best:b": { thickness: 2.235, height: 8.382, profile: [[0.2395,0.8467], [0.2395,1.8627], [1.1175,2.8787], [1.1175,3.7253], [0.0798,5.08], [0.0798,8.382], [-1.1175,8.382], [-1.1175,4.7413], [0.0798,3.302], [-1.1175,2.032], [-1.1175,0.0], [0.7184,0.0], [0.7184,0.8467]] },
+  "best:c": { thickness: 2.235, height: 8.382, profile: [[-1.1175,2.7093], [0.1242,3.81], [-1.1175,4.4873], [-1.1175,8.382], [-0.0414,8.382], [-0.0414,5.1647], [1.1175,4.4027], [1.1175,3.302], [0.1242,2.4553], [0.1242,1.016], [0.6208,1.016], [0.6208,0.0], [-1.1175,0.0]] },
 };
 
 export function getWarding(id) { return WARDING[id] || null; }

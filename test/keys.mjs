@@ -42,7 +42,7 @@ console.log('Blank library — verified against docs/key-refs/ charts');
   const sc1 = getBlank('SC1'), kw1 = getBlank('KW1'), sc4 = getBlank('SC4'), m1 = getBlank('M1');
   check('KW1/SC1/M1/SC4 all present and verified',
     [sc1, kw1, sc4, m1].every(b => b && b.verified));
-  check('verifiedBlanks() returns all four', verifiedBlanks().length === 4,
+  check('verifiedBlanks() returns all five (incl. BEST-A)', verifiedBlanks().length === 5,
     verifiedBlanks().map(b => b.id).join(','));
 
   // Schlage Classic (Thomas 2025, p.76)
@@ -92,6 +92,20 @@ console.log('Blank library — verified against docs/key-refs/ charts');
   check('KW1 warding kw1 (~2.0mm), M1 warding k1 (~7.14mm tall = .281")',
     near(wardingFor(kw1).thickness, 2.0, 0.02) &&
     near(wardingFor(m1).height, 7.14, 0.03));
+
+  // BEST A2 SFIC (Thomas 2025, p.41) — 7-pin, A keyway.
+  const best = getBlank('BEST-A');
+  check('BEST-A 7 positions, TFC .088", BCC .150", step .0125", MACS 9',
+    best.spec.positions === 7 && near(best.spec.firstCut, 0.088, 1e-9) &&
+    near(best.spec.spacing, 0.150, 1e-9) && near(best.spec.depthStep, 0.0125, 1e-9) &&
+    best.spec.macs === 9);
+  check('BEST-A depths 0–9, root depths .318→.2055',
+    eq(codeRange(best.spec), [0, 9]) &&
+    near(rootDepthForCode(best.spec, 0), 0.318, 1e-9) &&
+    near(rootDepthForCode(best.spec, 9), 0.2055, 1e-9));
+  check('BEST-A default warding is the A section (~2.235mm × ~8.382mm)',
+    best.warding === 'best:a' && near(wardingFor(best).thickness, 2.235, 0.02) &&
+    near(wardingFor(best).height, 8.382, 0.02));
 }
 
 console.log('\nClean round-trip: code → profile → decode');
@@ -100,6 +114,7 @@ const CASES = [
   { id: 'SC1', code: [1, 0, 3, 4, 5] },   // diffs 1,3,1,1            ≤ MACS 7
   { id: 'M1',  code: [0, 3, 5, 2] },      // diffs 3,2,3             ≤ MACS 5
   { id: 'SC4', code: [3, 2, 5, 4, 1, 6] },// diffs 1,3,1,3,5          ≤ MACS 7
+  { id: 'BEST-A', code: [2, 5, 3, 6, 3, 2, 6] }, // 7-pin; diffs ≤6   ≤ MACS 9
 ];
 for (const { id, code } of CASES) {
   const { spec } = getBlank(id);
