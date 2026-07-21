@@ -15,6 +15,7 @@ import {
   SCREW_STANDARDS, INSERT_SIZES, screwSpec, boreDiameter, recessDefaults, insertHole,
 } from './screws.js';
 import { parseLength, formatLength, formatLengthLabelled } from './units.js';
+import { measureInfo, loopStats, REGION_LOOP_BASE } from './measure.js';
 import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
 import { APP_VERSION } from './version.js';
 
@@ -72,7 +73,10 @@ const parseDim = str => parseLength(str, state.units);
 
 const cornerEditor = new CornerEditor($('cornerCanvas'), () => { state.rectDirty = true; });
 const traceEditor = new TraceEditor($('traceCanvas'), {
-  onChange: (throttled) => { updateTraceInfo(); if (!throttled) updateStepButtons(); },
+  onChange: (throttled) => {
+    updateTraceInfo();
+    if (!throttled) { updateStepButtons(); refreshMeasurePanel(); }
+  },
   onSelect: () => {
     syncHolePanel();
     positionHoleTag();
@@ -107,6 +111,9 @@ const traceEditor = new TraceEditor($('traceCanvas'), {
     refreshModelFields();
     if (state.step === 3) rebuildMesh();
   },
+  formatLen: mm => fmtDimL(mm),
+  onAnnosChanged: () => { refreshMeasurePanel(); refreshConstraintList(); },
+  onPicksChanged: () => refreshConstrainButtons(),
 });
 traceEditor.setSections(state.regions);
 let viewer = null; // created lazily on step 3
@@ -772,8 +779,153 @@ for (const btn of document.querySelectorAll('.tool-btn')) {
     btn.classList.add('active');
     traceEditor.setMode(btn.dataset.tool);
     syncHolePanel();
+    $('measurePanel').hidden = btn.dataset.tool !== 'measure';
+    $('constrainPanel').hidden = btn.dataset.tool !== 'constrain';
+    if (btn.dataset.tool === 'measure') refreshMeasurePanel();
+    if (btn.dataset.tool === 'constrain') { refreshConstrainButtons(); refreshConstraintList(); }
   });
 }
+
+// ---------- measure + constrain panels ----------
+
+function annoRow(text, onDelete) {
+  const row = document.createElement('div');
+  row.className = 'anno-row';
+  const span = document.createElement('span');
+  span.className = 'anno-text';
+  span.textContent = text;
+  const del = document.createElement('button');
+  del.className = 'anno-del';
+  del.textContent = '✕';
+  del.title = 'Remove';
+  del.addEventListener('click', onDelete);
+  row.append(span, del);
+  return row;
+}
+
+function refreshMeasurePanel() {
+  if ($('measurePanel').hidden) return;
+  // Part-level readout: overall size + outline perimeter/area.
+  const { outer } = traceEditor.getTrace();
+  const stats = loopStats(outer);
+  const areaTxt = a => state.units === 'in'
+    ? `${(a / (25.4 * 25.4)).toFixed(2)} in²` : `${a.toFixed(0)} mm²`;
+  $('measurePartInfo').textContent = !stats ? '' :
+    `Part: ${fmtDim(stats.bbox.w)} × ${fmtDimL(stats.bbox.h)}\n` +
+    `Outline: ${fmtDimL(stats.perimeter)} · ${areaTxt(stats.area)}`;
+
+  const list = $('measureList');
+  list.innerHTML = '';
+  const geo = traceEditor._geo();
+  traceEditor.measurements.forEach((m, i) => {
+    const info = measureInfo(m, geo);
+    let text = '(stale)';
+    if (info) {
+      if (info.type === 'p2p') text = `↔ ${fmtDimL(info.d)}  (Δx ${fmtDim(info.dx)}, Δy ${fmtDim(info.dy)})`;
+      else if (info.type === 'p2e') text = `⟂ ${fmtDimL(info.d)} to edge`;
+      else if (info.type === 'elen') text = `— edge ${fmtDimL(info.d)}`;
+      else if (info.type === 'e2e') {
+        text = `∠ ${info.angle.toFixed(1)}°` + (info.gap !== null ? ` · gap ${fmtDimL(info.gap)}` : '');
+      } else if (info.type === 'rad') text = `⌀ ${fmtDimL(info.r * 2)}  (r ${fmtDim(info.r)})`;
+    }
+    list.appendChild(annoRow(text, () => traceEditor.removeMeasurement(i)));
+  });
+}
+
+$('measureClearBtn').addEventListener('click', () => traceEditor.clearMeasurements());
+
+const CON_LABELS = {
+  h: 'Horizontal', v: 'Vertical', perp: '⊥ Perpendicular', para: '∥ Parallel',
+  equal: '= Equal length', collin: '⋯ Collinear', conc: '◎ Concentric',
+  anchor: '⚓ Anchor', len: 'Length', angle: 'Angle', dist: 'Distance',
+};
+
+function refreshConstraintList() {
+  if ($('constrainPanel').hidden) return;
+  const list = $('constraintList');
+  list.innerHTML = '';
+  traceEditor.constraints.forEach((c, i) => {
+    let text = CON_LABELS[c.type] || c.type;
+    if (c.type === 'len' || c.type === 'dist') text += ` ${fmtDimL(c.value)}`;
+    if (c.type === 'angle') text += ` ${c.value}°`;
+    list.appendChild(annoRow(text, () => { traceEditor.removeConstraint(i); }));
+  });
+}
+
+// Which constraint buttons make sense for the current picks.
+function refreshConstrainButtons() {
+  if ($('constrainPanel').hidden) return;
+  const picks = traceEditor.getPicks();
+  const isCirc = r => r.kind === 'circle' || r.kind === 'center';
+  const edges = picks.filter(r => r.kind === 'edge').length;
+  const pts = picks.filter(r => r.kind === 'vert' || isCirc(r)).length;
+  const n = picks.length;
+  $('conH').disabled = $('conV').disabled = $('conLen').disabled = !(n === 1 && edges === 1);
+  $('conAnchor').disabled = !(n === 1 && (picks[0].kind === 'vert' || isCirc(picks[0])));
+  $('conPerp').disabled = $('conPara').disabled = $('conEqual').disabled =
+    $('conCollin').disabled = $('conAngle').disabled = !(n === 2 && edges === 2);
+  $('conConc').disabled = !(n === 2 && picks.every(isCirc));
+  $('conDist').disabled = !(n === 2 && edges <= 1 && pts >= 1 && pts + edges === 2);
+  $('pickInfo').textContent = !n ? 'Nothing picked.'
+    : picks.map(r => r.kind === 'edge' ? 'edge' : r.kind === 'vert' ? 'point' : 'hole').join(' + ') + ' picked';
+  if (!n) $('conValueField').hidden = true;
+}
+
+for (const [id, type] of [
+  ['conH', 'h'], ['conV', 'v'], ['conPerp', 'perp'], ['conPara', 'para'],
+  ['conEqual', 'equal'], ['conCollin', 'collin'], ['conConc', 'conc'],
+  ['conAnchor', 'anchor'],
+]) {
+  $(id).addEventListener('click', () => {
+    if (!traceEditor.addConstraintFromPicks(type)) toast('That pick doesn’t fit this constraint.');
+  });
+}
+
+// Dimension constraints prompt for a value, prefilled with the measured one.
+let pendingDimType = null;
+for (const [id, type, label] of [
+  ['conLen', 'len', 'Length'], ['conAngle', 'angle', 'Angle (°)'], ['conDist', 'dist', 'Distance'],
+]) {
+  $(id).addEventListener('click', () => {
+    const v = traceEditor.picksValue();
+    if (!v) return;
+    pendingDimType = type;
+    $('conValueLabel').textContent = type === 'angle' ? label : `${label} (${state.units})`;
+    $('conValueInput').value = type === 'angle'
+      ? (Math.round(v.angle * 10) / 10) : fmtDim(v.len ?? v.dist);
+    $('conValueField').hidden = false;
+    $('conValueInput').focus();
+    $('conValueInput').select();
+  });
+}
+
+function applyDimConstraint() {
+  if (!pendingDimType) return;
+  const raw = $('conValueInput').value;
+  const value = pendingDimType === 'angle' ? parseFloat(raw) : parseDim(raw);
+  if (!isFinite(value) || value < 0) { toast('Enter a valid value.'); return; }
+  if (traceEditor.addConstraintFromPicks(pendingDimType, value)) {
+    pendingDimType = null;
+    $('conValueField').hidden = true;
+  } else {
+    toast('That pick doesn’t fit this constraint.');
+  }
+}
+$('conValueApply').addEventListener('click', applyDimConstraint);
+$('conValueInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); applyDimConstraint(); }
+  e.stopPropagation();
+});
+
+$('conSolveBtn').addEventListener('click', () => {
+  if (!traceEditor.constraints.length) { toast('No constraints yet.'); return; }
+  traceEditor.pushUndo();
+  const res = traceEditor.solveNow();
+  traceEditor.draw();
+  updateTraceInfo();
+  if (res && !res.converged) toast('Solver did not fully converge — constraints may conflict.');
+});
+$('conClearBtn').addEventListener('click', () => traceEditor.clearConstraints());
 
 $('undoBtn').addEventListener('click', () => {
   if (!traceEditor.undo()) toast('Nothing to undo.');
@@ -888,7 +1040,8 @@ function rotateView(dir) {
   $('showMask').checked = false;
   traceEditor.setMaskOverlay(null);
   traceEditor.setRectified(out, pxPerMm);
-  traceEditor.setTrace(rotOuter, rotHoles);
+  // Index-preserving replacement — measurements/constraints survive.
+  traceEditor.setTrace(rotOuter, rotHoles, false, true);
   traceEditor.setCircles(rotCircles);
   traceEditor.setSections(state.regions);
   refreshModelFields();
@@ -1021,6 +1174,11 @@ document.addEventListener('keydown', e => {
     traceEditor.cancelDraftRegion();
     return;
   }
+  if ((traceEditor.mode === 'measure' || traceEditor.mode === 'constrain') &&
+      e.key === 'Escape') {
+    traceEditor.cancelPendingPick();
+    return;
+  }
   if (e.key === 'Escape' && traceEditor.selectedVerts.length) {
     traceEditor.clearMultiSelect();
     $('arcRadiusField').hidden = true;
@@ -1105,6 +1263,7 @@ $('bottomSize').addEventListener('change', e => {
 });
 $('regionDeleteBtn').addEventListener('click', () => {
   if (state.selRegion === 0) return;
+  traceEditor._refsOp({ op: 'deleteLoop', loop: REGION_LOOP_BASE + state.selRegion });
   state.regions.splice(state.selRegion, 1);
   state.selRegion = 0;
   refreshModelFields();
@@ -1212,6 +1371,8 @@ function serializeProject(includePhoto) {
     model: state.model,
     regions: state.regions,
     trace: traceEditor.getTrace(),
+    measurements: traceEditor.measurements,
+    constraints: traceEditor.constraints,
     holeTemplate: traceEditor.holeTemplate,
     pxPerMm: state.rect ? state.rect.pxPerMm : null,
     rectified: state.rect ? state.rect.canvas.toDataURL('image/jpeg', 0.85) : null,
@@ -1282,6 +1443,9 @@ function loadProject(p) {
     if (p.trace) {
       traceEditor.setTrace(p.trace.outer || [], p.trace.holes || []);
       traceEditor.setCircles(p.trace.circles || []);
+      traceEditor.measurements = Array.isArray(p.measurements) ? structuredClone(p.measurements) : [];
+      traceEditor.constraints = Array.isArray(p.constraints) ? structuredClone(p.constraints) : [];
+      traceEditor.draw();
     }
     if (p.holeTemplate) traceEditor.holeTemplate = structuredClone(p.holeTemplate);
     updateStepButtons();
@@ -1432,6 +1596,9 @@ $('libSaveBtn').addEventListener('click', () => {
     outer: outer.map(off),
     holes: holes.map(h => h.map(off)),
     circles: circles.map(c => ({ ...c, cx: c.cx - minX + M, cy: c.cy - minY + M })),
+    // Refs are index-based, so they survive the origin shift unchanged.
+    measurements: structuredClone(traceEditor.measurements),
+    constraints: structuredClone(traceEditor.constraints),
   };
   const list = libLoad();
   const existing = list.findIndex(o => o.name === name);
@@ -1487,6 +1654,9 @@ function loadOutlineIntoSession(o) {
   traceEditor.setMaskOverlay(null);
   traceEditor.setTrace(o.outer.map(p => ({ ...p })), (o.holes || []).map(h => h.map(p => ({ ...p }))));
   traceEditor.setCircles((o.circles || []).map(c2 => structuredClone(c2)));
+  traceEditor.measurements = Array.isArray(o.measurements) ? structuredClone(o.measurements) : [];
+  traceEditor.constraints = Array.isArray(o.constraints) ? structuredClone(o.constraints) : [];
+  traceEditor.draw();
   traceEditor.setSections(state.regions);
   refreshModelFields();
   updateStepButtons();
@@ -1645,6 +1815,9 @@ for (const btn of document.querySelectorAll('#unitToggle button')) {
     renderMeshInfo();
     syncHolePanel();
     positionHoleTag();
+    refreshMeasurePanel();
+    refreshConstraintList();
+    traceEditor.draw(); // measurement labels carry units
   });
 }
 

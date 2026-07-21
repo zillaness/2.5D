@@ -141,6 +141,40 @@ the object is segmented against the background colour. You get:
     screw holes takes one setup. Position and every dimension can also be
     typed exactly in mm.
 
+**Measure — 📏.** Read dimensions straight off the photo instead of exporting
+to a slicer to check them. The measure tool snaps to corners, edge midpoints,
+hole centres and points-on-edges; what you pick decides what you get:
+
+- **Two points** — straight-line distance, with Δx/Δy in the panel.
+- **Point + edge** — perpendicular distance (edge offsets, wall thicknesses).
+- **One edge** (click it twice, or once then empty space) — its length.
+- **Two edges** — the angle between them; near-parallel edges (< 5°) also
+  report the **face-to-face gap**, like a caliper across two faces.
+- **A hole** (traced or placed) — radius and ⌀ via least-squares circle fit.
+
+The panel always shows the part's overall W×H, outline perimeter and area.
+Measurements persist as on-canvas annotations that **live-update as you edit
+the trace**, are deletable one-by-one, and follow the mm/in toggle.
+
+**Constraints — ⊾.** Square up a traced outline instead of nudging vertices by
+eye. Pick one or two entities (corner, edge, hole), then apply:
+
+- **H / V** — force an edge horizontal or vertical.
+- **⊥ Perpendicular / ∥ Parallel / = Equal length / ⋯ Collinear** — between
+  two edges.
+- **◎ Concentric** — two placed holes share a centre.
+- **Length… / Angle… / Distance…** — dimension constraints with a typed value
+  (prefilled with the current measurement): fix an edge's length, the angle
+  between two edges, or the distance point↔point / point↔edge /
+  **hole-centre↔edge** — the way to locate a hole exactly off a datum edge.
+- **⚓ Anchor** — pin a point so the solver moves everything else around it.
+
+Constraints stay active: drag any point and a dashed **ghost preview** shows
+where the solver will put the geometry; release to commit. They're listed in
+the panel with per-item delete, survive undo, and are saved with projects and
+library outlines. (The solver is an iterative projection pass — conflicting
+constraints settle on a compromise rather than erroring.)
+
 **Units** — display defaults to millimetres with an mm/in toggle in the
 header, but every dimension field parses any unit regardless of the toggle and
 converts to mm: `12.7`, `12,7` (comma decimal), `.5"`, `1/2 in`, `1 1/2"`,
@@ -247,16 +281,22 @@ picker, heat-set inserts, DXF export, STL quality presets, hole drag rework
 (centre = move, rim = resize), point multi-select (Ctrl-click + marquee) with
 group move/delete, arc/line fitting and densify/reduce on a selected run,
 rotate view 90° (both the trace step and the corner-setting step), radial
-lens-distortion correction, and the container outline library are all **done**
-and in the app.
+lens-distortion correction, the container outline library, **in-app
+measurement tools** (point/edge distances, angles, face-to-face gaps, radii,
+part size) and **geometric constraints** (H/V, perpendicular, parallel, equal,
+collinear, concentric, dimensioned length/angle/distance, anchors, with live
+ghost-preview solving) are all **done** and in the app.
+
+*(PDF drawing import — "picture of a CAD drawing → CAD out" — moved to the
+separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- **PDF import + read the drawing** — import a vector PDF (geometry from its
-  vector layer, units + dimension numbers from its text layer, no OCR); OCR
-  (Tesseract) only as a fallback for scanned/image PDFs. Heavy deps (pdf.js +
-  Tesseract) inlined into the single file. This is the "picture of a CAD
-  drawing → CAD out" path.
+- **Tangent constraint + first-class arcs** — today an arc is a dense point
+  run, so tangency (arc smoothly meeting a line, the traced-fillet cleanup)
+  can't be expressed. Promote fitted arcs to real entities (centre/radius/
+  endpoints) that the solver and editor understand; tangent, and better
+  radius/centre handling everywhere, fall out of that.
 
 ### Horizon
 
@@ -269,8 +309,12 @@ and in the app.
 
 ### Tabled (deprioritized for now)
 
+- Multi-tool scanning → drawer/toolbox layout — scan several tools, save their
+  traces, and pack them into a drawer or toolbox insert (per-tool pockets,
+  nesting). The outline library is the seed for this.
 - Photo/scan line-art vectorization (two-point scale) — only needed to recover
-  geometry from a pure raster photo of a drawing; PDF covers the common case.
+  geometry from a pure raster photo of a drawing; PDF (in the Blueprint fork)
+  covers the common case.
 - Tool-foam negative export (block minus offset outline).
 - Gridfinity bin with the object as a cutout.
 - Custom Gridfinity baseplates shaped to a saved outline.

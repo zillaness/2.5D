@@ -5,13 +5,21 @@
 
 import { Viewport, prepareCanvas } from './viewport.js';
 import { pointInPolygon, fitCircle, resampleClosed } from '../contour.js';
+import {
+  REGION_LOOP_BASE, resolvePoint, resolveEdge, measureInfo, remapRefs,
+  pointSegDist, angleBetweenDeg, dist as ptDist,
+} from '../measure.js';
+import { solveConstraints } from '../constraints.js';
 
 const VERT_R = 4.5;
 const HIT_R = 8;
 // Extra sections ("regions") reuse the loop-addressing scheme: loop index
 // -1 = outer outline, 0..n-1 = traced holes, REGION_LOOP_BASE + i = the
 // footprint of sections[i] (i >= 1; sections[0] is the base = outer).
-const REGION_LOOP_BASE = 1000;
+// (The constant lives in measure.js so refs share the addressing.)
+
+const MEASURE_COL = '#cf8aff';
+const CONSTRAIN_COL = '#9ad8ff';
 
 export class TraceEditor {
   constructor(canvas, callbacks = {}) {
@@ -47,6 +55,14 @@ export class TraceEditor {
     };
     this.selection = null;   // {type:'vertex', loop, idx} | {type:'circle', idx} | {type:'holeloop', loop}
     this.selectedVerts = [];  // multi-selection: [{loop, idx}] for group move/delete/fit
+    // Measurement annotations + geometric constraints (refs into the trace;
+    // see measure.js). Both live-update as the trace is edited.
+    this.measurements = [];
+    this.constraints = [];
+    this._pendingPick = null; // measure mode: first of a two-entity pick
+    this._picks = [];         // constrain mode: up to two picked entities
+    this._hoverSnap = null;   // snap marker under the cursor (measure/constrain)
+    this._ghost = null;       // solved-preview geometry while dragging
     this.dragging = false;
     this.panning = false;
     this.lastPos = null;
@@ -96,10 +112,13 @@ export class TraceEditor {
     this.draw();
   }
 
-  setTrace(outer, holes, keepUndo = false) {
+  // keepRefs: an index-preserving replacement (e.g. rotate) keeps
+  // measurements/constraints; a real re-trace or import drops loop refs.
+  setTrace(outer, holes, keepUndo = false, keepRefs = false) {
     this.outer = outer || [];
     this.holes = holes || [];
     if (!keepUndo) this.undoStack.length = 0;
+    if (!keepRefs) this._refsOp({ op: 'clearLoops' });
     this.selection = null;
     this.selectedVerts = [];
     this._notifySelect();
@@ -122,9 +141,14 @@ export class TraceEditor {
 
   setMode(mode) {
     if (this.mode === 'region' && mode !== 'region') this._draftRegion = null;
+    if (mode !== 'measure') this._pendingPick = null;
+    if (mode !== 'constrain') this._picks = [];
+    this._hoverSnap = null;
     this.mode = mode;
     this.canvas.style.cursor = mode === 'pan' ? 'grab'
-      : mode === 'region' ? 'crosshair' : 'default';
+      : (mode === 'region' || mode === 'measure' || mode === 'constrain')
+        ? 'crosshair' : 'default';
+    if (this.cb.onPicksChanged) this.cb.onPicksChanged();
     this.draw();
   }
 
@@ -134,6 +158,7 @@ export class TraceEditor {
     return structuredClone({
       outer: this.outer, holes: this.holes, circles: this.circles,
       sections: this.sections,
+      measurements: this.measurements, constraints: this.constraints,
     });
   }
 
@@ -153,6 +178,9 @@ export class TraceEditor {
     this.sections.length = 0;
     this.sections.push(...s.sections);
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this.measurements = s.measurements || [];
+    this.constraints = s.constraints || [];
+    this._notifyAnnos();
     this.selection = null;
     this.selectedVerts = [];
     this._notifySelect();
@@ -182,6 +210,68 @@ export class TraceEditor {
 
   _isRegionLoop(loopIdx) {
     return typeof loopIdx === 'number' && loopIdx >= REGION_LOOP_BASE;
+  }
+
+  // ---- measurements + constraints: shared plumbing ----
+
+  // Ref-resolution adapter over the live geometry (see measure.js).
+  _geo() {
+    return {
+      loop: l => this._loop(l) || null,
+      circle: i => this.circles[i] || null,
+    };
+  }
+
+  // Remap both annotation sets across a structural edit; notify if pruned.
+  _refsOp(op, loopLen = 0) {
+    const m0 = this.measurements.length, c0 = this.constraints.length;
+    this.measurements = remapRefs(this.measurements, op, loopLen);
+    this.constraints = remapRefs(this.constraints, op, loopLen);
+    if (this.measurements.length !== m0 || this.constraints.length !== c0 ||
+        op.op !== 'splice') this._notifyAnnos();
+  }
+
+  _notifyAnnos() {
+    if (this.cb.onAnnosChanged) this.cb.onAnnosChanged();
+  }
+
+  // Run the solver on the live geometry. extraAnchors pin e.g. the dragged
+  // vertex so the solver moves everything else around it.
+  solveNow(extraAnchors = []) {
+    if (!this.constraints.length) return null;
+    return solveConstraints(this._geo(), this.constraints, { extraAnchors });
+  }
+
+  // Solve a deep copy for the drag ghost preview. Returns cloned geometry
+  // ({outer, holes, circles, sections}) or null when nothing would move.
+  _solveGhost(extraAnchors) {
+    if (!this.constraints.length) return null;
+    const g = structuredClone({
+      outer: this.outer, holes: this.holes, circles: this.circles,
+      sections: this.sections.map(s => ({ pts: s.pts })),
+    });
+    const geo = {
+      loop: l => l === -1 ? g.outer
+        : l >= REGION_LOOP_BASE ? (g.sections[l - REGION_LOOP_BASE] && g.sections[l - REGION_LOOP_BASE].pts)
+        : g.holes[l],
+      circle: i => g.circles[i] || null,
+    };
+    solveConstraints(geo, this.constraints, { extraAnchors });
+    return g;
+  }
+
+  // Anchors for the current drag (the geometry the user is holding).
+  _dragAnchors() {
+    if (this._groupDrag) return this.selectedVerts.map(v => ({ kind: 'vert', loop: v.loop, idx: v.idx }));
+    const sel = this.selection;
+    if (!sel) return [];
+    if (sel.type === 'vertex') return [{ kind: 'vert', loop: sel.loop, idx: sel.idx }];
+    if (sel.type === 'circle') return [{ kind: 'center', idx: sel.idx }];
+    if (sel.type === 'holeloop' && !this._isRegionLoop(sel.loop) && sel.loop >= 0) {
+      const pts = this.holes[sel.loop] || [];
+      return pts.map((_, i) => ({ kind: 'vert', loop: sel.loop, idx: i }));
+    }
+    return [];
   }
 
   // ---- hit testing ----
@@ -265,6 +355,269 @@ export class TraceEditor {
     return best;
   }
 
+  // Snap-pick an entity for measuring/constraining. Priority: vertex →
+  // circle centre / rim → edge midpoint → point on edge → traced-hole
+  // interior (as a fitted circle). `full` (measure mode) enables the
+  // midpoint / on-edge / hole-fit targets; constrain mode wants only
+  // verts, edges, and circles.
+  _snapPick(sp, full) {
+    const mkPos = ref => ({ ref, pos: this._refPos(ref) });
+    const vHit = this._hitVertex(sp);
+    if (vHit) return mkPos({ kind: 'vert', loop: vHit.loop, idx: vHit.idx });
+
+    for (let i = 0; i < this.circles.length; i++) {
+      const c = this.circles[i];
+      const ctr = this._mmToScreen({ x: c.cx, y: c.cy });
+      const rimR = (c.d / 2) * this.pxPerMm * this.vp.scale;
+      const d = Math.hypot(ctr.x - sp.x, ctr.y - sp.y);
+      if (d <= Math.max(HIT_R, Math.min(10, rimR - HIT_R))) {
+        return mkPos({ kind: 'center', idx: i });
+      }
+      if (Math.abs(d - rimR) <= HIT_R) return mkPos({ kind: 'circle', idx: i });
+    }
+
+    const eHit = this._hitEdge(sp);
+    if (eHit) {
+      if (full) {
+        // Prefer the midpoint when the cursor is close to it.
+        const pts = this._loop(eHit.loop);
+        const a = pts[eHit.idx], b = pts[(eHit.idx + 1) % pts.length];
+        const mid = this._mmToScreen({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+        if (Math.hypot(mid.x - sp.x, mid.y - sp.y) <= HIT_R) {
+          return mkPos({ kind: 'mid', loop: eHit.loop, idx: eHit.idx });
+        }
+      }
+      return mkPos({ kind: 'edge', loop: eHit.loop, idx: eHit.idx, t: eHit.t });
+    }
+
+    if (full) {
+      const mm = this._screenToMm(sp);
+      for (let h = 0; h < this.holes.length; h++) {
+        if (pointInPolygon(mm, this.holes[h])) return mkPos({ kind: 'holeloop', loop: h });
+      }
+    }
+    return null;
+  }
+
+  // Screen position of a ref (for markers); circle-ish refs use the centre.
+  _refPos(ref) {
+    const geo = this._geo();
+    if (ref.kind === 'edge') {
+      const e = resolveEdge(ref, geo);
+      if (!e) return null;
+      const t = ref.t ?? 0.5;
+      return this._mmToScreen({ x: e.a.x + (e.b.x - e.a.x) * t, y: e.a.y + (e.b.y - e.a.y) * t });
+    }
+    if (ref.kind === 'circle' || ref.kind === 'holeloop') {
+      const c = ref.kind === 'circle' ? this.circles[ref.idx] : null;
+      if (c) return this._mmToScreen({ x: c.cx, y: c.cy });
+      const info = measureInfo({ type: 'rad', refs: [ref] }, geo);
+      return info ? this._mmToScreen({ x: info.cx, y: info.cy }) : null;
+    }
+    const p = resolvePoint(ref, geo);
+    return p ? this._mmToScreen(p) : null;
+  }
+
+  // ---- measure mode ----
+
+  _sameRef(a, b) {
+    return a && b && a.kind === b.kind && a.loop === b.loop && a.idx === b.idx;
+  }
+
+  _measureDown(sp) {
+    const pick = this._snapPick(sp, true);
+    const isPt = r => r && (r.kind === 'vert' || r.kind === 'mid' || r.kind === 'onedge' || r.kind === 'center');
+    if (!pick) {
+      // Empty click: a lone pending edge commits as a length measurement.
+      if (this._pendingPick && this._pendingPick.kind === 'edge') {
+        this._addMeasurement({ type: 'elen', refs: [this._strip(this._pendingPick)] });
+      }
+      this._pendingPick = null;
+      this.panning = true;
+      this.draw();
+      return;
+    }
+    const ref = pick.ref;
+    if (ref.kind === 'circle' || ref.kind === 'holeloop') {
+      // One click = a radius/diameter measurement.
+      this._pendingPick = null;
+      this._addMeasurement({ type: 'rad', refs: [this._strip(ref)] });
+      return;
+    }
+    // On-edge pick acts as a point when a point measurement is in progress,
+    // else as the edge itself.
+    const prev = this._pendingPick;
+    if (!prev) {
+      this._pendingPick = ref;
+      this.draw();
+      return;
+    }
+    if (this._sameRef(prev, ref) && prev.kind === 'edge') {
+      this._addMeasurement({ type: 'elen', refs: [this._strip(prev)] });
+      this._pendingPick = null;
+      return;
+    }
+    const prevPt = isPt(prev), curPt = isPt(ref);
+    let m = null;
+    if (prevPt && curPt) m = { type: 'p2p', refs: [prev, ref] };
+    else if (prevPt && ref.kind === 'edge') m = { type: 'p2e', refs: [prev, this._strip(ref)] };
+    else if (prev.kind === 'edge' && curPt) m = { type: 'p2e', refs: [ref, this._strip(prev)] };
+    else if (prev.kind === 'edge' && ref.kind === 'edge') {
+      m = { type: 'e2e', refs: [this._strip(prev), this._strip(ref)] };
+    }
+    this._pendingPick = null;
+    if (m) this._addMeasurement(m);
+    else this.draw();
+  }
+
+  // Drop the transient pick parameter (edge picks carry a t for markers).
+  _strip(ref) {
+    if (ref.kind !== 'edge') return ref;
+    const { t, ...rest } = ref;
+    return rest;
+  }
+
+  _addMeasurement(m) {
+    this.measurements.push(m);
+    this._notifyAnnos();
+    this.draw();
+  }
+
+  removeMeasurement(i) {
+    this.measurements.splice(i, 1);
+    this._notifyAnnos();
+    this.draw();
+  }
+
+  clearMeasurements() {
+    this.measurements = [];
+    this._pendingPick = null;
+    this._notifyAnnos();
+    this.draw();
+  }
+
+  cancelPendingPick() {
+    if (!this._pendingPick && !this._picks.length) return false;
+    this._pendingPick = null;
+    this._picks = [];
+    if (this.cb.onPicksChanged) this.cb.onPicksChanged();
+    this.draw();
+    return true;
+  }
+
+  // ---- constrain mode ----
+
+  _constrainDown(sp) {
+    const pick = this._snapPick(sp, false);
+    if (!pick) {
+      this._picks = [];
+      this.panning = true;
+      if (this.cb.onPicksChanged) this.cb.onPicksChanged();
+      this.draw();
+      return;
+    }
+    let ref = pick.ref;
+    if (ref.kind === 'edge') ref = this._strip(ref);
+    const i = this._picks.findIndex(p => this._sameRef(p, ref));
+    if (i >= 0) this._picks.splice(i, 1);            // click again = unpick
+    else {
+      this._picks.push(ref);
+      if (this._picks.length > 2) this._picks.shift(); // keep the newest two
+    }
+    if (this.cb.onPicksChanged) this.cb.onPicksChanged();
+    this.draw();
+  }
+
+  // Current picks, for the panel to decide which constraints apply.
+  getPicks() { return this._picks.slice(); }
+
+  // Measured value of the current picks, used to prefill dimension inputs:
+  // {len} for one edge, {angle} for two edges, {dist} for point/point|edge.
+  picksValue() {
+    const geo = this._geo();
+    const p = this._picks;
+    const asPt = r => r.kind === 'vert' || r.kind === 'center' || r.kind === 'circle'
+      ? resolvePoint(r.kind === 'circle' ? { kind: 'center', idx: r.idx } : r, geo) : null;
+    if (p.length === 1 && p[0].kind === 'edge') {
+      const e = resolveEdge(p[0], geo);
+      return e ? { len: ptDist(e.a, e.b) } : null;
+    }
+    if (p.length === 2 && p[0].kind === 'edge' && p[1].kind === 'edge') {
+      const A = resolveEdge(p[0], geo), B = resolveEdge(p[1], geo);
+      return A && B ? { angle: angleBetweenDeg(A.a, A.b, B.a, B.b) } : null;
+    }
+    if (p.length === 2) {
+      const edge = p.find(r => r.kind === 'edge');
+      const pts = p.filter(r => r.kind !== 'edge').map(asPt);
+      if (edge && pts.length === 1 && pts[0]) {
+        const e = resolveEdge(edge, geo);
+        return e ? { dist: pointSegDist(pts[0], e.a, e.b).d } : null;
+      }
+      if (pts.length === 2 && pts[0] && pts[1]) return { dist: ptDist(pts[0], pts[1]) };
+    }
+    return null;
+  }
+
+  // Build + apply a constraint from the current picks. Returns true when it
+  // was added (picks matched the type's signature).
+  addConstraintFromPicks(type, value) {
+    const p = this._picks;
+    const circ = r => r.kind === 'circle' || r.kind === 'center';
+    const asCenter = r => circ(r) ? { kind: 'center', idx: r.idx } : r;
+    const asCircle = r => circ(r) ? { kind: 'circle', idx: r.idx } : r;
+    const edges = p.filter(r => r.kind === 'edge');
+    const others = p.filter(r => r.kind !== 'edge');
+    let refs = null;
+    switch (type) {
+      case 'h': case 'v': case 'len':
+        if (p.length === 1 && edges.length === 1) refs = [edges[0]];
+        break;
+      case 'perp': case 'para': case 'equal': case 'collin': case 'angle':
+        if (edges.length === 2) refs = edges;
+        break;
+      case 'conc':
+        if (p.length === 2 && p.every(circ)) refs = p.map(asCircle);
+        break;
+      case 'dist':
+        if (p.length === 2 && edges.length <= 1 && others.every(r => r.kind === 'vert' || circ(r))) {
+          const pts = others.map(asCenter);
+          refs = edges.length ? [pts[0], edges[0]] : pts;
+        }
+        break;
+      case 'anchor':
+        if (p.length === 1 && (p[0].kind === 'vert' || circ(p[0]))) refs = [asCenter(p[0])];
+        break;
+    }
+    if (!refs) return false;
+    this.pushUndo();
+    const c = { type, refs };
+    if (value !== undefined) c.value = value;
+    this.constraints.push(c);
+    this._picks = [];
+    this.solveNow();
+    if (this.cb.onPicksChanged) this.cb.onPicksChanged();
+    this._notifyAnnos();
+    this._changed();
+    return true;
+  }
+
+  removeConstraint(i) {
+    this.pushUndo();
+    this.constraints.splice(i, 1);
+    this._notifyAnnos();
+    this._changed();
+  }
+
+  clearConstraints() {
+    if (!this.constraints.length) return;
+    this.pushUndo();
+    this.constraints = [];
+    this._picks = [];
+    if (this.cb.onPicksChanged) this.cb.onPicksChanged();
+    this._notifyAnnos();
+    this._changed();
+  }
+
   // ---- pointer handling ----
 
   _down(e) {
@@ -284,6 +637,13 @@ export class TraceEditor {
       if (!this._draftRegion) this._draftRegion = [];
       this._draftRegion.push(mm);
       this.draw();
+      return;
+    }
+
+    if (this.mode === 'measure' || this.mode === 'constrain') {
+      if (e.button !== 0) { this.panning = true; return; }
+      if (this.mode === 'measure') this._measureDown(sp);
+      else this._constrainDown(sp);
       return;
     }
 
@@ -362,6 +722,7 @@ export class TraceEditor {
       const pts = this._loop(eHit.loop);
       const a = pts[eHit.idx], b = pts[(eHit.idx + 1) % pts.length];
       const np = { x: a.x + (b.x - a.x) * eHit.t, y: a.y + (b.y - a.y) * eHit.t };
+      this._refsOp({ op: 'splice', loop: eHit.loop, lo: eHit.idx + 1, removed: 0, added: 1 }, pts.length);
       pts.splice(eHit.idx + 1, 0, np);
       this.selection = { type: 'vertex', loop: eHit.loop, idx: eHit.idx + 1 };
       this.dragging = true;
@@ -474,6 +835,7 @@ export class TraceEditor {
           y: Math.max(0, Math.min(maxY, o.y + dy)),
         };
       });
+      this._ghost = this.constraints.length ? this._solveGhost(this._dragAnchors()) : null;
       this._changed(true);
       return;
     }
@@ -507,10 +869,17 @@ export class TraceEditor {
         if (loop) for (const p of loop) { p.x += dx; p.y += dy; }
         this._lastMm = mm;
       }
+      // Constrained drag: preview where the solver will put everything.
+      this._ghost = this.constraints.length && this._placedIdx === null
+        ? this._solveGhost(this._dragAnchors()) : null;
       this._changed(true);
       return;
     }
     if (this.mode === 'edit') this._updateHoverCursor(sp);
+    if (this.mode === 'measure' || this.mode === 'constrain') {
+      this._hoverSnap = this._snapPick(sp, this.mode === 'measure');
+      this.draw();
+    }
   }
 
   _updateHoverCursor(sp) {
@@ -545,6 +914,11 @@ export class TraceEditor {
       }
       if (this.selection && this.selection.type === 'circle' && this._circleResize) {
         this.circles[this.selection.idx].d = Math.round(this.circles[this.selection.idx].d * 20) / 20;
+      }
+      // Commit the constrained result the ghost was previewing.
+      if (this._ghost) {
+        this.solveNow(this._dragAnchors());
+        this._ghost = null;
       }
       this._changed();
     }
@@ -585,8 +959,10 @@ export class TraceEditor {
     if (!pts) return;
     if (sel.loop === -1 && pts.length <= 3) return; // outline must stay a polygon
     this.pushUndo();
+    this._refsOp({ op: 'splice', loop: sel.loop, lo: sel.idx, removed: 1, added: 0 }, pts.length);
     pts.splice(sel.idx, 1);
     if (pts.length < 3) {
+      this._refsOp({ op: 'deleteLoop', loop: sel.loop });
       if (this._isRegionLoop(sel.loop)) {
         this.sections.splice(sel.loop - REGION_LOOP_BASE, 1);
         if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
@@ -601,6 +977,7 @@ export class TraceEditor {
 
   _deleteCircle(idx) {
     this.pushUndo();
+    this._refsOp({ op: 'deleteCircle', idx });
     this.circles.splice(idx, 1);
     this.selection = null;
     this._notifySelect();
@@ -637,13 +1014,24 @@ export class TraceEditor {
         continue;
       }
       const drop = new Set(idxs);
+      // Remap refs as individual descending deletions so indices stay valid.
+      let len = pts.length;
+      for (const k of [...idxs].sort((a, b) => b - a)) {
+        this._refsOp({ op: 'splice', loop, lo: k, removed: 1, added: 0 }, len--);
+      }
       const kept = pts.filter((_, i) => !drop.has(i));
       pts.length = 0;
       pts.push(...kept);
     }
     // Phase 2: drop collapsed loops from the back so indices stay valid.
-    for (const h of collapseHoles.sort((a, b) => b - a)) this.holes.splice(h, 1);
-    for (const s of collapseSections.sort((a, b) => b - a)) this.sections.splice(s, 1);
+    for (const h of collapseHoles.sort((a, b) => b - a)) {
+      this._refsOp({ op: 'deleteLoop', loop: h });
+      this.holes.splice(h, 1);
+    }
+    for (const s of collapseSections.sort((a, b) => b - a)) {
+      this._refsOp({ op: 'deleteLoop', loop: REGION_LOOP_BASE + s });
+      this.sections.splice(s, 1);
+    }
     this.selectedVerts = [];
     this.selection = null;
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
@@ -660,6 +1048,7 @@ export class TraceEditor {
     if (this._isRegionLoop(loop)) { this.deleteSelectedSection(); return; }
     if (loop >= 0) {
       this.pushUndo();
+      this._refsOp({ op: 'deleteLoop', loop });
       this.holes.splice(loop, 1);
       this.selection = null;
       this._notifySelect();
@@ -679,6 +1068,7 @@ export class TraceEditor {
     const idx = this.selectedSectionIndex();
     if (idx < 1) return; // never the base
     this.pushUndo();
+    this._refsOp({ op: 'deleteLoop', loop: REGION_LOOP_BASE + idx });
     this.sections.splice(idx, 1);
     this.selection = null;
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
@@ -695,6 +1085,7 @@ export class TraceEditor {
     if (!pts || pts.length < 3) return null;
     const fit = fitCircle(resampleClosed(pts, 64));
     if (!fit) return null;
+    this._refsOp({ op: 'deleteLoop', loop: loopIdx });
     this.holes.splice(loopIdx, 1);
     this.circles.push({
       cx: fit.cx, cy: fit.cy, d: Math.round(fit.r * 2 * 20) / 20,
@@ -769,6 +1160,7 @@ export class TraceEditor {
     if (!span) return false;
     const { loop, lo, hi, pts } = span;
     this.pushUndo();
+    this._refsOp({ op: 'splice', loop, lo: lo + 1, removed: hi - lo - 1, added: 0 }, pts.length);
     pts.splice(lo + 1, hi - lo - 1); // drop interior points
     this._reselectRun(loop, lo, 2);
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
@@ -788,6 +1180,7 @@ export class TraceEditor {
     if (!fit) return null;
     this.pushUndo();
     const arc = this._arcPoints(fit.cx, fit.cy, fit.r, run[0], run[run.length - 1], run[(run.length / 2) | 0]);
+    this._refsOp({ op: 'splice', loop, lo, removed: hi - lo + 1, added: arc.length }, pts.length);
     pts.splice(lo, hi - lo + 1, ...arc);
     this._reselectRun(loop, lo, arc.length);
     this._lastArc = { loop, lo, len: arc.length, A: run[0], B: run[run.length - 1], mid: run[(run.length / 2) | 0] };
@@ -819,6 +1212,7 @@ export class TraceEditor {
     const c = dist(c1, la.mid) <= dist(c2, la.mid) ? c1 : c2;
     this.pushUndo();
     const arc = this._arcPoints(c.x, c.y, rMm, A, B, la.mid);
+    this._refsOp({ op: 'splice', loop: la.loop, lo: la.lo, removed: la.len, added: arc.length }, pts.length);
     pts.splice(la.lo, la.len, ...arc);
     la.len = arc.length;
     this._reselectRun(la.loop, la.lo, arc.length);
@@ -864,6 +1258,7 @@ export class TraceEditor {
       const a = pts[i], b = pts[i + 1];
       dense.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, b);
     }
+    this._refsOp({ op: 'splice', loop, lo, removed: hi - lo + 1, added: dense.length }, pts.length);
     pts.splice(lo, hi - lo + 1, ...dense);
     this._reselectRun(loop, lo, dense.length);
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
@@ -896,6 +1291,7 @@ export class TraceEditor {
     const kept = run.filter((_, i) => keep[i]);
     if (kept.length === run.length) return false;
     this.pushUndo();
+    this._refsOp({ op: 'splice', loop, lo, removed: hi - lo + 1, added: kept.length }, pts.length);
     pts.splice(lo, hi - lo + 1, ...kept);
     this._reselectRun(loop, lo, kept.length);
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
@@ -1089,6 +1485,36 @@ export class TraceEditor {
       }
     }
 
+    // Constrained-drag ghost: where the solver will put things on release.
+    if (this._ghost) this._drawGhost(ctx);
+
+    // Measurement annotations + constraint badges (all modes — they're
+    // user-created and cheap).
+    this._drawMeasurements(ctx);
+    this._drawConstraints(ctx);
+
+    // Picked/pending entities + the snap marker (measure/constrain modes).
+    if (this.mode === 'measure' && this._pendingPick) {
+      this._highlightRef(ctx, this._pendingPick, MEASURE_COL);
+    }
+    if (this.mode === 'constrain') {
+      for (const r of this._picks) this._highlightRef(ctx, r, '#ffd257');
+    }
+    if ((this.mode === 'measure' || this.mode === 'constrain') &&
+        this._hoverSnap && this._hoverSnap.pos && !this.panning) {
+      const { x, y } = this._hoverSnap.pos;
+      const col = this.mode === 'measure' ? MEASURE_COL : CONSTRAIN_COL;
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x, y, 1.6, 0, Math.PI * 2);
+      ctx.fillStyle = col;
+      ctx.fill();
+    }
+
     // Marquee selection rectangle
     if (this._marquee) {
       const m = this._marquee;
@@ -1104,5 +1530,207 @@ export class TraceEditor {
     }
 
     if (this.cb.onDraw) this.cb.onDraw();
+  }
+
+  // ---- measurement / constraint rendering ----
+
+  _fmtLen(mm) {
+    return this.cb.formatLen ? this.cb.formatLen(mm) : `${mm.toFixed(2)} mm`;
+  }
+
+  // Small labelled pill, centred on (x, y).
+  _dimLabel(ctx, x, y, text, color) {
+    ctx.font = 'bold 11px system-ui, sans-serif';
+    const w = ctx.measureText(text).width + 10;
+    const h = 16;
+    ctx.fillStyle = 'rgba(12, 16, 21, 0.85)';
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y - h / 2, w, h, 4);
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y);
+  }
+
+  _drawMeasurements(ctx) {
+    if (!this.measurements.length) return;
+    const geo = this._geo();
+    const S = p => this._mmToScreen(p);
+    ctx.lineWidth = 1.5;
+    for (const m of this.measurements) {
+      const info = measureInfo(m, geo);
+      if (!info) continue;
+      ctx.strokeStyle = MEASURE_COL;
+      if (info.type === 'p2p' || info.type === 'elen') {
+        const a = S(info.a), b = S(info.b);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        for (const p of [a, b]) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = MEASURE_COL;
+          ctx.fill();
+        }
+        this._dimLabel(ctx, (a.x + b.x) / 2, (a.y + b.y) / 2 - 12, this._fmtLen(info.d), MEASURE_COL);
+      } else if (info.type === 'p2e') {
+        const p = S(info.p), f = S(info.foot);
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y); ctx.lineTo(f.x, f.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        for (const q of [p, f]) {
+          ctx.beginPath();
+          ctx.arc(q.x, q.y, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = MEASURE_COL;
+          ctx.fill();
+        }
+        this._dimLabel(ctx, (p.x + f.x) / 2, (p.y + f.y) / 2 - 12, this._fmtLen(info.d), MEASURE_COL);
+      } else if (info.type === 'e2e') {
+        const mA = S({ x: (info.A.a.x + info.A.b.x) / 2, y: (info.A.a.y + info.A.b.y) / 2 });
+        const mB = S({ x: (info.B.a.x + info.B.b.x) / 2, y: (info.B.a.y + info.B.b.y) / 2 });
+        for (const E of [info.A, info.B]) {
+          const a = S(E.a), b = S(E.b);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+          ctx.lineWidth = 3;
+          ctx.globalAlpha = 0.5;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+          ctx.lineWidth = 1.5;
+        }
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(mA.x, mA.y); ctx.lineTo(mB.x, mB.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const txt = info.gap !== null
+          ? `${info.angle.toFixed(1)}° · gap ${this._fmtLen(info.gap)}`
+          : `${info.angle.toFixed(1)}°`;
+        this._dimLabel(ctx, (mA.x + mB.x) / 2, (mA.y + mB.y) / 2 - 12, txt, MEASURE_COL);
+      } else if (info.type === 'rad') {
+        const c = S({ x: info.cx, y: info.cy });
+        const r = info.r * this.pxPerMm * this.vp.scale;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(c.x + r * Math.SQRT1_2, c.y - r * Math.SQRT1_2);
+        ctx.stroke();
+        this._dimLabel(ctx, c.x, c.y - r - 12, `⌀ ${this._fmtLen(info.r * 2)}`, MEASURE_COL);
+      }
+    }
+  }
+
+  _drawConstraints(ctx) {
+    if (!this.constraints.length) return;
+    const geo = this._geo();
+    const edgeMid = ref => {
+      const e = resolveEdge(ref, geo);
+      return e ? this._mmToScreen({ x: (e.a.x + e.b.x) / 2, y: (e.a.y + e.b.y) / 2 }) : null;
+    };
+    const ptPos = ref => {
+      const p = resolvePoint(ref.kind === 'circle' ? { kind: 'center', idx: ref.idx } : ref, geo);
+      return p ? this._mmToScreen(p) : null;
+    };
+    const GLYPH = {
+      h: 'H', v: 'V', perp: '⊥', para: '∥', equal: '=', collin: '⋯',
+      conc: '◎', anchor: '⚓',
+    };
+    for (const c of this.constraints) {
+      let text = GLYPH[c.type] || '?';
+      if (c.type === 'len' || c.type === 'dist') text = this._fmtLen(c.value);
+      if (c.type === 'angle') text = `${c.value}°`;
+      // Badge position: between the involved entities.
+      const spots = c.refs
+        .map(r => r.kind === 'edge' ? edgeMid(r) : ptPos(r))
+        .filter(Boolean);
+      if (!spots.length) continue;
+      const x = spots.reduce((s, p) => s + p.x, 0) / spots.length;
+      const y = spots.reduce((s, p) => s + p.y, 0) / spots.length;
+      if (spots.length === 2) {
+        ctx.setLineDash([2, 4]);
+        ctx.strokeStyle = CONSTRAIN_COL;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        ctx.moveTo(spots[0].x, spots[0].y);
+        ctx.lineTo(spots[1].x, spots[1].y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+      this._dimLabel(ctx, x, y + 12, text, CONSTRAIN_COL);
+    }
+  }
+
+  _highlightRef(ctx, ref, color) {
+    const geo = this._geo();
+    ctx.strokeStyle = color;
+    if (ref.kind === 'edge') {
+      const e = resolveEdge(ref, geo);
+      if (!e) return;
+      const a = this._mmToScreen(e.a), b = this._mmToScreen(e.b);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.lineWidth = 4;
+      ctx.globalAlpha = 0.6;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      return;
+    }
+    if (ref.kind === 'circle' || ref.kind === 'holeloop') {
+      const c = ref.kind === 'circle' ? this.circles[ref.idx] : null;
+      if (c) {
+        const ctr = this._mmToScreen({ x: c.cx, y: c.cy });
+        ctx.beginPath();
+        ctx.arc(ctr.x, ctr.y, (c.d / 2) * this.pxPerMm * this.vp.scale + 3, 0, Math.PI * 2);
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      return;
+    }
+    const p = resolvePoint(ref, geo);
+    if (!p) return;
+    const s = this._mmToScreen(p);
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, VERT_R + 3.5, 0, Math.PI * 2);
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  _drawGhost(ctx) {
+    const g = this._ghost;
+    const stroke = loop => {
+      if (!loop || loop.length < 2) return;
+      ctx.beginPath();
+      const p0 = this._mmToScreen(loop[0]);
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < loop.length; i++) {
+        const p = this._mmToScreen(loop[i]);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    };
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 5]);
+    stroke(g.outer);
+    for (const h of g.holes) stroke(h);
+    for (let s = 1; s < g.sections.length; s++) stroke(g.sections[s].pts);
+    for (const c of g.circles) {
+      const ctr = this._mmToScreen({ x: c.cx, y: c.cy });
+      ctx.beginPath();
+      ctx.arc(ctr.x, ctr.y, (c.d / 2) * this.pxPerMm * this.vp.scale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 }

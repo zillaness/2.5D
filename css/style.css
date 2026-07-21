@@ -174,9 +174,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .file-label:hover { background: rgba(83, 169, 255, 0.08); }
 .file-label input { display: none; }
 
-.tool-row { display: flex; gap: 6px; }
+.tool-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .tool-btn {
-  flex: 1;
+  flex: 1 1 30%;
   background: var(--bg3);
   color: var(--muted);
   border: 1px solid var(--border);
@@ -186,6 +186,23 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   cursor: pointer;
 }
 .tool-btn.active { color: var(--text); border-color: var(--accent); background: rgba(83, 169, 255, 0.12); }
+
+/* Measurement / constraint annotation lists */
+.anno-list { margin: 8px 0; display: flex; flex-direction: column; gap: 4px; }
+.anno-row {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.anno-row .anno-text { flex: 1; font-variant-numeric: tabular-nums; }
+.anno-row .anno-del {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; font-size: 13px; padding: 0 2px;
+}
+.anno-row .anno-del:hover { color: var(--warn); }
 
 #stage { flex: 1; position: relative; background: var(--bg); }
 .stage-view { position: absolute; inset: 0; }

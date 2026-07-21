@@ -171,6 +171,8 @@
         <button class="tool-btn active" data-tool="edit" title="Drag vertices; click an edge to add one; right/Alt-click deletes">✎ Edit</button>
         <button class="tool-btn" data-tool="addhole" title="Click to place a circular hole">◎ Add hole</button>
         <button class="tool-btn" data-tool="region" title="Draw a section with its own thickness/offset — click points, double-click or Enter to close, Esc cancels">▱ Section</button>
+        <button class="tool-btn" data-tool="measure" title="Measure from the photo — click points, edges or holes; Esc cancels a half-done pick">📏 Measure</button>
+        <button class="tool-btn" data-tool="constrain" title="Pick one or two entities, then apply a geometric constraint">⊾ Constrain</button>
         <button class="tool-btn" data-tool="pan" title="Drag to pan">✋ Pan</button>
       </div>
       <div id="holeProps" hidden>
@@ -254,6 +256,58 @@
           <div class="field"><label>Size (mm)</label><input type="text" inputmode="decimal" id="holeEdgeBottomSize" step="0.1" min="0.1" value="0.5"></div>
         </div>
         <p id="holeFitNote" class="hint"></p>
+      </div>
+
+      <div id="measurePanel" hidden>
+        <h3>Measure</h3>
+        <p class="hint">Click a hole for ⌀ · two points for distance · point +
+        edge for offset · two edges for angle (near-parallel edges also get the
+        face-to-face gap) · an edge twice (or edge then empty space) for its
+        length. Snaps to corners, midpoints and hole centres. Esc cancels.</p>
+        <p id="measurePartInfo" class="info"></p>
+        <div id="measureList" class="anno-list"></div>
+        <div class="btn-row">
+          <button id="measureClearBtn" class="btn small">Clear all</button>
+        </div>
+      </div>
+
+      <div id="constrainPanel" hidden>
+        <h3>Constraints</h3>
+        <p class="hint">Pick one or two entities on the canvas (corner, edge,
+        or hole), then apply. Constraints re-solve while you drag; the dashed
+        ghost shows where geometry will land.</p>
+        <p id="pickInfo" class="hint"></p>
+        <div class="btn-row">
+          <button id="conH" class="btn small" disabled title="Make the edge horizontal">— H</button>
+          <button id="conV" class="btn small" disabled title="Make the edge vertical">| V</button>
+          <button id="conAnchor" class="btn small" disabled title="Pin the point — the solver moves everything else">⚓ Anchor</button>
+        </div>
+        <div class="btn-row">
+          <button id="conPerp" class="btn small" disabled title="Make two edges perpendicular">⊥ Perp</button>
+          <button id="conPara" class="btn small" disabled title="Make two edges parallel">∥ Parallel</button>
+          <button id="conEqual" class="btn small" disabled title="Make two edges the same length">= Equal</button>
+        </div>
+        <div class="btn-row">
+          <button id="conCollin" class="btn small" disabled title="Put two edges on one line">⋯ Collinear</button>
+          <button id="conConc" class="btn small" disabled title="Make two holes share a centre">◎ Concentric</button>
+        </div>
+        <div class="btn-row">
+          <button id="conLen" class="btn small" disabled title="Fix the edge's length">Length…</button>
+          <button id="conAngle" class="btn small" disabled title="Fix the angle between two edges">Angle…</button>
+          <button id="conDist" class="btn small" disabled title="Fix the distance — locate a hole or corner from a point or edge">Distance…</button>
+        </div>
+        <div class="field" id="conValueField" hidden>
+          <label id="conValueLabel" for="conValueInput">Value</label>
+          <div class="slider-row">
+            <input type="text" inputmode="decimal" id="conValueInput">
+            <button id="conValueApply" class="btn small">Apply</button>
+          </div>
+        </div>
+        <div id="constraintList" class="anno-list"></div>
+        <div class="btn-row">
+          <button id="conSolveBtn" class="btn small" title="Run the solver now">↻ Re-solve</button>
+          <button id="conClearBtn" class="btn small">Clear all</button>
+        </div>
       </div>
 
       <div class="btn-row">

@@ -1203,6 +1203,173 @@ check('auto-estimate recovers the injected k1 (~0.10)',
   lens.estK !== null && Math.abs(lens.estK - lens.injected) < 0.04,
   `est ${lens.estK}, injected ${lens.injected}`);
 
+// ---------------------------------------------------------------- measure + constraints
+const mc = await page.evaluate(async () => {
+  const M = await import('/js/measure.js');
+  const C = await import('/js/constraints.js');
+  const out = {};
+
+  // -- measurement math --
+  out.ang = M.angleBetweenDeg({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 8 });
+  out.gap = M.lineGap({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 5 }, { x: 10, y: 5 });
+  out.psd = M.pointSegDist({ x: 5, y: 3 }, { x: 0, y: 0 }, { x: 10, y: 0 }).d;
+  const loopA = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 }];
+  out.stats = M.loopStats(loopA);
+
+  // measureInfo end-to-end through refs
+  const circles = [{ cx: 10, cy: 10, d: 6 }];
+  const geo = { loop: l => l === -1 ? loopA : null, circle: i => circles[i] || null };
+  out.p2p = M.measureInfo({ type: 'p2p', refs: [
+    { kind: 'vert', loop: -1, idx: 0 }, { kind: 'vert', loop: -1, idx: 2 }] }, geo);
+  out.rad = M.measureInfo({ type: 'rad', refs: [{ kind: 'circle', idx: 0 }] }, geo);
+  out.e2e = M.measureInfo({ type: 'e2e', refs: [
+    { kind: 'edge', loop: -1, idx: 0 }, { kind: 'edge', loop: -1, idx: 2 }] }, geo);
+
+  // -- ref remapping --
+  const items = [
+    { type: 'p2p', refs: [{ kind: 'vert', loop: -1, idx: 1 }, { kind: 'vert', loop: -1, idx: 3 }] },
+    { type: 'elen', refs: [{ kind: 'edge', loop: -1, idx: 2 }] },
+    { type: 'rad', refs: [{ kind: 'circle', idx: 0 }] },
+  ];
+  // Insert a vertex at position 1: later indices shift up, circle untouched.
+  const ins = M.remapRefs(items, { op: 'splice', loop: -1, lo: 1, removed: 0, added: 1 }, 4);
+  out.insIdx = [ins[0].refs[0].idx, ins[0].refs[1].idx, ins[1].refs[0].idx];
+  // Delete vertex 1: the p2p that used it drops, the edge behind it shifts.
+  const del = M.remapRefs(items, { op: 'splice', loop: -1, lo: 1, removed: 1, added: 0 }, 4);
+  out.delKept = del.map(i => i.type);
+  out.delEdge = del.find(i => i.type === 'elen').refs[0].idx;
+  // clearLoops keeps only circle-based items.
+  out.cleared = M.remapRefs(items, { op: 'clearLoops' }).map(i => i.type);
+
+  // -- solver: skewed quad + H/V/len + anchor -> exact rectangle --
+  const quad = [{ x: 0, y: 0 }, { x: 10, y: 0.8 }, { x: 10.5, y: 6 }, { x: -0.4, y: 5.6 }];
+  const geoQ = { loop: l => l === -1 ? quad : null, circle: () => null };
+  const cons = [
+    { type: 'anchor', refs: [{ kind: 'vert', loop: -1, idx: 0 }] },
+    { type: 'h', refs: [{ kind: 'edge', loop: -1, idx: 0 }] },
+    { type: 'v', refs: [{ kind: 'edge', loop: -1, idx: 1 }] },
+    { type: 'h', refs: [{ kind: 'edge', loop: -1, idx: 2 }] },
+    { type: 'v', refs: [{ kind: 'edge', loop: -1, idx: 3 }] },
+    { type: 'len', refs: [{ kind: 'edge', loop: -1, idx: 0 }], value: 20 },
+  ];
+  const res = C.solveConstraints(geoQ, cons, {});
+  out.solved = { converged: res.converged, quad: quad.map(p => ({ x: +p.x.toFixed(4), y: +p.y.toFixed(4) })) };
+
+  // -- solver: perpendicular between two free edges --
+  const quad2 = [{ x: 0, y: 0 }, { x: 10, y: 1 }, { x: 11, y: 8 }, { x: 1, y: 9 }];
+  const geoP = { loop: l => l === -1 ? quad2 : null, circle: () => null };
+  const resP = C.solveConstraints(geoP, [
+    { type: 'perp', refs: [{ kind: 'edge', loop: -1, idx: 0 }, { kind: 'edge', loop: -1, idx: 1 }] },
+  ], {});
+  out.perpAngle = M.angleBetweenDeg(quad2[0], quad2[1], quad2[1], quad2[2]);
+  out.perpConverged = resP.converged;
+
+  // -- solver: concentric circles --
+  const circs = [{ cx: 0, cy: 0, d: 5 }, { cx: 4, cy: 2, d: 9 }];
+  const geoC = { loop: () => null, circle: i => circs[i] || null };
+  C.solveConstraints(geoC, [
+    { type: 'conc', refs: [{ kind: 'circle', idx: 0 }, { kind: 'circle', idx: 1 }] },
+  ], {});
+  out.conc = { dx: Math.abs(circs[0].cx - circs[1].cx), dy: Math.abs(circs[0].cy - circs[1].cy) };
+
+  // -- solver: fixed distance hole-to-edge (locate a hole off a datum) --
+  const base = [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 30 }, { x: 0, y: 30 }];
+  const holeC = [{ cx: 10, cy: 7, d: 5 }];
+  const geoD = { loop: l => l === -1 ? base : null, circle: i => holeC[i] || null };
+  const resD = C.solveConstraints(geoD, [
+    { type: 'anchor', refs: [{ kind: 'vert', loop: -1, idx: 0 }] },
+    { type: 'anchor', refs: [{ kind: 'vert', loop: -1, idx: 1 }] },
+    { type: 'dist', refs: [{ kind: 'center', idx: 0 }, { kind: 'edge', loop: -1, idx: 0 }], value: 12 },
+  ], {});
+  out.holeDist = Math.abs(holeC[0].cy - 12); // edge 0 is the y=0 line
+  out.holeDistConverged = resD.converged;
+
+  return out;
+});
+
+console.log('\nMeasurement math');
+check('angle between perpendicular segments = 90°', near(mc.ang, 90, 1e-9), `${mc.ang}`);
+check('face-to-face gap of parallel edges = 5 mm', near(mc.gap, 5, 1e-9), `${mc.gap}`);
+check('point→segment distance = 3 mm', near(mc.psd, 3, 1e-9), `${mc.psd}`);
+check('loop stats 40×30: bbox + perimeter + area',
+  mc.stats && near(mc.stats.bbox.w, 40, 1e-9) && near(mc.stats.bbox.h, 30, 1e-9) &&
+  near(mc.stats.perimeter, 140, 1e-9) && near(mc.stats.area, 1200, 1e-9),
+  mc.stats ? `${mc.stats.bbox.w}×${mc.stats.bbox.h}, per ${mc.stats.perimeter}, area ${mc.stats.area}` : 'null');
+check('p2p via refs: diagonal 50 mm with Δ40/Δ30',
+  mc.p2p && near(mc.p2p.d, 50, 1e-9) && near(mc.p2p.dx, 40, 1e-9) && near(mc.p2p.dy, 30, 1e-9),
+  mc.p2p ? `${mc.p2p.d}` : 'null');
+check('radius via circle ref = 3 mm', mc.rad && near(mc.rad.r, 3, 1e-9), mc.rad ? `${mc.rad.r}` : 'null');
+check('e2e on opposite rectangle edges: parallel + 30 mm gap',
+  mc.e2e && mc.e2e.gap !== null && near(mc.e2e.gap, 30, 1e-9),
+  mc.e2e ? `angle ${mc.e2e.angle}, gap ${mc.e2e.gap}` : 'null');
+
+console.log('\nRef remapping');
+check('insert shifts later vert/edge refs up', String(mc.insIdx) === '2,4,3', String(mc.insIdx));
+check('delete drops the measurement using the vertex, keeps the rest',
+  String(mc.delKept) === 'elen,rad' && mc.delEdge === 1, `kept ${mc.delKept}, edge -> ${mc.delEdge}`);
+check('clearLoops keeps circle-based items only', String(mc.cleared) === 'rad', String(mc.cleared));
+
+console.log('\nConstraint solver');
+{
+  const q = mc.solved.quad;
+  const rectOk = near(q[0].x, 0, 1e-3) && near(q[0].y, 0, 1e-3) &&
+    near(q[1].y, q[0].y, 1e-3) && near(q[2].x, q[1].x, 1e-3) &&
+    near(q[3].y, q[2].y, 1e-3) && near(q[0].x, q[3].x, 1e-3) &&
+    near(Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y), 20, 1e-2);
+  check('H/V/len/anchor squares a skewed quad into a 20-wide rectangle',
+    mc.solved.converged && rectOk, JSON.stringify(q));
+}
+check('perpendicular constraint reaches 90°',
+  mc.perpConverged && near(mc.perpAngle, 90, 0.05), `${mc.perpAngle.toFixed(3)}°`);
+check('concentric merges circle centres',
+  mc.conc.dx < 1e-3 && mc.conc.dy < 1e-3, `Δ ${mc.conc.dx}, ${mc.conc.dy}`);
+check('hole located 12 mm off an anchored edge',
+  mc.holeDistConverged && mc.holeDist < 1e-2, `err ${mc.holeDist}`);
+
+// ---------------------------------------------------------------- measure/constrain UI pipeline
+const ui = await page.evaluate(() => {
+  const ed = window.__app.traceEditor;
+  // Fresh synthetic session: 40×30 rectangle + one 5 mm hole on a blank backdrop.
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 300;
+  ed.setRectified(c, 4);
+  ed.setTrace([{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 }], []);
+  ed.setCircles([{
+    cx: 10, cy: 10, d: 5, type: 'through', side: 'top', depth: 3,
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' },
+  }]);
+  const sp = mm => ed._mmToScreen(mm);
+
+  // Measure: two vertex picks -> p2p; a rim pick -> radius.
+  ed.setMode('measure');
+  ed._measureDown(sp({ x: 0, y: 0 }));
+  ed._measureDown(sp({ x: 40, y: 30 }));
+  ed._measureDown(sp({ x: 12.5, y: 10 })); // on the hole rim
+  const measures = ed.measurements.map(m => m.type);
+
+  // Constrain: skew the top edge, pick it, apply H — solver levels it.
+  ed.setMode('constrain');
+  ed.outer[1].y = 2;
+  ed._constrainDown(sp({ x: 20, y: 1 })); // on edge 0
+  const picks = ed.getPicks().map(r => r.kind);
+  const added = ed.addConstraintFromPicks('h');
+  const levelled = Math.abs(ed.outer[0].y - ed.outer[1].y);
+
+  // The p2p measurement survives + live-updates after the solve.
+  const geo = ed._geo();
+  return { measures, picks, added, levelled, nCons: ed.constraints.length };
+});
+
+console.log('\nMeasure/constrain UI pipeline');
+check('vertex picks produce a p2p, rim pick a radius measurement',
+  String(ui.measures) === 'p2p,rad', String(ui.measures));
+check('edge pick + H constraint levels the edge via the solver',
+  ui.picks.length === 1 && ui.picks[0] === 'edge' && ui.added &&
+  ui.nCons === 1 && ui.levelled < 1e-3,
+  `picks ${ui.picks}, Δy ${ui.levelled}`);
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 
