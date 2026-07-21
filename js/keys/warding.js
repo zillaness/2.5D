@@ -7,9 +7,10 @@
 // make a key that actually enters the lock (a flat blade won't, for Schlage C or
 // BEST A).
 //
-// In-scope residential + common-commercial keyways (incl. BEST SFIC). keygen
-// also carries Medeco high-security sections — deliberately excluded (patented/
-// restricted). Full raw extract: docs/key-refs/derived/warding-profiles.json.
+// Currently wired: residential + BEST SFIC. keygen also carries Medeco
+// high-security sections — deferred for now (not excluded on principle; scope is
+// authorization-based, see blanks.js). They can be added from the full raw
+// extract when needed: docs/key-refs/derived/warding-profiles.json.
 
 export const WARDING = {
   "schlage:c": { thickness: 1.9103, height: 8.7123, profile: [[0.9552,0.0003], [0.9548,1.5157], [-0.0003,3.5477], [-0.0003,3.8017], [0.9548,4.225], [0.9545,8.7123], [-0.0003,8.7123], [-0.0003,5.0717], [-0.9551,4.5638], [-0.9552,3.2937], [-0.0685,1.431], [-0.0685,1.177], [-0.9551,0.7536], [-0.9551,0.0]] },

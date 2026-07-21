@@ -2,11 +2,17 @@
 // into "photograph a KEY". Each entry pairs a manufacturer keyway with its
 // depth-and-spacing spec (how the bitting code maps to physical cut geometry).
 //
-// SCOPE: ordinary US residential + common-commercial pin-tumbler blanks (incl.
-// BEST SFIC A2 — a standard, widely-available commercial keyway). Restricted,
-// patented, or registered high-security keyways (Medeco, Abloy, Mul-T-Lock, …)
-// are deliberately absent — they are legally controlled and out of scope.
-// Duplicate only keys/cores you own or are authorized to copy.
+// SCOPE: the gate is AUTHORIZATION, not keyway class. Duplicate only keys/cores
+// you own or are authorized to copy — that responsibility sits with the user, the
+// same as a locksmith or a code machine. The warding/spec data is public
+// (keygen is CC0, patents are public), so the library isn't restricted by keyway;
+// high-security keyways can be added as needed.
+//
+// HONEST LIMITATION (not a scope rule): a flat, top-down photo reads keyway +
+// cut DEPTHS only. High-security mechanisms that depend on more than depth —
+// Medeco's rotating pins / sidebar ANGLES, dimple positions, Abloy disc
+// rotations — cannot be recovered from such a photo; those keys need the extra
+// parameters supplied by hand. So they're addable but only partially photo-driven.
 //
 // ── Units ──────────────────────────────────────────────────────────────────
 // US key specs are published in inches, so every length in a `spec` is inches.
