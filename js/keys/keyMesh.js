@@ -86,11 +86,21 @@ function addBlade(mesh, blank, code) {
   const s = blank.spec;
   const w = wardingFor(blank);
   const hTopAt = topHeightFn(blank, code);
-  const tipL = cutCentre(s, s.positions - 1) * IN_TO_MM + 2.5; // small tip margin
+  const lastCut = cutCentre(s, s.positions - 1) * IN_TO_MM;
+  const tipRamp = 3.5;                       // mm of tapered tip
+  const tipFlat = 1.0;                       // mm of full-height blade past last cut
+  const tipL = lastCut + tipFlat + tipRamp;
+  const rampStart = tipL - tipRamp;
+  const hMid = w.height / 2;
+  // Taper the tip: scale the cross-section's height toward the blade centreline
+  // over the last few mm so the key ends in a ramp/point that guides into the
+  // keyway, instead of a blunt square end.
+  const scaleAt = (L) => L <= rampStart ? 1
+    : Math.max(0.12, 1 - (L - rampStart) / tipRamp);
 
   // L breakpoints: cut centres, flat edges and wall feet, plus a fine grid, so
-  // the milled V-cuts are captured crisply.
-  const bp = new Set([0, tipL]);
+  // the milled V-cuts (and the tip ramp) are captured crisply.
+  const bp = new Set([0, rampStart, tipL]);
   const flatHalf = (s.cutFlat * IN_TO_MM) / 2;
   const run = Math.tan((s.cutAngle * Math.PI / 180) / 2);
   const uncut = w.height;
@@ -105,16 +115,14 @@ function addBlade(mesh, blank, code) {
   for (let L = 0; L <= tipL; L += 0.4) bp.add(L);
   const stations = [...bp].sort((a, b) => a - b);
 
-  // Loft rings (each a clipped profile at its L), connected by quad walls.
-  const rings = stations.map(L => {
-    const loop = clipProfileAtTop(w.profile, hTopAt(L));
-    const flip = area2(loop) < 0 ? loop.slice().reverse() : loop; // CCW in t,h
-    return flip.map(([t, h]) => mesh.v(L, t, h));
-  });
+  // Clipped, tip-scaled cross-section at each station.
   const ringLoops = stations.map(L => {
     const loop = clipProfileAtTop(w.profile, hTopAt(L));
-    return area2(loop) < 0 ? loop.slice().reverse() : loop;
+    const oriented = area2(loop) < 0 ? loop.slice().reverse() : loop; // CCW in t,h
+    const f = scaleAt(L);
+    return f === 1 ? oriented : oriented.map(([t, h]) => [t, hMid + (h - hMid) * f]);
   });
+  const rings = stations.map((L, i) => ringLoops[i].map(([t, h]) => mesh.v(L, t, h)));
 
   const m = ringLoops[0].length;
   for (let r = 0; r < rings.length - 1; r++) {
