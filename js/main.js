@@ -30,6 +30,7 @@ import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
 import { Viewer3D } from './viewer3d.js';
 import { importCad } from './import/cadImport.js';
+import { importPDF } from './import/pdfImport.js';
 
 const $ = id => document.getElementById(id);
 
@@ -1539,7 +1540,8 @@ function openCadModal(result, name) {
     cell.appendChild(cv);
     const cap = document.createElement('div');
     cap.className = 'cap';
-    cap.textContent = `${fmtDim(v.w)} × ${fmtDim(v.h)} ${state.units}`;
+    const pg = v.page != null && cadImportState.numPages > 1 ? ` · p${v.page + 1}` : '';
+    cap.textContent = `${fmtDim(v.w)} × ${fmtDim(v.h)} ${state.units}${pg}`;
     cell.appendChild(cap);
     cell.addEventListener('click', () => {
       cadSelected = i;
@@ -1577,9 +1579,39 @@ function useCadView() {
   toast(`Imported “${name}” from ${cadImportState.format.toUpperCase()}.`);
 }
 
-$('cadFileInput').addEventListener('change', e => {
+// Route an import result into the picker (or straight to trace when a single
+// view has known units). Shared by DXF/SVG and PDF.
+function handleImportResult(result, name) {
+  if (!result.views.length) {
+    toast((result.warnings && result.warnings[0]) ||
+      'No closed shapes found — the drawing may be open lines only.');
+    return;
+  }
+  if (result.views.length === 1 && result.unitsKnown) {
+    cadImportState = { ...result, name };
+    cadSelected = 0;
+    useCadView();
+  } else {
+    openCadModal(result, name);
+  }
+}
+
+$('cadFileInput').addEventListener('change', async e => {
   const file = e.target.files[0];
   if (!file) return;
+  e.target.value = '';
+  if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+    toast('Reading PDF…');
+    try {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      const result = await importPDF(buf);
+      handleImportResult(result, file.name);
+    } catch (err) {
+      console.error('PDF import failed', err);
+      toast('Could not read that PDF.');
+    }
+    return;
+  }
   const reader = new FileReader();
   reader.onload = () => {
     let result;
@@ -1590,22 +1622,9 @@ $('cadFileInput').addEventListener('change', e => {
       toast('Could not read that file.');
       return;
     }
-    if (!result.views.length) {
-      toast((result.warnings && result.warnings[0]) ||
-        'No closed shapes found — the drawing may be open lines only.');
-      return;
-    }
-    // Single view with known units → load straight away; else pick/confirm.
-    if (result.views.length === 1 && result.unitsKnown) {
-      cadImportState = { ...result, name: file.name };
-      cadSelected = 0;
-      useCadView();
-    } else {
-      openCadModal(result, file.name);
-    }
+    handleImportResult(result, file.name);
   };
   reader.readAsText(file);
-  e.target.value = '';
 });
 $('cadCloseBtn').addEventListener('click', () => { $('cadModal').hidden = true; });
 $('cadModal').addEventListener('pointerdown', e => { if (e.target === $('cadModal')) $('cadModal').hidden = true; });

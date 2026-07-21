@@ -67,6 +67,45 @@ function check(name, ok, detail = '') {
 }
 const near = (a, b, tol) => Math.abs(a - b) <= tol;
 
+// Build a minimal valid uncompressed single-page PDF from a content stream,
+// with correct xref offsets. Used for vector-PDF import fixtures.
+function buildPDF(content, mediabox = [0, 0, 300, 220]) {
+  const objs = [];
+  objs[1] = `<< /Type /Catalog /Pages 2 0 R >>`;
+  objs[2] = `<< /Type /Pages /Kids [3 0 R] /Count 1 >>`;
+  objs[3] = `<< /Type /Page /Parent 2 0 R /MediaBox [${mediabox.join(' ')}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>`;
+  objs[4] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+  objs[5] = `<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>`;
+  let pdf = '%PDF-1.4\n';
+  const offsets = [];
+  for (let i = 1; i < objs.length; i++) { offsets[i] = pdf.length; pdf += `${i} 0 obj\n${objs[i]}\nendobj\n`; }
+  const xrefOff = pdf.length;
+  pdf += `xref\n0 ${objs.length}\n0000000000 65535 f \n`;
+  for (let i = 1; i < objs.length; i++) pdf += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objs.length} /Root 1 0 R >>\nstartxref\n${xrefOff}\n%%EOF`;
+  return Buffer.from(pdf, 'latin1');
+}
+// A ⌀d circle (mm) drawn as 4 cubic beziers in PDF user space (pt).
+function pdfCircle(cxMM, cyMM, dMM) {
+  const P = 72 / 25.4, r = (dMM / 2) * P, k = 0.5522847498 * r, cx = cxMM * P, cy = cyMM * P;
+  return [
+    `${cx + r} ${cy} m`,
+    `${cx + r} ${cy + k} ${cx + k} ${cy + r} ${cx} ${cy + r} c`,
+    `${cx - k} ${cy + r} ${cx - r} ${cy + k} ${cx - r} ${cy} c`,
+    `${cx - r} ${cy - k} ${cx - k} ${cy - r} ${cx} ${cy - r} c`,
+    `${cx + k} ${cy - r} ${cx + r} ${cy - k} ${cx + r} ${cy} c`, 'h S',
+  ].join('\n');
+}
+// An 80×50 mm rectangle (origin 10,10 mm) + a ⌀12 mm hole + a "50" dimension.
+function rectMM(x, y, w, h) {
+  const P = 72 / 25.4;
+  return `${x*P} ${y*P} m ${(x+w)*P} ${y*P} l ${(x+w)*P} ${(y+h)*P} l ${x*P} ${(y+h)*P} l h S`;
+}
+const FIXTURE_PDF = buildPDF(
+  `1 0 0 RG 1 w\n${rectMM(10, 10, 80, 50)}\n${pdfCircle(50, 35, 12)}\n` +
+  `BT /F1 10 Tf ${28 * 72 / 25.4} ${5 * 72 / 25.4} Td (50) Tj ET`
+);
+
 const server = await serveStatic();
 const port = server.address().port;
 const execPath = findChromium();
@@ -1202,6 +1241,72 @@ check('correction recovers 80 mm object width better than none',
 check('auto-estimate recovers the injected k1 (~0.10)',
   lens.estK !== null && Math.abs(lens.estK - lens.injected) < 0.04,
   `est ${lens.estK}, injected ${lens.injected}`);
+
+// ---------- 15. PDF import (Blueprint fork): vector geometry → view ----------
+
+const pdfB64 = FIXTURE_PDF.toString('base64');
+await page.waitForFunction(() => window.pdfjsLib, null, { timeout: 8000 }).catch(() => {});
+const pdfHasLib = await page.evaluate(() => !!window.pdfjsLib);
+
+let pdfRes = null;
+if (pdfHasLib) {
+  pdfRes = await page.evaluate(async (b64) => {
+    const { importPDF } = await import('./js/import/pdfImport.js');
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const r = await importPDF(bytes);
+    const v = r.views[0];
+    return {
+      count: r.views.length, unitsKnown: r.unitsKnown, numPages: r.numPages,
+      w: v ? v.w : null, h: v ? v.h : null, holes: v ? v.holes.length : null,
+      texts: (r.texts || []).map(t => t.str),
+    };
+  }, pdfB64);
+}
+
+console.log('\nPDF import — vector geometry → view (Blueprint)');
+check('pdf.js loaded (global pdfjsLib)', pdfHasLib);
+if (pdfRes) {
+  check('PDF vector parses to ~80×50 mm with 1 hole',
+    pdfRes.w != null && near(pdfRes.w, 80, 0.6) && near(pdfRes.h, 50, 0.6) && pdfRes.holes === 1,
+    pdfRes.w != null ? `${pdfRes.w.toFixed(1)}×${pdfRes.h.toFixed(1)}, ${pdfRes.holes} hole` : 'no view');
+  check('PDF reports unconfirmed units (needs scale confirm)', pdfRes.unitsKnown === false);
+  check('PDF text layer read (found "50")', pdfRes.texts.includes('50'), pdfRes.texts.join(','));
+}
+
+// Integration: drive the file input with the PDF → view/scale modal → Use →
+// step 2 → watertight solid.
+if (pdfHasLib) {
+  await page.setInputFiles('#cadFileInput',
+    { name: 'part.pdf', mimeType: 'application/pdf', buffer: FIXTURE_PDF });
+  await page.waitForSelector('#cadModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  const modalUp = await page.evaluate(() => !document.getElementById('cadModal').hidden);
+  await page.evaluate(() => { document.getElementById('cadWidth').value = '80'; });
+  await page.click('#cadUseBtn');
+  await page.waitForFunction(() =>
+    window.__app.state.step === 2 && window.__app.traceEditor.outer.length >= 4, null, { timeout: 8000 }).catch(() => {});
+  const pdfInt = await page.evaluate(async () => {
+    const app = window.__app;
+    const t = app.traceEditor.getTrace();
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of t.outer) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+    const { buildModel } = await import('./js/mesh.js');
+    const mesh = buildModel(t.outer, t.holes, t.circles, app.state.regions, { arcSegments: 8, chordTol: 0.4 });
+    let bad = 0;
+    if (mesh) {
+      const { positions, indices } = mesh;
+      const edge = new Map();
+      const vk = i => `${positions[i*3].toFixed(3)},${positions[i*3+1].toFixed(3)},${positions[i*3+2].toFixed(3)}`;
+      for (let i = 0; i < indices.length; i += 3) for (let e = 0; e < 3; e++) { const a = vk(indices[i+e]), b = vk(indices[i+(e+1)%3]); const key = a<b?a+'|'+b:b+'|'+a; edge.set(key, (edge.get(key)||0)+1); }
+      for (const n of edge.values()) if (n !== 2) bad++;
+    }
+    return { w: maxX - minX, h: maxY - minY, holes: t.holes.length, tris: mesh ? mesh.stats.triangles : 0, bad };
+  });
+  check('PDF file-input lands an 80×50 trace with a hole in step 2',
+    near(pdfInt.w, 80, 1) && near(pdfInt.h, 50, 1) && pdfInt.holes === 1,
+    `${pdfInt.w.toFixed(1)}×${pdfInt.h.toFixed(1)}, ${pdfInt.holes} hole (modal ${modalUp})`);
+  check('imported PDF builds a watertight solid', pdfInt.tris > 100 && pdfInt.bad === 0,
+    `${pdfInt.tris} tris, ${pdfInt.bad} bad`);
+}
 
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;

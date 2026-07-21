@@ -31,6 +31,12 @@ const clipperMin = (await esbuild.transform(read('vendor/clipper.js'), {
   minify: true, logLevel: 'silent',
 })).code;
 
+// pdf.js: the lib runs as a global (window.pdfjsLib); its worker is inlined as
+// a source string that the app turns into a Blob URL at runtime (so PDF import
+// works from file:// with no external worker file).
+const pdfMin = read('vendor/pdf.min.js');
+const pdfWorker = read('vendor/pdf.worker.min.js');
+
 const css = read('css/style.css');
 
 // Body markup from index.html, minus the external script/style references
@@ -47,6 +53,8 @@ const inner =
   `<style>\n${css}\n</style>\n` +
   body.trim() + '\n' +
   `<script>${clipperMin}</script>\n` +
+  `<script>${pdfMin}</script>\n` +
+  `<script>window.__PDF_WORKER_SRC__=${JSON.stringify(pdfWorker)};</script>\n` +
   `<script>${appBundle}</script>\n`;
 
 const full =

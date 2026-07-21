@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="css/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📐</text></svg>">
 <script src="vendor/clipper.js"></script>
+<script src="vendor/pdf.min.js"></script>
 <script type="importmap">
 {
   "imports": {
@@ -108,12 +109,13 @@
 
       <h3>Or import a drawing</h3>
       <label class="file-label" style="border-color:var(--good);color:var(--good)">
-        <input type="file" id="cadFileInput" accept=".dxf,.svg,image/svg+xml,application/dxf">
-        <span>⬘ Import CAD file (DXF / SVG)…</span>
+        <input type="file" id="cadFileInput" accept=".dxf,.svg,.pdf,image/svg+xml,application/dxf,application/pdf">
+        <span>⬘ Import drawing (DXF / SVG / PDF)…</span>
       </label>
       <p class="hint">Skip the photo — import an existing vector drawing straight
-      into the trace. Units come from the file. (DWG isn't supported — export it
-      as DXF from your CAD app.)</p>
+      into the trace. DXF/SVG carry their own units; for PDF you confirm the
+      view and scale. (DWG isn't supported — export it as DXF; scanned PDFs need
+      OCR, coming later.)</p>
     </section>
 
     <!-- ============ Step 2 ============ -->
