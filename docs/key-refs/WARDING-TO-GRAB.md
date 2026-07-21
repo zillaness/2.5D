@@ -44,13 +44,17 @@ flat "key-maker" model.
 
 Tier 1 — covers the large majority of US homes/padlocks:
 
+Warding for SC / KW / M is now **sourced from ervanalb/keygen (CC0)** →
+`js/keys/warding.js`. keygen does NOT cover Yale / Weiser / Sargent / Arrow /
+Dexter, so those remain to source.
+
 | Keyway | Brand | Notes | Status |
 |---|---|---|---|
-| **KW1** | Kwikset | 5-pin; newer Weiser + many big-box locks share it | ✅ flat model in hand (`KWIKSET-MODULAR-v2.step`) |
-| **SC1** | Schlage | 5-pin, the other dominant residential keyway | need flat model / cross-section |
-| **WR5** | Weiser | 5-pin (older Weiser); newer Weiser = KW1 | need |
-| **Y1** | Yale | 5-pin | need |
-| **M1** | Master Lock | 4-pin padlocks (the 1K/1092 blank) | need flat model / cross-section |
+| **KW1** | Kwikset | 5-pin; newer Weiser + many big-box locks share it | ✅ keygen `kwikset:kw1` (+ flat STEP on hand) |
+| **SC1/SC4** | Schlage | dominant residential; C section (paracentric) | ✅ keygen C-family (`schlage:c`…`:l`) + STL |
+| **M1** | Master Lock | 4-pin padlocks (1K/1092 blank) | ✅ keygen `master:k1` |
+| **WR5** | Weiser | 5-pin (older Weiser); newer Weiser = KW1 | 🟠 need (not in keygen) |
+| **Y1** | Yale | 5-pin | 🟠 need (not in keygen) |
 
 Tier 2 — common enough to be worth having:
 
