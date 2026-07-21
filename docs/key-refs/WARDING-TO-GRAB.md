@@ -1,10 +1,34 @@
 # Warding / keyway reference to collect — "have and not need"
 
-A prioritized list of common US residential keyways to eventually collect profiles
-for. **For the flat-key path we don't cut side grooves**, so what actually matters
-per keyway is the **max blade width + height + thickness that fits the keyway**
-(plus the bow). A keyway **cross-section** (blade end-on) gives exactly that, and a
-flat "key-maker" model gives the blade outline + bow. Either is worth having.
+"Warding" here = the **keyway section**: the side-groove profile of the blade.
+Schlage is a *sectional / multiplex* system — one depth-and-spacing shared across
+a whole family of sections, where **SC1/SC4 = the C section**.
+
+### Schlage Classic multiplex sections
+
+- **Primary sections:** C, E, F, G, H, J, K, L, M (D and I are skipped).
+- **Paired multiplex sections:** CE, EF, FG, GH, HJ, JK, KL, LM — a paired blank
+  is warded to enter **both** of its neighbouring sections (e.g. CE enters C and
+  E). This nesting is the basis of Schlage's multiplex master keying, with the
+  higher pairs acting as master sections over the ones below.
+- All of them share the same depth-and-spacing (verified for C as SC1/SC4); only
+  the blade grooves differ. Confirm exact cross-operation against a Schlage
+  sectional keyway chart when sourcing real blanks.
+- Restricted overlays (Everest C123, Primus, Everest 29) are out of scope.
+
+Kwikset is effectively a single section (**KW1**, with **KW10** the 6-pin).
+Master/Weiser/Yale each have one common section.
+
+## The flat-key simplification (why section usually doesn't matter for us)
+
+The wards in a lock's keyway are ribs that the **blank** must clear. A **flat**
+blade has **no ribs**, so it slides past any section's wards as long as the blade
+**width** fits the keyway's narrowest point. **So one flat blade per manufacturer
+enters C, E, F… alike** — we do NOT need per-section warding for flat printing.
+Section profiles only matter if we ever cut *real warded blanks* (the "have and
+not need" case). What a flat key actually needs per keyway: **max blade width +
+height + thickness + bow** — from a keyway **cross-section** (blade end-on) or a
+flat "key-maker" model.
 
 ## Formats I can ingest (all fine)
 
