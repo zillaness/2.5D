@@ -9,6 +9,7 @@
 
 import {
   getBlank, cutCentre, removalForCode, codeForRemoval, codeRange,
+  verifiedBlanks, BLANKS,
 } from '../js/keys/blanks.js';
 import {
   encodeToProfile, decodeBitting, checkMACS, codeInRange,
@@ -47,6 +48,16 @@ console.log('Blank library sanity');
   check('KW1 has 7 depths (1–7), MACS 4',
     kw1.spec.depthCount === 7 && eq(codeRange(kw1.spec), [1, 7]) && kw1.spec.macs === 4);
   check('SC4 is 6 positions', sc4.spec.positions === 6);
+  // Master Lock M1 is present but provisional — confirmed fields only.
+  const m1 = getBlank('M1');
+  check('M1 present, 4 positions, 8 depths (0–7), step 0.0155"',
+    !!m1 && m1.spec.positions === 4 && m1.spec.depthCount === 8 &&
+    near(m1.spec.depthStep, 0.0155, 1e-9));
+  check('M1 flagged provisional (verified === false)', m1.verified === false);
+  check('SC1/SC4/KW1 flagged verified', sc1.verified && sc4.verified && kw1.verified);
+  check('verifiedBlanks() excludes the provisional M1',
+    verifiedBlanks().every(b => b.id !== 'M1') && verifiedBlanks().length === 3,
+    verifiedBlanks().map(b => b.id).join(','));
   // A KW1 code-1 cut removes the published shallowest-cut amount.
   check('KW1 code 1 removes 0.008", code 7 removes 0.146"',
     near(removalForCode(kw1.spec, 1), 0.008, 1e-9) &&
@@ -61,6 +72,9 @@ const CASES = [
   { id: 'SC1', code: [1, 0, 3, 4, 5] },   // adjacent diffs 1,3,1,1  ≤ MACS 7
   { id: 'SC4', code: [3, 2, 5, 4, 1, 6] },// diffs 1,3,1,3,5         ≤ 7
   { id: 'KW1', code: [1, 3, 5, 4, 2] },   // diffs 2,2,1,2           ≤ MACS 4
+  // M1 exercises the 4-pin path. NB: a passing round-trip validates the
+  // encode/decode pipeline, not M1's (provisional) absolute spec numbers.
+  { id: 'M1', code: [0, 3, 5, 2] },       // diffs 3,2,3             ≤ 7
 ];
 for (const { id, code } of CASES) {
   const { spec } = getBlank(id);

@@ -70,19 +70,65 @@ const KWIKSET_SPEC = {
   bladeHeight: 0.335,
 };
 
+// Master Lock M1 (padlock keyway). PROVISIONAL — only some fields are confirmed.
+// Confirmed across sources: 4 cut positions, depths 0–7 (8 depths), increment
+// 0.0155". NOT yet confirmed (proxy blocks the Master Lock technical manual):
+// spacing, first cut, cut angle, MACS, root depths — the values below marked
+// UNVERIFIED are best-estimates and must be replaced from the manufacturer chart
+// (top of docs/key-refs/PULL-LIST) before this blank drives a cut key. The blank
+// carries `verified: false` so the UI/mesh can warn or gate on it.
+const MASTER_M1_SPEC = {
+  unit: 'in',
+  firstCut: 0.200,         // UNVERIFIED estimate
+  spacing: 0.156,          // UNVERIFIED estimate (Master often cited at .156)
+  codeMin: 0,
+  depthCount: 8,           // codes 0–7  (confirmed: 0–7 depth-and-spacing set)
+  depthStep: 0.0155,       // confirmed: Master increment .0155"
+  rootRemovalAtMin: 0.0,   // UNVERIFIED estimate (code 0 == uncut)
+  cutAngle: 90,            // UNVERIFIED estimate
+  cutFlat: 0.030,          // UNVERIFIED estimate
+  macs: 7,                 // UNVERIFIED estimate
+  bladeHeight: 0.335,      // UNVERIFIED estimate
+};
+
 // sectionProfile (the warded blade cross-section) is intentionally null for now.
 // It's the make-or-break data for a key that actually enters the lock and must
 // be sourced/measured separately; v1 decodes bitting without it and the mesh can
 // start from a plain rectangular blade until real profiles land.
+// Roadmap order (per product owner): KW1, SC1, M1, SC4 first; then WR5, Y1, S1,
+// A1, KW10 as the next wave. `verified` marks whether every spec number has been
+// checked against an authoritative chart — provisional blanks should be gated /
+// warned in the UI and never trusted to cut a physical key.
 export const BLANKS = [
+  {
+    id: 'KW1',
+    brand: 'Kwikset',
+    keyway: 'KW1',
+    name: 'Kwikset KW1 (5-pin)',
+    positions: 5,
+    verified: true,
+    sectionProfile: null,
+    spec: { ...KWIKSET_SPEC, positions: 5 },
+  },
   {
     id: 'SC1',
     brand: 'Schlage',
     keyway: 'SC1',
     name: 'Schlage SC1 (5-pin)',
     positions: 5,
+    verified: true,
     sectionProfile: null,
     spec: { ...SCHLAGE_SPEC, positions: 5 },
+  },
+  {
+    id: 'M1',
+    brand: 'Master Lock',
+    keyway: 'M1',
+    name: 'Master Lock M1 (4-pin, provisional)',
+    positions: 4,
+    verified: false,        // spacing/first-cut/angle/MACS not yet confirmed
+    sectionProfile: null,
+    spec: { ...MASTER_M1_SPEC, positions: 4 },
   },
   {
     id: 'SC4',
@@ -90,22 +136,19 @@ export const BLANKS = [
     keyway: 'SC4',
     name: 'Schlage SC4 (6-pin)',
     positions: 6,
+    verified: true,
     sectionProfile: null,
     spec: { ...SCHLAGE_SPEC, positions: 6 },
-  },
-  {
-    id: 'KW1',
-    brand: 'Kwikset',
-    keyway: 'KW1',
-    name: 'Kwikset KW1 (5-pin)',
-    positions: 5,
-    sectionProfile: null,
-    spec: { ...KWIKSET_SPEC, positions: 5 },
   },
 ];
 
 export function getBlank(id) {
   return BLANKS.find(b => b.id === id) || null;
+}
+
+// Blanks whose every spec number is confirmed — the ones safe to cut from.
+export function verifiedBlanks() {
+  return BLANKS.filter(b => b.verified);
 }
 
 // Inclusive [min, max] code digits allowed by a spec.
