@@ -34,15 +34,41 @@ export function snapDepthMm(spec, mm) {
 //   opts.cutShift   : per-position u nudge (mm) — the cut-centre handles
 //   opts.overrides  : { [position]: code } — the depth handle, user-set digit
 // Returns { code, cuts:[{ i, u, depthMm, code, residual, overridden }], macs }.
+// Find the blade's actual cut valleys (local minima of h), most-prominent first,
+// at least minSep apart, returned as u-positions (mm) sorted bow→tip. Registering
+// to these instead of a rigid comb is robust to scale/perspective drift.
+export function findValleys(profile, count, minSepMm) {
+  const n = profile.length;
+  if (n < 5) return [];
+  const h = profile.map(p => p.h), sm = [];
+  for (let i = 0; i < n; i++) { let s = 0, c = 0; for (let j = -3; j <= 3; j++) { const t = i + j; if (t >= 0 && t < n) { s += h[t]; c++; } } sm.push(s / c); }
+  const cand = [];
+  for (let i = 2; i < n - 2; i++) {
+    if (sm[i] <= sm[i - 1] && sm[i] < sm[i + 1]) {
+      let l = sm[i], r = sm[i];
+      for (let j = i; j >= Math.max(0, i - 60); j--) l = Math.max(l, sm[j]);
+      for (let j = i; j < Math.min(n, i + 60); j++) r = Math.max(r, sm[j]);
+      cand.push({ u: profile[i].u, prom: Math.min(l, r) - sm[i] });
+    }
+  }
+  cand.sort((a, b) => b.prom - a.prom);
+  const chosen = [];
+  for (const c of cand) { if (chosen.every(x => Math.abs(x.u - c.u) >= minSepMm)) { chosen.push(c); if (chosen.length >= count) break; } }
+  return chosen.map(c => c.u).sort((a, b) => a - b);
+}
+
 export function decode(spec, profile, opts = {}) {
   const shoulderU = opts.shoulderU ?? 0;
   const half = (opts.window ?? 0.35) * spacingMm(spec);
   const cutShift = opts.cutShift || {};
   const overrides = opts.overrides || {};
+  const cutUs = opts.cutUs;   // optional: sample at these actual valley u's
   const cuts = [];
 
   for (let i = 0; i < spec.positions; i++) {
-    const u = cutCentreMm(spec, i) + shoulderU + (cutShift[i] || 0);
+    const u = cutUs && cutUs.length === spec.positions
+      ? cutUs[i]
+      : cutCentreMm(spec, i) + shoulderU + (cutShift[i] || 0);
     let deepest = Infinity;
     for (const s of profile) {
       if (s.u < u - half || s.u > u + half) continue;
