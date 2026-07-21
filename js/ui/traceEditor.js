@@ -1222,6 +1222,66 @@ export class TraceEditor {
     return true;
   }
 
+  // Round the selected corner into an arc tangent to both adjacent straight
+  // edges (apply-once cleanup — traced fillets rarely come out tangent). The
+  // run must be a rounded/blunt corner bracketed by straight segments on each
+  // side. Radius = the run's current fitted radius, shrunk if it wouldn't fit
+  // between the corner and the neighbouring vertices. Returns { ok, r } or
+  // { ok:false, reason }.
+  makeTangentSelection() {
+    const span = this._selectionSpan(3);
+    if (!span) return { ok: false, reason: 'Select a run of 3+ points on one outline first.' };
+    const { loop, lo, hi, pts } = span;
+    const n = pts.length, len = hi - lo + 1;
+    if (n - len < 2) return { ok: false, reason: 'Need a straight edge on each side of the corner.' };
+    const fit = fitCircle(pts.slice(lo, hi + 1));
+    if (!fit) return { ok: false, reason: 'Could not fit an arc to that selection.' };
+
+    // The straight edges before and after the run define the two lines; their
+    // intersection is the virtual corner V.
+    const P1 = pts[(lo - 1 + n) % n], P1b = pts[(lo - 2 + n) % n];
+    const P2 = pts[(hi + 1) % n], P2b = pts[(hi + 2) % n];
+    const d1 = { x: P1.x - P1b.x, y: P1.y - P1b.y };
+    const d2 = { x: P2.x - P2b.x, y: P2.y - P2b.y };
+    const den = d1.x * d2.y - d1.y * d2.x;
+    if (Math.abs(den) < 1e-9) return { ok: false, reason: 'Adjacent edges are parallel — no corner to fillet.' };
+    const t = ((P2b.x - P1b.x) * d2.y - (P2b.y - P1b.y) * d2.x) / den;
+    const V = { x: P1b.x + d1.x * t, y: P1b.y + d1.y * t };
+
+    // Unit directions from the corner out along each straight edge (toward the
+    // arc side) and the interior half-angle between them.
+    const nrm = v => { const l = Math.hypot(v.x, v.y) || 1e-9; return { x: v.x / l, y: v.y / l }; };
+    const e1 = nrm({ x: P1.x - V.x, y: P1.y - V.y });
+    const e2 = nrm({ x: P2.x - V.x, y: P2.y - V.y });
+    const dot = Math.max(-1, Math.min(1, e1.x * e2.x + e1.y * e2.y));
+    const phi = Math.acos(dot), alpha = phi / 2;
+    if (alpha < 1e-3 || Math.PI - phi < 1e-3) return { ok: false, reason: 'Corner is too shallow to fillet.' };
+
+    let r = fit.r;
+    let tanDist = r / Math.tan(alpha); // corner → tangent point along each edge
+    // Keep the tangent points between the corner and the neighbouring vertices.
+    const maxTan = Math.min(Math.hypot(P1.x - V.x, P1.y - V.y),
+      Math.hypot(P2.x - V.x, P2.y - V.y)) * 0.98;
+    if (tanDist > maxTan) { tanDist = maxTan; r = tanDist * Math.tan(alpha); }
+    const cenDist = r / Math.sin(alpha); // corner → arc centre along the bisector
+    const bis = nrm({ x: e1.x + e2.x, y: e1.y + e2.y });
+    const C = { x: V.x + bis.x * cenDist, y: V.y + bis.y * cenDist };
+    const T1 = { x: V.x + e1.x * tanDist, y: V.y + e1.y * tanDist };
+    const T2 = { x: V.x + e2.x * tanDist, y: V.y + e2.y * tanDist };
+    const mid = { x: V.x + bis.x * (cenDist - r), y: V.y + bis.y * (cenDist - r) };
+
+    this.pushUndo();
+    const arc = this._arcPoints(C.x, C.y, r, T1, T2, mid);
+    this._refsOp({ op: 'splice', loop, lo, removed: len, added: arc.length }, n);
+    pts.splice(lo, len, ...arc);
+    this._reselectRun(loop, lo, arc.length);
+    this._lastArc = { loop, lo, len: arc.length, A: T1, B: T2, mid };
+    if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifySelect();
+    this._changed();
+    return { ok: true, r: Math.round(r * 100) / 100 };
+  }
+
   // Points along the arc of circle (cx,cy,r) from A to B, choosing the sweep
   // whose midpoint is nearest `nearMid`. Spacing ~ chord tolerance.
   _arcPoints(cx, cy, r, A, B, nearMid) {

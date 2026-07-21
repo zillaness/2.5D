@@ -1362,6 +1362,52 @@ const ui = await page.evaluate(() => {
   return { measures, picks, added, levelled, nCons: ed.constraints.length };
 });
 
+// ---------------------------------------------------------------- tangent fillet cleanup
+const tan = await page.evaluate(async () => {
+  const { fitCircle } = await import('/js/contour.js');
+  const M = await import('/js/measure.js');
+  const ed = window.__app.traceEditor;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 400;
+  ed.setRectified(c, 4);
+
+  // An L-corner (two perpendicular straight edges) with a crude 3-point
+  // chamfer standing in for a rough traced corner near the 90° vertex at (50,50).
+  //   down the left edge → across the blunt corner → along the bottom edge
+  const outer = [
+    { x: 0, y: 50 }, { x: 30, y: 50 },        // straight edge 1 (approaching corner)
+    { x: 44, y: 50 }, { x: 50, y: 46 }, { x: 50, y: 40 }, // blunt corner run (3 pts)
+    { x: 50, y: 20 }, { x: 50, y: 0 },        // straight edge 2 (leaving corner)
+    { x: 0, y: 0 },
+  ];
+  ed.setTrace(outer.map(p => ({ ...p })), []);
+  ed.setCircles([]);
+
+  // Select the blunt-corner run (indices 2,3,4).
+  ed.selectedVerts = [2, 3, 4].map(i => ({ loop: -1, idx: i }));
+  const res = ed.makeTangentSelection();
+
+  // Refit a circle to the new arc run and check it's tangent to both edge
+  // lines: the two lines are x=50 (right) and y=50 (top), so a tangent circle
+  // of radius r has centre (50-r, 50-r).
+  const start = 2, arcLen = ed._lastArc.len;
+  const arcPts = ed.outer.slice(start, start + arcLen);
+  const fit = fitCircle(arcPts);
+  return {
+    ok: res.ok, r: res.r,
+    distToRight: Math.abs(50 - fit.cx), // should equal r (tangent to x=50)
+    distToTop: Math.abs(50 - fit.cy),   // should equal r (tangent to y=50)
+    rms: fit.rms,
+  };
+});
+
+console.log('\nTangent fillet cleanup');
+check('makeTangentSelection rounds an L-corner', tan.ok, `r ${tan.r}`);
+check('resulting arc is tangent to both edges (centre r from each line)',
+  tan.ok && near(tan.distToRight, tan.r, 0.05) && near(tan.distToTop, tan.r, 0.05),
+  `dRight ${tan.distToRight?.toFixed(3)}, dTop ${tan.distToTop?.toFixed(3)}, r ${tan.r}`);
+check('arc points sit cleanly on the fitted circle', tan.rms < 0.05, `rms ${tan.rms?.toFixed(4)}`);
+
 console.log('\nMeasure/constrain UI pipeline');
 check('vertex picks produce a p2p, rim pick a radius measurement',
   String(ui.measures) === 'p2p,rad', String(ui.measures));

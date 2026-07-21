@@ -106,8 +106,9 @@ the object is segmented against the background colour. You get:
 - **Multi-select & run cleanup** — Ctrl/⌘-click points or Shift-drag a marquee
   to select several; drag the group to move it, Delete to remove it. On a
   selected run: **Fit arc** (least-squares circle → smooth arc with an editable
-  radius), **Fit line** (straighten), **Densify** (add points), **Reduce**
-  (thin points).
+  radius), **Fit line** (straighten), **Tangent** (round a blunt/rough corner
+  into an arc truly tangent to both adjacent edges — the traced-fillet cleanup),
+  **Densify** (add points), **Reduce** (thin points).
 - **Normalize traced holes** — an explicit button (never automatic) replaces a
   photo-detected hole with a least-squares fitted perfect circle, which is then
   draggable and editable like any placed hole; "All round holes" converts every
@@ -285,18 +286,19 @@ lens-distortion correction, the container outline library, **in-app
 measurement tools** (point/edge distances, angles, face-to-face gaps, radii,
 part size) and **geometric constraints** (H/V, perpendicular, parallel, equal,
 collinear, concentric, dimensioned length/angle/distance, anchors, with live
-ghost-preview solving) are all **done** and in the app.
+ghost-preview solving), and an **apply-once tangent-fillet corner cleanup** are
+all **done** and in the app.
 
 *(PDF drawing import — "picture of a CAD drawing → CAD out" — moved to the
 separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- **Tangent constraint + first-class arcs** — today an arc is a dense point
-  run, so tangency (arc smoothly meeting a line, the traced-fillet cleanup)
-  can't be expressed. Promote fitted arcs to real entities (centre/radius/
-  endpoints) that the solver and editor understand; tangent, and better
-  radius/centre handling everywhere, fall out of that.
+- **First-class arcs + a live tangent *constraint*** — today's Tangent button
+  is an apply-once cleanup on the dense-point representation; a persistent
+  tangent constraint that re-solves on drag needs fitted arcs promoted to real
+  entities (centre/radius/endpoints) that the solver and editor understand.
+  Better radius/centre handling everywhere falls out of that same change.
 
 ### Horizon
 

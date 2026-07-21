@@ -1104,6 +1104,7 @@ function refreshSelectionTools() {
   const run2 = traceEditor.hasMultiRun(2);
   $('fitArcBtn').disabled = !run3;
   $('fitLineBtn').disabled = !run3;
+  $('tangentBtn').disabled = !run3;
   $('simplifySelBtn').disabled = !run3;
   $('densifyBtn').disabled = !run2;
   $('clearSelBtn').disabled = !count;
@@ -1129,6 +1130,17 @@ $('arcRadius').addEventListener('change', e => {
 $('fitLineBtn').addEventListener('click', () => {
   if (!traceEditor.fitLineToSelection()) toast('Select a run of 3+ points on one outline first.');
   else $('arcRadiusField').hidden = true;
+  refreshSelectionTools();
+});
+$('tangentBtn').addEventListener('click', () => {
+  const res = traceEditor.makeTangentSelection();
+  if (res.ok) {
+    $('arcRadiusField').hidden = false;
+    $('arcRadius').value = fmtDim(res.r);
+    toast(`Tangent fillet, radius ${fmtDimL(res.r)}.`);
+  } else {
+    toast(res.reason);
+  }
   refreshSelectionTools();
 });
 $('densifyBtn').addEventListener('click', () => {
