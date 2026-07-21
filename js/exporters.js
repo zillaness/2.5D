@@ -34,12 +34,64 @@ export function toBinarySTL(positions, indices, name = '2.5D') {
   return new Blob([buffer], { type: 'model/stl' });
 }
 
+// Arc spans (from the trace editor) describe a run of a loop that is really a
+// circular arc: { lo, len, cx, cy, r, sweep } with `sweep` the signed swept
+// angle in image space. When present, exporters emit a true arc for that run
+// instead of the dense line segments — cleaner CAD/laser output.
+//
+// Common walk: the interior points of each arc span are dropped, leaving the
+// two endpoints, and the arc is expressed as one primitive between them.
+function retainedIndices(n, arcs) {
+  const skip = new Set();
+  const startAt = new Map();
+  for (const a of arcs || []) {
+    if (a.lo + a.len - 1 >= n) continue; // never spans the loop seam
+    for (let k = a.lo + 1; k < a.lo + a.len - 1; k++) skip.add(k);
+    startAt.set(a.lo, a);
+  }
+  const kept = [];
+  for (let i = 0; i < n; i++) if (!skip.has(i)) kept.push(i);
+  return { kept, startAt };
+}
+
+// SVG path data for a closed loop, using A (arc) commands for arc spans.
+function svgLoopPath(pts, arcs) {
+  const n = pts.length;
+  if (n < 2) return '';
+  const { kept, startAt } = retainedIndices(n, arcs);
+  const X = i => `${pts[i].x.toFixed(3)},${pts[i].y.toFixed(3)}`;
+  let d = `M ${X(kept[0])}`;
+  for (let k = 0; k < kept.length; k++) {
+    const from = kept[k], to = kept[(k + 1) % kept.length];
+    const a = startAt.get(from);
+    if (a && a.lo + a.len - 1 === to) {
+      const large = Math.abs(a.sweep) > Math.PI ? 1 : 0;
+      const sweepFlag = a.sweep > 0 ? 1 : 0; // SVG y-down: +angle = sweep-flag 1
+      d += ` A ${a.r.toFixed(3)} ${a.r.toFixed(3)} 0 ${large} ${sweepFlag} ${X(to)}`;
+    } else if (k < kept.length - 1) {
+      d += ` L ${X(to)}`; // closing edge is implied by Z
+    }
+  }
+  return d + ' Z';
+}
+
+// A full circle as a two-arc subpath (true arcs, and a proper even-odd hole).
+function svgCirclePath(c) {
+  const r = c.d / 2;
+  const L = (c.cx - r).toFixed(3), R = (c.cx + r).toFixed(3), y = c.cy.toFixed(3);
+  const rr = r.toFixed(3);
+  return `M ${L},${y} A ${rr} ${rr} 0 1 0 ${R},${y} A ${rr} ${rr} 0 1 0 ${L},${y} Z`;
+}
+
 // SVG of the trace (outline + holes) in real millimetres — handy for laser
-// cutting or importing the profile into CAD.
-export function toSVG(outline, holes, paperW, paperH) {
-  const path = pts =>
-    'M ' + pts.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' L ') + ' Z';
-  const d = [path(outline), ...holes.map(path)].join(' ');
+// cutting or importing the profile into CAD. opts: { outerArcs, holeArcs,
+// circles } enables true arc/circle output (see above).
+export function toSVG(outline, holes, paperW, paperH, opts = {}) {
+  const { outerArcs = null, holeArcs = null, circles = [] } = opts;
+  const parts = [svgLoopPath(outline, outerArcs)];
+  holes.forEach((h, i) => parts.push(svgLoopPath(h, holeArcs && holeArcs[i])));
+  for (const c of circles) parts.push(svgCirclePath(c));
+  const d = parts.join(' ');
   return new Blob([
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<!-- 2.5D v${APP_VERSION} -->\n` +
@@ -50,10 +102,12 @@ export function toSVG(outline, holes, paperW, paperH) {
   ], { type: 'image/svg+xml' });
 }
 
-// DXF (AutoCAD R12 / AC1009) of the trace as closed polylines — better CAD
-// interop than SVG. Coordinates are in millimetres, Y-up (DXF convention), so
-// image Y is flipped about paperH.
-export function toDXF(outline, holes, paperH) {
+// DXF (AutoCAD R12 / AC1009) of the trace. Loops are closed polylines (arc
+// spans encoded as vertex bulges); manual circles become true CIRCLE entities.
+// Coordinates are in millimetres, Y-up (DXF convention), so image Y is flipped
+// about paperH. opts: { outerArcs, holeArcs, circles }.
+export function toDXF(outline, holes, paperH, opts = {}) {
+  const { outerArcs = null, holeArcs = null, circles = [] } = opts;
   const lines = [];
   const g = (code, val) => { lines.push(String(code), String(val)); };
   g(999, `2.5D v${APP_VERSION}`);
@@ -62,18 +116,34 @@ export function toDXF(outline, holes, paperH) {
   g(9, '$INSUNITS'); g(70, 4); // millimetres
   g(0, 'ENDSEC');
   g(0, 'SECTION'); g(2, 'ENTITIES');
-  const emitLoop = pts => {
+  const emitLoop = (pts, arcs) => {
+    const n = pts.length;
+    const { startAt } = retainedIndices(n, arcs);
+    const skip = new Set();
+    const bulgeAt = new Map();
+    for (const [lo, a] of startAt) {
+      for (let k = a.lo + 1; k < a.lo + a.len - 1; k++) skip.add(k);
+      // Bulge = tan(sweep/4); Y is flipped on output, so the sweep sign flips.
+      bulgeAt.set(lo, Math.tan(-a.sweep / 4));
+    }
     g(0, 'POLYLINE'); g(8, 'trace'); g(66, 1); g(70, 1); // 70=1: closed
-    for (const p of pts) {
+    for (let i = 0; i < n; i++) {
+      if (skip.has(i)) continue;
       g(0, 'VERTEX'); g(8, 'trace');
-      g(10, p.x.toFixed(4));
-      g(20, (paperH - p.y).toFixed(4)); // flip to Y-up
+      g(10, pts[i].x.toFixed(4));
+      g(20, (paperH - pts[i].y).toFixed(4)); // flip to Y-up
       g(30, '0.0');
+      if (bulgeAt.has(i)) g(42, bulgeAt.get(i).toFixed(6));
     }
     g(0, 'SEQEND');
   };
-  emitLoop(outline);
-  for (const h of holes) emitLoop(h);
+  emitLoop(outline, outerArcs);
+  holes.forEach((h, i) => emitLoop(h, holeArcs && holeArcs[i]));
+  for (const c of circles) {
+    g(0, 'CIRCLE'); g(8, 'trace');
+    g(10, c.cx.toFixed(4)); g(20, (paperH - c.cy).toFixed(4)); g(30, '0.0');
+    g(40, (c.d / 2).toFixed(4));
+  }
   g(0, 'ENDSEC');
   g(0, 'EOF');
   return new Blob([lines.join('\n') + '\n'], { type: 'application/dxf' });

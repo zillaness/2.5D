@@ -10,7 +10,7 @@ import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
 } from './contour.js';
-import { buildModel, circleToPolygon } from './mesh.js';
+import { buildModel } from './mesh.js';
 import {
   SCREW_STANDARDS, INSERT_SIZES, screwSpec, boreDiameter, recessDefaults, insertHole,
 } from './screws.js';
@@ -1366,11 +1366,21 @@ $('exportStlBtn').addEventListener('click', () => {
   const blob = toBinarySTL(state.meshData.positions, state.meshData.indices, state.fileName);
   deliverExport(blob, `${state.fileName}-2p5d.stl`);
 });
-// Both 2D exports flatten screw holes to their bore diameter.
+// Arc-aware 2D export inputs: traced holes stay polylines (with any fillet
+// arcs), while manual screw holes become true circles. Screw bores flatten to
+// their nominal bore diameter (recesses/depth are 3D-only).
 function traceProfile() {
   const { outer, holes, circles } = traceEditor.getTrace();
   if (!outer || outer.length < 3) return null;
-  return { outer, allHoles: [...holes, ...circles.map(c => circleToPolygon(c.cx, c.cy, c.d))] };
+  const spans = traceEditor.arcExportSpans();
+  return {
+    outer, holes,
+    opts: {
+      outerArcs: spans.outer,
+      holeArcs: spans.holes,
+      circles: circles.map(c => ({ cx: c.cx, cy: c.cy, d: c.d })),
+    },
+  };
 }
 // Trace-space extent in mm: the rectified canvas size (correct after a 90°
 // rotation), falling back to the nominal paper size.
@@ -1384,13 +1394,13 @@ $('exportSvgBtn').addEventListener('click', () => {
   const p = traceProfile();
   if (!p) { toast('No trace to export yet.'); return; }
   const { w, h } = traceSpaceDims();
-  deliverExport(toSVG(p.outer, p.allHoles, w, h), `${state.fileName}-outline.svg`);
+  deliverExport(toSVG(p.outer, p.holes, w, h, p.opts), `${state.fileName}-outline.svg`);
 });
 $('exportDxfBtn').addEventListener('click', () => {
   const p = traceProfile();
   if (!p) { toast('No trace to export yet.'); return; }
   const { h } = traceSpaceDims();
-  deliverExport(toDXF(p.outer, p.allHoles, h), `${state.fileName}-outline.dxf`);
+  deliverExport(toDXF(p.outer, p.holes, h, p.opts), `${state.fileName}-outline.dxf`);
 });
 
 // ---------- project save / move / load ----------

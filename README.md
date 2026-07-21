@@ -226,9 +226,13 @@ bottom".
 
 **Export.** A binary **STL** (millimetres, z-up, centred at the origin), or
 the outline as **SVG** or **DXF** at true scale (for laser cutting or CAD; the
-2D exports use the base outline). An **export quality** preset (coarse → extra
-fine) bundles the round-feature resolution and curve-segment count. Every
-export carries the app version in its header/metadata. The **💾 Project**
+2D exports use the base outline). The 2D exports are **arc-aware**: fillet arcs
+come out as real arcs (SVG `A` commands, DXF polyline **bulges**) and screw
+holes as true circles (SVG arc subpaths, DXF **CIRCLE** entities) instead of
+many-sided polygons — cleaner geometry for a CAD or laser hand-off. An **export
+quality** preset (coarse → extra fine) bundles the round-feature resolution and
+curve-segment count. Every export carries the app version in its
+header/metadata. The **💾 Project**
 button also has an **outline library** that saves drawer/toolbox/tray outlines
 to this browser for reuse (foundation for the upcoming foam/Gridfinity
 exports).
@@ -315,10 +319,10 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- **Arc-aware exports** — fillet arcs are stored symbolically but rasterised to
-  points for STL/SVG/DXF. Emitting true `ARC`/`A` entities in DXF and SVG (and
-  optionally recognising other fitted arcs as arcs) would give cleaner CAD
-  hand-off. The symbolic arc model is the groundwork.
+- **Arc-aware *import*** — the DXF/SVG exports now emit true arcs and circles;
+  the importer still reads them as polylines. Teaching `dxfImport`/`svgImport`
+  to recognise `ARC`/bulge/`CIRCLE` (and SVG `A`/`<circle>`) — registering them
+  as fillet-arc entities on the way in — would make a full round-trip lossless.
 
 ### Horizon
 

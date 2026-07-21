@@ -1591,6 +1591,54 @@ check('found the fillet arc and the loose edge', ltanArc.made && ltanArc.eFound,
 check('edge driven tangent to the arc (centre→line dist → arc radius)',
   near(ltanArc.dist, ltanArc.arcR, 0.05), `dist ${ltanArc.dist.toFixed(3)} vs r ${ltanArc.arcR.toFixed(3)}`);
 
+// ---------------------------------------------------------------- arc-aware exports
+const exp = await page.evaluate(async () => {
+  const { toSVG, toDXF } = await import('./js/exporters.js');
+  const ed = window.__app.traceEditor;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 400;
+  ed.setRectified(c, 4);
+  // Fillet an L-corner (registers an arc) and add a manual circle hole.
+  ed.setTrace([
+    { x: 0, y: 50 }, { x: 30, y: 50 },
+    { x: 44, y: 50 }, { x: 50, y: 46 }, { x: 50, y: 40 },
+    { x: 50, y: 20 }, { x: 50, y: 0 }, { x: 0, y: 0 },
+  ].map(p => ({ ...p })), []);
+  ed.setCircles([{
+    cx: 20, cy: 20, d: 6, type: 'through', side: 'top', depth: 3,
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' },
+  }]);
+  ed.measurements = []; ed.constraints = []; ed.arcs = []; ed.lines = [];
+  ed.selectedVerts = [2, 3, 4].map(i => ({ loop: -1, idx: i }));
+  ed.makeTangentSelection();
+
+  const spans = ed.arcExportSpans();
+  const opts = { outerArcs: spans.outer, holeArcs: spans.holes, circles: [{ cx: 20, cy: 20, d: 6 }] };
+  const svg = await toSVG(ed.outer, ed.holes, 100, 100, opts).text();
+  const dxf = await toDXF(ed.outer, ed.holes, 100, opts).text();
+
+  // Count arc segments in the outline path (excludes the two circle arcs).
+  const outlinePath = svg.match(/d="([^"]*)"/)[1];
+  return {
+    nOuterArcs: spans.outer.length,
+    svgHasArc: /A /.test(outlinePath),
+    svgHasCircleArcs: (svg.match(/A /g) || []).length >= 3, // ≥1 fillet + 2 for the circle
+    dxfHasBulge: /\b42\b/.test(dxf),
+    dxfHasCircle: dxf.includes('CIRCLE'),
+    dxfStillValid: dxf.includes('AC1009') && dxf.includes('EOF') && /POLYLINE/.test(dxf),
+  };
+});
+
+console.log('\nArc-aware exports');
+check('trace reports one outer arc span', exp.nOuterArcs === 1, `${exp.nOuterArcs}`);
+check('SVG emits an A (arc) command for the fillet', exp.svgHasArc, '');
+check('SVG renders the circle hole as true arcs', exp.svgHasCircleArcs, '');
+check('DXF encodes the fillet as a polyline bulge (group 42)', exp.dxfHasBulge, '');
+check('DXF emits a true CIRCLE entity for the hole', exp.dxfHasCircle, '');
+check('DXF stays valid R12 (AC1009 + POLYLINE + EOF)', exp.dxfStillValid, '');
+
 console.log('\nMeasure/constrain UI pipeline');
 check('vertex picks produce a p2p, rim pick a radius measurement',
   String(ui.measures) === 'p2p,rad', String(ui.measures));

@@ -520,6 +520,31 @@ export class TraceEditor {
     return null;
   }
 
+  // Arc spans for export, per loop: { outer:[...], holes:[[...],...] }, each
+  // descriptor { lo, len, cx, cy, r, sweep } with a signed image-space sweep.
+  arcExportSpans() {
+    const desc = (loop, pts) => this.arcs
+      .filter(a => a.loop === loop && a.lo + a.len <= pts.length && a.lo + a.len - 1 < pts.length)
+      .map(a => {
+        const fit = fitCircle(pts.slice(a.lo, a.lo + a.len));
+        if (!fit) return null;
+        let sweep = 0;
+        for (let i = a.lo; i < a.lo + a.len - 1; i++) {
+          let d = Math.atan2(pts[i + 1].y - fit.cy, pts[i + 1].x - fit.cx) -
+            Math.atan2(pts[i].y - fit.cy, pts[i].x - fit.cx);
+          while (d <= -Math.PI) d += Math.PI * 2;
+          while (d > Math.PI) d -= Math.PI * 2;
+          sweep += d;
+        }
+        return { lo: a.lo, len: a.len, cx: fit.cx, cy: fit.cy, r: fit.r, sweep };
+      })
+      .filter(Boolean);
+    return {
+      outer: desc(-1, this.outer),
+      holes: this.holes.map((h, i) => desc(i, h)),
+    };
+  }
+
   // The arc entity that owns edge `edgeIdx` (verts idx→idx+1) on `loop`, or null.
   _arcAtEdge(loop, edgeIdx) {
     return this.arcs.find(a => a.loop === loop && edgeIdx >= a.lo && edgeIdx < a.lo + a.len - 1) || null;
