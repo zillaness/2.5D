@@ -228,7 +228,12 @@ and **floor offset** in step 3: a raised boss on a thinner plate, a stepped
 part, or an overhang that floats above the build plate (floor offset > 0 —
 your slicer will want supports if nothing is underneath). Each section is a
 watertight shell; overlapping sections are exported together and every slicer
-unions them. Screw holes cut through every section they pass through, and the
+unions them. **Bed-level sections (floor offset 0) are clipped to the object
+outline** — they re-thickness the part but can't add material beyond its
+silhouette, so a roughly-drawn section never leaves stray tabs. A section with
+a **floor offset > 0 keeps its full footprint** (it's treated as a deliberate
+overhang/cantilever that may reach past the outline); you'll see a warning if a
+bed-level section spilled over and was trimmed. Screw holes cut through every section they pass through, and the
 countersink/counterbore/blind feature automatically lands on the true entry
 face — the topmost section for "from top" holes, the bottommost for "from
 bottom".

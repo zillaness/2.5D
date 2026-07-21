@@ -53,6 +53,34 @@ export function buildIslands(outerPts, holePolys) {
   return islands;
 }
 
+// Intersect a section footprint with the base outline so a section can only
+// re-thickness the object, never add material beyond its silhouette. Returns
+// the overlap as one or more simple polygons (mm) — empty if the section lies
+// entirely outside the outline. `area` is the total kept area (mm²), so the
+// caller can tell whether any of the section was trimmed away.
+export function clipToOutline(regionPts, outerPts) {
+  const ClipperLib = CL();
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPath(toClipperPath(regionPts), ClipperLib.PolyType.ptSubject, true);
+  clipper.AddPath(toClipperPath(outerPts), ClipperLib.PolyType.ptClip, true);
+  const sol = new ClipperLib.Paths();
+  clipper.Execute(
+    ClipperLib.ClipType.ctIntersection, sol,
+    ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero
+  );
+  const polys = [];
+  let area = 0;
+  for (const path of sol) {
+    if (path.length < 3) continue;
+    const ring = fromClipperPath(path);
+    const a = Math.abs(signedArea(ring));
+    if (a < 1) continue; // < 1 mm² sliver
+    polys.push(ring);
+    area += a;
+  }
+  return { polys, area };
+}
+
 // z-levels for the edge profile. Returns ascending [{ z, inset }].
 export function buildProfile(thickness, bottom, top, arcSegments = 8) {
   const t = thickness;
@@ -706,14 +734,32 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
   }
   const center = { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
 
-  const footprints = regions.map(r => (r.pts && r.pts.length >= 3 ? r.pts : outer));
+  // Each region's effective footprint is a list of islands. The base (pts=null)
+  // is the whole outline. A section that sits on the bed (zBase 0) is clipped to
+  // the outline, so it can only re-thickness the object and never add body
+  // beyond the silhouette (the "stray tab" bug). A raised section (zBase > 0) is
+  // a deliberate overhang / cantilever and keeps its full drawn footprint.
+  const footprints = regions.map((r, i) => {
+    if (!(r.pts && r.pts.length >= 3)) return [outer];
+    if ((r.zBase || 0) > 0) return [r.pts]; // overhang — extends past the outline on purpose
+    const { polys, area } = clipToOutline(r.pts, outer);
+    if (!polys.length) {
+      warnings.push(`Section "${r.name || i + 1}" sits on the bed but lies outside the outline — nothing added. (Give it a floor offset to make it an overhang.)`);
+    } else {
+      const drawn = Math.abs(signedArea(r.pts));
+      if (drawn - area > Math.max(1, drawn * 0.02)) {
+        warnings.push(`Section "${r.name || i + 1}" extended past the outline — clipped to it. (Give it a floor offset if you meant it as an overhang.)`);
+      }
+    }
+    return polys;
+  });
 
   // Assign screw holes: which regions does each cut, and which face is entry?
   const perRegion = regions.map(() => []);
   for (const h of screwHoles || []) {
     const containing = [];
     for (let i = 0; i < regions.length; i++) {
-      if (pointInPoly({ x: h.cx, y: h.cy }, footprints[i])) containing.push(i);
+      if (footprints[i].some(fp => pointInPoly({ x: h.cx, y: h.cy }, fp))) containing.push(i);
     }
     if (!containing.length) {
       warnings.push('A screw hole lies outside every section and was skipped.');
@@ -748,18 +794,23 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
       top.size = sT * k; bottom.size = sB * k;
       warnings.push(`Section "${r.name || i + 1}": edge sizes exceeded the thickness — scaled to fit.`);
     }
-    const mesh = buildSolid(footprints[i], tracedHoles, perRegion[i], {
-      thickness, zBase, top, bottom, arcSegments, chordTol, center,
-    });
-    if (!mesh) {
-      warnings.push(`Section "${r.name || i + 1}" produced no solid — check its outline.`);
+    let built = 0;
+    for (const fp of footprints[i]) {
+      const mesh = buildSolid(fp, tracedHoles, perRegion[i], {
+        thickness, zBase, top, bottom, arcSegments, chordTol, center,
+      });
+      if (!mesh) continue;
+      parts.push(mesh);
+      built++;
+      totalTris += mesh.stats.triangles;
+      clamped = clamped || mesh.stats.clamped;
+      warnings.push(...mesh.stats.warnings.map(w =>
+        regions.length > 1 ? `Section "${r.name || i + 1}": ${w}` : w));
+    }
+    if (!built) {
+      if (footprints[i].length) warnings.push(`Section "${r.name || i + 1}" produced no solid — check its outline.`);
       return;
     }
-    parts.push(mesh);
-    totalTris += mesh.stats.triangles;
-    clamped = clamped || mesh.stats.clamped;
-    warnings.push(...mesh.stats.warnings.map(w =>
-      regions.length > 1 ? `Section "${r.name || i + 1}": ${w}` : w));
     zLo = Math.min(zLo, zBase);
     zHi = Math.max(zHi, zBase + thickness);
   });

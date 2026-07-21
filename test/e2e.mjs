@@ -1711,6 +1711,39 @@ const detect = await page.evaluate(async () => {
   return { nMade, arcR, nSquare, arcsCount: ed.arcs.length };
 });
 
+// Section clipping: a bed-level section can't add body past the outline; a
+// raised (overhang) section keeps its full footprint.
+const clip = await page.evaluate(async () => {
+  const { buildModel } = await import('/js/mesh.js');
+  const outer = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 40 }, { x: 0, y: 40 }];
+  const none = { mode: 'none', size: 0 };
+  const spill = [{ x: 30, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 30 }, { x: 30, y: 30 }]; // pokes out to x=60
+  const maxX = mesh => {
+    let m = -1e9;
+    for (let i = 0; i < mesh.positions.length; i += 3) m = Math.max(m, mesh.positions[i]);
+    return m + 20; // model is centred at the outline's centre (cx=20) → shift back
+  };
+  const bed = buildModel(outer, [], [], [
+    { name: 'Base', pts: null, thickness: 4, zBase: 0, top: none, bottom: none },
+    { name: 'Tab', pts: spill, thickness: 3, zBase: 0, top: none, bottom: none },
+  ], 6);
+  const over = buildModel(outer, [], [], [
+    { name: 'Base', pts: null, thickness: 4, zBase: 0, top: none, bottom: none },
+    { name: 'Wing', pts: spill, thickness: 3, zBase: 5, top: none, bottom: none },
+  ], 6);
+  return {
+    bedMaxX: maxX(bed), overMaxX: maxX(over),
+    bedWarned: bed.stats.warnings.some(w => /clipped to it/.test(w)),
+  };
+});
+
+console.log('\nSection clipping (bed vs overhang)');
+check('bed-level section is clipped to the outline (no body past x=40)',
+  clip.bedMaxX <= 40.5, `max x ${clip.bedMaxX.toFixed(2)}`);
+check('bed-level clip is reported as a warning', clip.bedWarned, '');
+check('raised overhang section keeps its full footprint (reaches x≈60)',
+  clip.overMaxX > 55, `max x ${clip.overMaxX.toFixed(2)}`);
+
 console.log('\nAuto-detect fillets');
 check('detects the rounded corner and registers a fillet arc', detect.nMade === 1, `${detect.nMade}`);
 check('recovers the fillet radius (~6 mm)', detect.arcR !== null && near(detect.arcR, 6, 0.3), `r ${detect.arcR}`);
