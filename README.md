@@ -179,9 +179,10 @@ eye. Pick one or two entities (corner, edge, hole), then apply:
 - **⊥ Perpendicular / ∥ Parallel / = Equal length / ⋯ Collinear** — between
   two edges.
 - **◎ Concentric** — two placed holes share a centre.
-- **◠ Tangent to ⌀** — pick a straight edge + a hole/circle and the edge is
-  driven tangent to that circle (its distance to the centre equals the radius),
-  re-solving live as you move things.
+- **◠ Tangent to ⌀/arc** — pick a straight edge + a hole/circle **or a fillet
+  arc (corner radius)** and the edge is driven tangent to it (its distance to
+  the centre equals the radius), re-solving live as you move things. Click
+  anywhere on a fillet to pick it as the tangent target.
 - **Length… / Angle… / Distance…** — dimension constraints with a typed value
   (prefilled with the current measurement): fix an edge's length, the angle
   between two edges, or the distance point↔point / point↔edge /

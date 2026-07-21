@@ -860,16 +860,20 @@ function refreshConstrainButtons() {
   const isCirc = r => r.kind === 'circle' || r.kind === 'center';
   const edges = picks.filter(r => r.kind === 'edge').length;
   const pts = picks.filter(r => r.kind === 'vert' || isCirc(r)).length;
+  const tangentTargets = picks.filter(r => isCirc(r) || r.kind === 'arcent').length;
   const n = picks.length;
   $('conH').disabled = $('conV').disabled = $('conLen').disabled = !(n === 1 && edges === 1);
   $('conAnchor').disabled = !(n === 1 && (picks[0].kind === 'vert' || isCirc(picks[0])));
   $('conPerp').disabled = $('conPara').disabled = $('conEqual').disabled =
     $('conCollin').disabled = $('conAngle').disabled = !(n === 2 && edges === 2);
   $('conConc').disabled = !(n === 2 && picks.every(isCirc));
-  $('conLtan').disabled = !(n === 2 && edges === 1 && pts === 1);
+  // Edge + (circle OR fillet arc) → tangent.
+  $('conLtan').disabled = !(n === 2 && edges === 1 && tangentTargets === 1);
   $('conDist').disabled = !(n === 2 && edges <= 1 && pts >= 1 && pts + edges === 2);
+  const label = r => r.kind === 'edge' ? 'edge' : r.kind === 'vert' ? 'point'
+    : r.kind === 'arcent' ? 'arc' : 'hole';
   $('pickInfo').textContent = !n ? 'Nothing picked.'
-    : picks.map(r => r.kind === 'edge' ? 'edge' : r.kind === 'vert' ? 'point' : 'hole').join(' + ') + ' picked';
+    : picks.map(label).join(' + ') + ' picked';
   if (!n) $('conValueField').hidden = true;
 }
 
@@ -1495,6 +1499,7 @@ function loadProject(p) {
       traceEditor.constraints = Array.isArray(p.constraints) ? structuredClone(p.constraints) : [];
       traceEditor.arcs = Array.isArray(p.arcs) ? structuredClone(p.arcs) : [];
       traceEditor.lines = Array.isArray(p.lines) ? structuredClone(p.lines) : [];
+      traceEditor._ensureArcIds();
       traceEditor.draw();
     }
     if (p.holeTemplate) traceEditor.holeTemplate = structuredClone(p.holeTemplate);
@@ -1710,6 +1715,7 @@ function loadOutlineIntoSession(o) {
   traceEditor.constraints = Array.isArray(o.constraints) ? structuredClone(o.constraints) : [];
   traceEditor.arcs = Array.isArray(o.arcs) ? structuredClone(o.arcs) : [];
   traceEditor.lines = Array.isArray(o.lines) ? structuredClone(o.lines) : [];
+  traceEditor._ensureArcIds();
   traceEditor.draw();
   traceEditor.setSections(state.regions);
   refreshModelFields();

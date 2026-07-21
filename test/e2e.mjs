@@ -1545,6 +1545,52 @@ check('restore re-inserts the stashed points and clears the line',
 check('edge-tangent-to-circle drives the edge to touch (dist → r=8)',
   lines.tanConverged && near(lines.tangentDist, 8, 0.02), `dist ${lines.tangentDist.toFixed(3)}`);
 
+// Edge tangent to a fillet ARC (corner radius), not just a full circle.
+const ltanArc = await page.evaluate(async () => {
+  const { fitCircle } = await import('/js/contour.js');
+  const ed = window.__app.traceEditor;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 400;
+  ed.setRectified(c, 4);
+  // L-corner with a blunt run → make it a fillet arc, then constrain a
+  // separate straight edge tangent to that arc.
+  ed.setTrace([
+    { x: 0, y: 50 }, { x: 30, y: 50 },
+    { x: 44, y: 50 }, { x: 50, y: 46 }, { x: 50, y: 40 },
+    { x: 50, y: 20 }, { x: 50, y: 0 },
+    // a loose edge starting far from the fillet, to be pulled tangent
+    { x: 90, y: 0 }, { x: 90, y: 40 }, { x: 20, y: 40 },
+  ].map(p => ({ ...p })), []);
+  ed.setCircles([]); ed.measurements = []; ed.constraints = []; ed.arcs = []; ed.lines = [];
+  ed.selectedVerts = [2, 3, 4].map(i => ({ loop: -1, idx: i }));
+  const made = ed.makeTangentSelection();
+  const arc = ed.arcs[0];
+  const ac = fitCircle(ed.outer.slice(arc.lo, arc.lo + arc.len));
+
+  // The near-horizontal edge y≈40 (now shifted by the splice) → find it: the
+  // edge whose two vertices are ~(90,40) and (20,40).
+  let eIdx = -1;
+  for (let i = 0; i < ed.outer.length; i++) {
+    const a = ed.outer[i], b = ed.outer[(i + 1) % ed.outer.length];
+    if (Math.abs(a.y - 40) < 1 && Math.abs(b.y - 40) < 1 && Math.abs(a.x - b.x) > 30) { eIdx = i; break; }
+  }
+  ed.constraints.push({ type: 'ltan', refs: [
+    { kind: 'edge', loop: -1, idx: eIdx }, { kind: 'arcent', id: arc.id }] });
+  ed.solveNow();
+
+  // Distance from the arc centre to the constrained edge's line should == arc r.
+  const a = ed.outer[eIdx], b = ed.outer[(eIdx + 1) % ed.outer.length];
+  const ex = b.x - a.x, ey = b.y - a.y, el = Math.hypot(ex, ey);
+  const nx = -ey / el, ny = ex / el;
+  const dist = Math.abs((ac.cx - a.x) * nx + (ac.cy - a.y) * ny);
+  return { made: made.ok, eFound: eIdx >= 0, arcR: ac.r, dist };
+});
+
+console.log('\nEdge tangent to a fillet arc');
+check('found the fillet arc and the loose edge', ltanArc.made && ltanArc.eFound, `edge idx ${ltanArc.eFound}`);
+check('edge driven tangent to the arc (centre→line dist → arc radius)',
+  near(ltanArc.dist, ltanArc.arcR, 0.05), `dist ${ltanArc.dist.toFixed(3)} vs r ${ltanArc.arcR.toFixed(3)}`);
+
 console.log('\nMeasure/constrain UI pipeline');
 check('vertex picks produce a p2p, rim pick a radius measurement',
   String(ui.measures) === 'p2p,rad', String(ui.measures));

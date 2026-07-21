@@ -68,6 +68,7 @@ export class TraceEditor {
     // with the removed interior points stashed so Release can restore them
     // (a reversible straighten). Each is { loop, lo, len:2, stash:[{x,y}] }.
     this.lines = [];
+    this._arcSeq = 0; // stable ids so 'tangent to arc' constraints survive re-indexing
     this._reprojecting = false;
     this._pendingPick = null; // measure mode: first of a two-entity pick
     this._picks = [];         // constrain mode: up to two picked entities
@@ -194,6 +195,7 @@ export class TraceEditor {
     this.constraints = s.constraints || [];
     this.arcs = s.arcs || [];
     this.lines = s.lines || [];
+    this._ensureArcIds();
     this._notifyAnnos();
     this.selection = null;
     this.selectedVerts = [];
@@ -228,12 +230,39 @@ export class TraceEditor {
 
   // ---- measurements + constraints: shared plumbing ----
 
-  // Ref-resolution adapter over the live geometry (see measure.js).
+  // Ref-resolution adapter over the live geometry (see measure.js). `arc(id)`
+  // returns a fillet arc's current fitted circle so it can be a tangent datum.
   _geo() {
     return {
       loop: l => this._loop(l) || null,
       circle: i => this.circles[i] || null,
+      arc: id => this._arcCircle(this.arcs.find(a => a.id === id), l => this._loop(l)),
     };
+  }
+
+  // Fit an arc entity's current owned points to a circle → { cx, cy, r }.
+  _arcCircle(arc, loopFn) {
+    if (!arc) return null;
+    const pts = loopFn(arc.loop);
+    if (!pts || arc.lo + arc.len > pts.length) return null;
+    const fit = fitCircle(pts.slice(arc.lo, arc.lo + arc.len));
+    return fit ? { cx: fit.cx, cy: fit.cy, r: fit.r } : null;
+  }
+
+  // Give every arc a stable id (older saves / undo states may lack one) and
+  // keep the sequence ahead of them.
+  _ensureArcIds() {
+    for (const a of this.arcs) if (a.id == null) a.id = ++this._arcSeq;
+    for (const a of this.arcs) this._arcSeq = Math.max(this._arcSeq, a.id);
+  }
+
+  // Drop 'tangent to arc' constraints whose target arc no longer exists.
+  _pruneArcConstraints() {
+    const ids = new Set(this.arcs.map(a => a.id));
+    const before = this.constraints.length;
+    this.constraints = this.constraints.filter(c =>
+      !(c.type === 'ltan' && c.refs[1] && c.refs[1].kind === 'arcent' && !ids.has(c.refs[1].id)));
+    return this.constraints.length !== before;
   }
 
   // Remap both annotation sets across a structural edit; notify if pruned.
@@ -244,6 +273,7 @@ export class TraceEditor {
     this.constraints = remapRefs(this.constraints, op, loopLen);
     this.arcs = this._remapSpans(this.arcs, op);
     this.lines = this._remapSpans(this.lines, op);
+    this._pruneArcConstraints();
     if (this.measurements.length !== m0 || this.constraints.length !== c0 ||
         this.arcs.length !== a0 || this.lines.length !== l0 || op.op !== 'splice') this._notifyAnnos();
   }
@@ -334,7 +364,12 @@ export class TraceEditor {
       : l >= REGION_LOOP_BASE ? (g.sections[l - REGION_LOOP_BASE] && g.sections[l - REGION_LOOP_BASE].pts)
       : g.holes[l];
     if (this.constraints.length) {
-      solveConstraints({ loop: loopFn, circle: i => g.circles[i] || null }, this.constraints, { extraAnchors });
+      const ghostGeo = {
+        loop: loopFn,
+        circle: i => g.circles[i] || null,
+        arc: id => this._arcCircle(this.arcs.find(a => a.id === id), loopFn),
+      };
+      solveConstraints(ghostGeo, this.constraints, { extraAnchors });
     }
     this._reprojectArcsOn(loopFn); // preview tangent fillets on the clone
     return g;
@@ -458,6 +493,12 @@ export class TraceEditor {
 
     const eHit = this._hitEdge(sp);
     if (eHit) {
+      // Constrain mode: a click on a fillet arc's run picks the whole arc
+      // (as a tangent datum) rather than an interior edge.
+      if (!full) {
+        const arc = this._arcAtEdge(eHit.loop, eHit.idx);
+        if (arc) return mkPos({ kind: 'arcent', id: arc.id });
+      }
       if (full) {
         // Prefer the midpoint when the cursor is close to it.
         const pts = this._loop(eHit.loop);
@@ -479,9 +520,18 @@ export class TraceEditor {
     return null;
   }
 
+  // The arc entity that owns edge `edgeIdx` (verts idx→idx+1) on `loop`, or null.
+  _arcAtEdge(loop, edgeIdx) {
+    return this.arcs.find(a => a.loop === loop && edgeIdx >= a.lo && edgeIdx < a.lo + a.len - 1) || null;
+  }
+
   // Screen position of a ref (for markers); circle-ish refs use the centre.
   _refPos(ref) {
     const geo = this._geo();
+    if (ref.kind === 'arcent') {
+      const c = geo.arc(ref.id);
+      return c ? this._mmToScreen({ x: c.cx, y: c.cy }) : null;
+    }
     if (ref.kind === 'edge') {
       const e = resolveEdge(ref, geo);
       if (!e) return null;
@@ -658,12 +708,14 @@ export class TraceEditor {
       case 'conc':
         if (p.length === 2 && p.every(circ)) refs = p.map(asCircle);
         break;
-      case 'ltan':
-        // One edge + one circle: drive the edge tangent to the circle.
-        if (p.length === 2 && edges.length === 1 && others.length === 1 && circ(others[0])) {
-          refs = [edges[0], asCircle(others[0])];
+      case 'ltan': {
+        // One edge + one circle or fillet arc: drive the edge tangent to it.
+        const tgt = others.find(r => circ(r) || r.kind === 'arcent');
+        if (p.length === 2 && edges.length === 1 && tgt) {
+          refs = [edges[0], tgt.kind === 'arcent' ? tgt : asCircle(tgt)];
         }
         break;
+      }
       case 'dist':
         if (p.length === 2 && edges.length <= 1 && others.every(r => r.kind === 'vert' || circ(r))) {
           const pts = others.map(asCenter);
@@ -1338,7 +1390,7 @@ export class TraceEditor {
     pts.splice(lo, len, ...arc);
     this._reselectRun(loop, lo, arc.length);
     // Register a persistent, live-re-solving fillet arc for the new run.
-    this.arcs.push({ loop, lo, len: arc.length, r: Math.round(f.r * 100) / 100 });
+    this.arcs.push({ id: ++this._arcSeq, loop, lo, len: arc.length, r: Math.round(f.r * 100) / 100 });
     this._lastArc = { loop, lo, len: arc.length, A: f.T1, B: f.T2, mid: f.mid };
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
     this._notifyAnnos();
@@ -1379,6 +1431,7 @@ export class TraceEditor {
     if (!arc) return false;
     this.pushUndo();
     this.arcs = this.arcs.filter(a => a !== arc);
+    this._pruneArcConstraints();
     this._notifyAnnos();
     this._changed();
     return true;
@@ -1400,6 +1453,7 @@ export class TraceEditor {
     // Drop any managed line/arc overlapping this loop's edited region.
     this.lines = this.lines.filter(l => l.loop !== loop);
     this.arcs = this.arcs.filter(a => a.loop !== loop || a.lo + a.len <= lo || a.lo > hi);
+    this._pruneArcConstraints();
     this._refsOp({ op: 'splice', loop, lo: lo + 1, removed: hi - lo - 1, added: 0 }, pts.length);
     pts.splice(lo + 1, hi - lo - 1);
     this._reselectRun(loop, lo, 2);
@@ -1935,6 +1989,18 @@ export class TraceEditor {
   _highlightRef(ctx, ref, color) {
     const geo = this._geo();
     ctx.strokeStyle = color;
+    if (ref.kind === 'arcent') {
+      const c = geo.arc(ref.id);
+      if (!c) return;
+      const ctr = this._mmToScreen({ x: c.cx, y: c.cy });
+      ctx.beginPath();
+      ctx.arc(ctr.x, ctr.y, c.r * this.pxPerMm * this.vp.scale, 0, Math.PI * 2);
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      return;
+    }
     if (ref.kind === 'edge') {
       const e = resolveEdge(ref, geo);
       if (!e) return;
