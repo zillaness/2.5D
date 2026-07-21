@@ -1,23 +1,28 @@
 // Bitting decode/encode — turn the photographed blade edge into a snapped
-// bitting code, and (for testing / preview) turn a code back into an edge.
+// bitting code, and (for testing / preview / the mesh cut profile) turn a code
+// back into an edge.
 //
-// The blade-edge profile is a list of samples { x, removal } where
-//   x        = distance from the shoulder datum along the blade axis (in)
-//   removal  = material removed at that x, measured DOWN from the uncut top
-//              edge of the blade (in).  0 = uncut, larger = deeper cut.
+// The blade-edge profile is a list of samples { x, height } where
+//   x       = distance from the shoulder datum along the blade axis (in)
+//   height  = height of the cut edge above the blade BACK at that x (in).
+//             Uncut blade sits at spec.bladeHeight; a cut dips it down toward
+//             the cut's root depth. This is the manufacturer's "root depth"
+//             datum (see blanks.js) — the blade back is the reference because
+//             it's never cut away.
 //
-// Reading the cut for position i means: look at the samples in a window around
-// the standard cut centre, take the DEEPEST removal (the root/flat at the bottom
-// of the V), and snap that to the nearest standard depth. We use the deepest
-// point rather than the exact centre because it's robust to small datum error —
-// the dominant error source for keys — without needing sub-thou photo precision.
+// Reading the cut for position i: look at the samples in a window around the
+// standard cut centre, take the LOWEST edge (the root/flat at the bottom of the
+// V), and snap that height to the nearest standard depth. Lowest-point rather
+// than exact-centre makes it robust to small datum error — the dominant error
+// source for keys — without needing sub-thou photo precision.
 
 import {
-  cutCentre, removalForCode, codeForRemoval, codeRange,
+  cutCentre, rootDepthForCode, codeForRootDepth, codeRange,
 } from './blanks.js';
 
-// Half the run-per-depth of a V wall: at included angle A the wall leans
-// (90 - A/2)° off vertical, so moving 1" of depth spreads tan(A/2)" sideways.
+// Horizontal run a V wall covers per unit of vertical rise. At included angle A
+// each wall leans A/2 off the vertical bisector, so rising Δh spreads tan(A/2)·Δh
+// sideways.
 function wallRun(spec) {
   return Math.tan((spec.cutAngle * Math.PI / 180) / 2);
 }
@@ -25,29 +30,29 @@ function wallRun(spec) {
 // ── Decode ───────────────────────────────────────────────────────────────────
 
 // Read a bitting code from an edge profile.
-//   profile : array of { x, removal } sorted-ish by x (we don't require sorted)
+//   profile : array of { x, height } (need not be sorted)
 //   opts.window : half-width of the sampling window as a fraction of spacing
 //                 (default 0.35 → ±35% of the pitch around each centre)
-// Returns { code:[…], removals:[…], macs:{…} }.
+// Returns { code:[…], rootDepths:[…], macs:{…} }.
 export function decodeBitting(spec, profile, opts = {}) {
   const windowFrac = opts.window ?? 0.35;
   const half = spec.spacing * windowFrac;
   const code = [];
-  const removals = [];
+  const rootDepths = [];
 
   for (let i = 0; i < spec.positions; i++) {
     const c = cutCentre(spec, i);
-    let deepest = -Infinity;
+    let lowest = Infinity;
     for (const s of profile) {
       if (s.x < c - half || s.x > c + half) continue;
-      if (s.removal > deepest) deepest = s.removal;
+      if (s.height < lowest) lowest = s.height;
     }
-    if (deepest === -Infinity) deepest = 0; // no samples → treat as uncut
-    removals.push(deepest);
-    code.push(codeForRemoval(spec, deepest));
+    if (lowest === Infinity) lowest = spec.bladeHeight; // no samples → treat uncut
+    rootDepths.push(lowest);
+    code.push(codeForRootDepth(spec, lowest));
   }
 
-  return { code, removals, macs: checkMACS(spec, code) };
+  return { code, rootDepths, macs: checkMACS(spec, code) };
 }
 
 // ── MACS ─────────────────────────────────────────────────────────────────────
@@ -74,7 +79,7 @@ export function codeInRange(spec, code) {
 
 // Turn a bitting code into a sampled edge profile, modelling each cut as a
 // flat-bottomed V of the spec's angle. Overlapping walls from deep neighbours
-// are unioned (deepest removal wins at each x), exactly as a real cutter leaves
+// are unioned (the LOWEST edge wins at each x), exactly as a real cutter leaves
 // the blade. `step` is the sample pitch in inches (default 0.002").
 export function encodeToProfile(spec, code, opts = {}) {
   const step = opts.step ?? 0.002;
@@ -86,17 +91,16 @@ export function encodeToProfile(spec, code, opts = {}) {
   const profile = [];
 
   for (let x = 0; x <= xEnd + 1e-9; x += step) {
-    let removal = 0;
+    let height = spec.bladeHeight;
     for (let i = 0; i < spec.positions; i++) {
-      const depth = removalForCode(spec, code[i]);
-      if (depth <= 0) continue;
+      const root = rootDepthForCode(spec, code[i]);
       const c = cutCentre(spec, i);
       const dx = Math.abs(x - c);
-      // Inside the flat bottom: full depth. Outside: fall off along the wall.
-      const cut = dx <= flatHalf ? depth : depth - (dx - flatHalf) / run;
-      if (cut > removal) removal = cut;
+      // Inside the flat bottom: full-depth (root). Outside: wall rises back up.
+      const edge = dx <= flatHalf ? root : root + (dx - flatHalf) / run;
+      if (edge < height) height = edge;
     }
-    profile.push({ x, removal: Math.max(0, removal) });
+    profile.push({ x, height: Math.min(spec.bladeHeight, height) });
   }
   return profile;
 }
