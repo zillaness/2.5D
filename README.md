@@ -107,8 +107,18 @@ the object is segmented against the background colour. You get:
   to select several; drag the group to move it, Delete to remove it. On a
   selected run: **Fit arc** (least-squares circle → smooth arc with an editable
   radius), **Fit line** (straighten), **Tangent** (round a blunt/rough corner
-  into an arc truly tangent to both adjacent edges — the traced-fillet cleanup),
-  **Densify** (add points), **Reduce** (thin points).
+  into a **live fillet arc** — see below), **Densify** (add points), **Reduce**
+  (thin points).
+- **Live tangent fillets** — the **Tangent** button turns a selected corner run
+  into a first-class fillet arc that *stays* tangent to both adjacent edges as
+  you edit: drag a neighbouring vertex, or apply an H/V/perpendicular
+  constraint to an adjacent edge, and the fillet re-derives itself to keep
+  meeting both edges cleanly. Its radius is editable (and shown in the arc
+  field), and **Release** turns it back into plain, independently-editable
+  points. Any edit that reaches inside the fillet's run also releases it
+  automatically. Fillets are saved with projects and library outlines. (Under
+  the hood the arc is stored symbolically — corner + radius — and rasterised to
+  points only for the mesh/export, so the solid pipeline is unchanged.)
 - **Normalize traced holes** — an explicit button (never automatic) replaces a
   photo-detected hole with a least-squares fitted perfect circle, which is then
   draggable and editable like any placed hole; "All round holes" converts every
@@ -286,19 +296,20 @@ lens-distortion correction, the container outline library, **in-app
 measurement tools** (point/edge distances, angles, face-to-face gaps, radii,
 part size) and **geometric constraints** (H/V, perpendicular, parallel, equal,
 collinear, concentric, dimensioned length/angle/distance, anchors, with live
-ghost-preview solving), and an **apply-once tangent-fillet corner cleanup** are
-all **done** and in the app.
+ghost-preview solving), and **live tangent fillet arcs** (first-class arcs that
+re-derive themselves to stay tangent to their neighbouring edges as you edit,
+with an editable radius and a release-to-points escape hatch) are all **done**
+and in the app.
 
 *(PDF drawing import — "picture of a CAD drawing → CAD out" — moved to the
 separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- **First-class arcs + a live tangent *constraint*** — today's Tangent button
-  is an apply-once cleanup on the dense-point representation; a persistent
-  tangent constraint that re-solves on drag needs fitted arcs promoted to real
-  entities (centre/radius/endpoints) that the solver and editor understand.
-  Better radius/centre handling everywhere falls out of that same change.
+- **Arc-aware exports** — fillet arcs are stored symbolically but rasterised to
+  points for STL/SVG/DXF. Emitting true `ARC`/`A` entities in DXF and SVG (and
+  optionally recognising other fitted arcs as arcs) would give cleaner CAD
+  hand-off. The symbolic arc model is the groundwork.
 
 ### Horizon
 

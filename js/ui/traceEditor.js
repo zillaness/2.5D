@@ -7,7 +7,7 @@ import { Viewport, prepareCanvas } from './viewport.js';
 import { pointInPolygon, fitCircle, resampleClosed } from '../contour.js';
 import {
   REGION_LOOP_BASE, resolvePoint, resolveEdge, measureInfo, remapRefs,
-  pointSegDist, angleBetweenDeg, dist as ptDist,
+  pointSegDist, angleBetweenDeg, dist as ptDist, filletArc, arcPointsN,
 } from '../measure.js';
 import { solveConstraints } from '../constraints.js';
 
@@ -59,6 +59,12 @@ export class TraceEditor {
     // see measure.js). Both live-update as the trace is edited.
     this.measurements = [];
     this.constraints = [];
+    // First-class tangent arcs: each owns a fixed run of vertices [lo, lo+len)
+    // on `loop` and re-derives them as a fillet of its two neighbouring edges
+    // at radius r on every solve, so they stay tangent live. Dropped (reverting
+    // to plain points) if a structural edit disturbs the run or its neighbours.
+    this.arcs = [];
+    this._reprojecting = false;
     this._pendingPick = null; // measure mode: first of a two-entity pick
     this._picks = [];         // constrain mode: up to two picked entities
     this._hoverSnap = null;   // snap marker under the cursor (measure/constrain)
@@ -119,6 +125,7 @@ export class TraceEditor {
     this.holes = holes || [];
     if (!keepUndo) this.undoStack.length = 0;
     if (!keepRefs) this._refsOp({ op: 'clearLoops' });
+    else this._reprojectArcsLive(); // e.g. after a 90° rotate — keep fillets tangent
     this.selection = null;
     this.selectedVerts = [];
     this._notifySelect();
@@ -159,6 +166,7 @@ export class TraceEditor {
       outer: this.outer, holes: this.holes, circles: this.circles,
       sections: this.sections,
       measurements: this.measurements, constraints: this.constraints,
+      arcs: this.arcs,
     });
   }
 
@@ -180,6 +188,7 @@ export class TraceEditor {
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
     this.measurements = s.measurements || [];
     this.constraints = s.constraints || [];
+    this.arcs = s.arcs || [];
     this._notifyAnnos();
     this.selection = null;
     this.selectedVerts = [];
@@ -224,39 +233,101 @@ export class TraceEditor {
 
   // Remap both annotation sets across a structural edit; notify if pruned.
   _refsOp(op, loopLen = 0) {
-    const m0 = this.measurements.length, c0 = this.constraints.length;
+    const m0 = this.measurements.length, c0 = this.constraints.length, a0 = this.arcs.length;
     this.measurements = remapRefs(this.measurements, op, loopLen);
     this.constraints = remapRefs(this.constraints, op, loopLen);
+    this.arcs = this._remapArcs(op);
     if (this.measurements.length !== m0 || this.constraints.length !== c0 ||
-        op.op !== 'splice') this._notifyAnnos();
+        this.arcs.length !== a0 || op.op !== 'splice') this._notifyAnnos();
   }
+
+  // Arcs own a fixed vertex run + its two bracketing edges, so any structural
+  // edit that overlaps that guarded span reverts the arc to plain points; an
+  // edit strictly before it just shifts the run.
+  _remapArcs(op) {
+    if (op.op === 'deleteCircle') return this.arcs;
+    if (op.op === 'clearLoops') return [];
+    const out = [];
+    for (const arc of this.arcs) {
+      if (op.op === 'deleteLoop') {
+        if (arc.loop === op.loop) continue; // loop gone → arc gone
+        const same = (a, b) => (a >= 0 && a < REGION_LOOP_BASE && b >= 0 && b < REGION_LOOP_BASE) ||
+          (a >= REGION_LOOP_BASE && b >= REGION_LOOP_BASE);
+        out.push(same(arc.loop, op.loop) && arc.loop > op.loop ? { ...arc, loop: arc.loop - 1 } : arc);
+        continue;
+      }
+      // splice on some loop
+      if (arc.loop !== op.loop) { out.push(arc); continue; }
+      const guardLo = arc.lo - 2, guardHi = arc.lo + arc.len + 1; // inclusive-ish span
+      const spliceHi = op.lo + op.removed;
+      if (spliceHi <= guardLo) out.push({ ...arc, lo: arc.lo + (op.added - op.removed) });
+      else if (op.lo > guardHi) out.push(arc);
+      // otherwise the edit disturbs the arc → drop it (reverts to plain points)
+    }
+    return out;
+  }
+
+  // Re-derive every arc's owned vertices as a fillet of its neighbouring
+  // edges. `loopFn(loopIdx)` returns the (mutable) point array; arcs are
+  // rewritten in place at a fixed vertex count. Returns the surviving arcs
+  // (invalid ones dropped). Never changes array lengths, so no ref remap.
+  _reprojectArcsOn(loopFn) {
+    const kept = [];
+    for (const arc of this.arcs) {
+      const pts = loopFn(arc.loop);
+      const n = pts ? pts.length : 0;
+      if (!pts || n - arc.len < 4 || arc.lo < 0 || arc.lo + arc.len > n) continue;
+      const P1 = pts[(arc.lo - 1 + n) % n], P1b = pts[(arc.lo - 2 + n) % n];
+      const P2 = pts[(arc.lo + arc.len) % n], P2b = pts[(arc.lo + arc.len + 1) % n];
+      const f = filletArc(P1b, P1, P2, P2b, arc.r);
+      if (!f) continue;
+      const np = arcPointsN(f.C.x, f.C.y, f.r, f.T1, f.T2, f.mid, arc.len);
+      for (let i = 0; i < arc.len; i++) pts[arc.lo + i] = np[i];
+      kept.push(arc);
+    }
+    return kept;
+  }
+
+  // Reproject arcs on the live geometry (drops invalid ones from this.arcs).
+  _reprojectArcsLive() {
+    if (!this.arcs.length || this._reprojecting) return;
+    this._reprojecting = true;
+    this.arcs = this._reprojectArcsOn(l => this._loop(l) || null);
+    this._reprojecting = false;
+  }
+
+  _hasSolvables() { return this.constraints.length > 0 || this.arcs.length > 0; }
 
   _notifyAnnos() {
     if (this.cb.onAnnosChanged) this.cb.onAnnosChanged();
   }
 
-  // Run the solver on the live geometry. extraAnchors pin e.g. the dragged
-  // vertex so the solver moves everything else around it.
+  // Run the solver on the live geometry, then reproject fillet arcs so they
+  // stay tangent to the freshly-solved edges. extraAnchors pin e.g. the
+  // dragged vertex so the solver moves everything else around it.
   solveNow(extraAnchors = []) {
-    if (!this.constraints.length) return null;
-    return solveConstraints(this._geo(), this.constraints, { extraAnchors });
+    if (!this._hasSolvables()) return null;
+    const res = this.constraints.length
+      ? solveConstraints(this._geo(), this.constraints, { extraAnchors }) : null;
+    this._reprojectArcsLive();
+    return res;
   }
 
   // Solve a deep copy for the drag ghost preview. Returns cloned geometry
   // ({outer, holes, circles, sections}) or null when nothing would move.
   _solveGhost(extraAnchors) {
-    if (!this.constraints.length) return null;
+    if (!this._hasSolvables()) return null;
     const g = structuredClone({
       outer: this.outer, holes: this.holes, circles: this.circles,
       sections: this.sections.map(s => ({ pts: s.pts })),
     });
-    const geo = {
-      loop: l => l === -1 ? g.outer
-        : l >= REGION_LOOP_BASE ? (g.sections[l - REGION_LOOP_BASE] && g.sections[l - REGION_LOOP_BASE].pts)
-        : g.holes[l],
-      circle: i => g.circles[i] || null,
-    };
-    solveConstraints(geo, this.constraints, { extraAnchors });
+    const loopFn = l => l === -1 ? g.outer
+      : l >= REGION_LOOP_BASE ? (g.sections[l - REGION_LOOP_BASE] && g.sections[l - REGION_LOOP_BASE].pts)
+      : g.holes[l];
+    if (this.constraints.length) {
+      solveConstraints({ loop: loopFn, circle: i => g.circles[i] || null }, this.constraints, { extraAnchors });
+    }
+    this._reprojectArcsOn(loopFn); // preview tangent fillets on the clone
     return g;
   }
 
@@ -835,7 +906,7 @@ export class TraceEditor {
           y: Math.max(0, Math.min(maxY, o.y + dy)),
         };
       });
-      this._ghost = this.constraints.length ? this._solveGhost(this._dragAnchors()) : null;
+      this._ghost = this._hasSolvables() ? this._solveGhost(this._dragAnchors()) : null;
       this._changed(true);
       return;
     }
@@ -869,8 +940,8 @@ export class TraceEditor {
         if (loop) for (const p of loop) { p.x += dx; p.y += dy; }
         this._lastMm = mm;
       }
-      // Constrained drag: preview where the solver will put everything.
-      this._ghost = this.constraints.length && this._placedIdx === null
+      // Constrained drag: preview where the solver + fillet arcs will land.
+      this._ghost = this._hasSolvables() && this._placedIdx === null
         ? this._solveGhost(this._dragAnchors()) : null;
       this._changed(true);
       return;
@@ -1233,53 +1304,69 @@ export class TraceEditor {
     if (!span) return { ok: false, reason: 'Select a run of 3+ points on one outline first.' };
     const { loop, lo, hi, pts } = span;
     const n = pts.length, len = hi - lo + 1;
-    if (n - len < 2) return { ok: false, reason: 'Need a straight edge on each side of the corner.' };
+    if (n - len < 4) return { ok: false, reason: 'Need a straight edge on each side of the corner.' };
     const fit = fitCircle(pts.slice(lo, hi + 1));
     if (!fit) return { ok: false, reason: 'Could not fit an arc to that selection.' };
 
-    // The straight edges before and after the run define the two lines; their
-    // intersection is the virtual corner V.
+    // Fillet of the two straight edges bracketing the run, at its current
+    // fitted radius (see measure.filletArc).
     const P1 = pts[(lo - 1 + n) % n], P1b = pts[(lo - 2 + n) % n];
     const P2 = pts[(hi + 1) % n], P2b = pts[(hi + 2) % n];
-    const d1 = { x: P1.x - P1b.x, y: P1.y - P1b.y };
-    const d2 = { x: P2.x - P2b.x, y: P2.y - P2b.y };
-    const den = d1.x * d2.y - d1.y * d2.x;
-    if (Math.abs(den) < 1e-9) return { ok: false, reason: 'Adjacent edges are parallel — no corner to fillet.' };
-    const t = ((P2b.x - P1b.x) * d2.y - (P2b.y - P1b.y) * d2.x) / den;
-    const V = { x: P1b.x + d1.x * t, y: P1b.y + d1.y * t };
-
-    // Unit directions from the corner out along each straight edge (toward the
-    // arc side) and the interior half-angle between them.
-    const nrm = v => { const l = Math.hypot(v.x, v.y) || 1e-9; return { x: v.x / l, y: v.y / l }; };
-    const e1 = nrm({ x: P1.x - V.x, y: P1.y - V.y });
-    const e2 = nrm({ x: P2.x - V.x, y: P2.y - V.y });
-    const dot = Math.max(-1, Math.min(1, e1.x * e2.x + e1.y * e2.y));
-    const phi = Math.acos(dot), alpha = phi / 2;
-    if (alpha < 1e-3 || Math.PI - phi < 1e-3) return { ok: false, reason: 'Corner is too shallow to fillet.' };
-
-    let r = fit.r;
-    let tanDist = r / Math.tan(alpha); // corner → tangent point along each edge
-    // Keep the tangent points between the corner and the neighbouring vertices.
-    const maxTan = Math.min(Math.hypot(P1.x - V.x, P1.y - V.y),
-      Math.hypot(P2.x - V.x, P2.y - V.y)) * 0.98;
-    if (tanDist > maxTan) { tanDist = maxTan; r = tanDist * Math.tan(alpha); }
-    const cenDist = r / Math.sin(alpha); // corner → arc centre along the bisector
-    const bis = nrm({ x: e1.x + e2.x, y: e1.y + e2.y });
-    const C = { x: V.x + bis.x * cenDist, y: V.y + bis.y * cenDist };
-    const T1 = { x: V.x + e1.x * tanDist, y: V.y + e1.y * tanDist };
-    const T2 = { x: V.x + e2.x * tanDist, y: V.y + e2.y * tanDist };
-    const mid = { x: V.x + bis.x * (cenDist - r), y: V.y + bis.y * (cenDist - r) };
+    const f = filletArc(P1b, P1, P2, P2b, fit.r);
+    if (!f) return { ok: false, reason: 'Adjacent edges are parallel or the corner is too shallow.' };
 
     this.pushUndo();
-    const arc = this._arcPoints(C.x, C.y, r, T1, T2, mid);
+    const arc = this._arcPoints(f.C.x, f.C.y, f.r, f.T1, f.T2, f.mid);
+    // Drop any existing arc overlapping this loop's edited region, then splice.
+    this.arcs = this.arcs.filter(a => a.loop !== loop);
     this._refsOp({ op: 'splice', loop, lo, removed: len, added: arc.length }, n);
     pts.splice(lo, len, ...arc);
     this._reselectRun(loop, lo, arc.length);
-    this._lastArc = { loop, lo, len: arc.length, A: T1, B: T2, mid };
+    // Register a persistent, live-re-solving fillet arc for the new run.
+    this.arcs.push({ loop, lo, len: arc.length, r: Math.round(f.r * 100) / 100 });
+    this._lastArc = { loop, lo, len: arc.length, A: f.T1, B: f.T2, mid: f.mid };
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
+    this._notifyAnnos();
     this._notifySelect();
     this._changed();
-    return { ok: true, r: Math.round(r * 100) / 100 };
+    return { ok: true, r: Math.round(f.r * 100) / 100 };
+  }
+
+  // The arc entity owning the current selection span, or null.
+  _selectedArc() {
+    const span = this._selectionSpan(2);
+    if (!span) return null;
+    const len = span.hi - span.lo + 1;
+    return this.arcs.find(a => a.loop === span.loop && a.lo === span.lo && a.len === len) || null;
+  }
+
+  // Re-radius the fillet arc under the selection (persistent path). Falls back
+  // to the one-shot _lastArc re-fit when the selection isn't a live arc.
+  setArcRadius(rMm) {
+    if (!(rMm > 0)) return false;
+    const arc = this._selectedArc();
+    if (arc) {
+      this.pushUndo();
+      arc.r = Math.round(rMm * 100) / 100;
+      this._reprojectArcsLive();
+      this._reselectRun(arc.loop, arc.lo, arc.len);
+      this._notifySelect();
+      this._changed();
+      return true;
+    }
+    return this.setSelectedArcRadius(rMm);
+  }
+
+  // Release the selected fillet arc back to plain, independently-editable
+  // points (keeps the current shape, drops the live-tangent behaviour).
+  releaseSelectedArc() {
+    const arc = this._selectedArc();
+    if (!arc) return false;
+    this.pushUndo();
+    this.arcs = this.arcs.filter(a => a !== arc);
+    this._notifyAnnos();
+    this._changed();
+    return true;
   }
 
   // Points along the arc of circle (cx,cy,r) from A to B, choosing the sweep
@@ -1390,6 +1477,9 @@ export class TraceEditor {
   }
 
   _changed(throttled = false) {
+    // Keep fillet arcs tangent after any change (except while a constrained
+    // drag is previewing via the ghost — the release commit handles it then).
+    if (!this._ghost) this._reprojectArcsLive();
     this.draw();
     if (this.cb.onChange) this.cb.onChange(throttled);
   }
@@ -1548,8 +1638,8 @@ export class TraceEditor {
     // Constrained-drag ghost: where the solver will put things on release.
     if (this._ghost) this._drawGhost(ctx);
 
-    // Measurement annotations + constraint badges (all modes — they're
-    // user-created and cheap).
+    // Live fillet arcs (owned spans), then measurement + constraint overlays.
+    this._drawArcs(ctx);
     this._drawMeasurements(ctx);
     this._drawConstraints(ctx);
 
@@ -1611,6 +1701,29 @@ export class TraceEditor {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, x, y);
+  }
+
+  // Tint each live fillet arc's owned run + a centre tick, so it reads as a
+  // managed tangent arc rather than plain vertices.
+  _drawArcs(ctx) {
+    if (!this.arcs.length) return;
+    const selArc = this._selectedArc();
+    for (const arc of this.arcs) {
+      const pts = this._loop(arc.loop);
+      if (!pts || arc.lo + arc.len > pts.length) continue;
+      ctx.beginPath();
+      const p0 = this._mmToScreen(pts[arc.lo]);
+      ctx.moveTo(p0.x, p0.y);
+      for (let i = 1; i < arc.len; i++) {
+        const p = this._mmToScreen(pts[arc.lo + i]);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.strokeStyle = arc === selArc ? '#ffd257' : '#8bd6c0';
+      ctx.lineWidth = arc === selArc ? 3.5 : 2.5;
+      ctx.globalAlpha = 0.85;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
   }
 
   _drawMeasurements(ctx) {

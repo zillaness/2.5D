@@ -1109,6 +1109,14 @@ function refreshSelectionTools() {
   $('densifyBtn').disabled = !run2;
   $('clearSelBtn').disabled = !count;
   if (!count) $('arcRadiusField').hidden = true;
+  // Reflect whether the current selection is a live tangent fillet arc.
+  const liveArc = !!traceEditor._selectedArc();
+  $('releaseArcBtn').hidden = !liveArc;
+  $('arcLiveNote').hidden = !liveArc;
+  if (liveArc) {
+    $('arcRadiusField').hidden = false;
+    $('arcRadius').value = fmtDim(traceEditor._selectedArc().r);
+  }
 }
 $('fitArcBtn').addEventListener('click', () => {
   const r = traceEditor.fitArcToSelection();
@@ -1123,8 +1131,14 @@ $('fitArcBtn').addEventListener('click', () => {
 });
 $('arcRadius').addEventListener('change', e => {
   const mm = parseDim(e.target.value);
-  if (mm > 0 && traceEditor.setSelectedArcRadius(mm)) {
+  if (mm > 0 && traceEditor.setArcRadius(mm)) {
     $('arcRadius').value = fmtDim(mm);
+  }
+});
+$('releaseArcBtn').addEventListener('click', () => {
+  if (traceEditor.releaseSelectedArc()) {
+    toast('Fillet released to editable points.');
+    refreshSelectionTools();
   }
 });
 $('fitLineBtn').addEventListener('click', () => {
@@ -1385,6 +1399,7 @@ function serializeProject(includePhoto) {
     trace: traceEditor.getTrace(),
     measurements: traceEditor.measurements,
     constraints: traceEditor.constraints,
+    arcs: traceEditor.arcs,
     holeTemplate: traceEditor.holeTemplate,
     pxPerMm: state.rect ? state.rect.pxPerMm : null,
     rectified: state.rect ? state.rect.canvas.toDataURL('image/jpeg', 0.85) : null,
@@ -1457,6 +1472,7 @@ function loadProject(p) {
       traceEditor.setCircles(p.trace.circles || []);
       traceEditor.measurements = Array.isArray(p.measurements) ? structuredClone(p.measurements) : [];
       traceEditor.constraints = Array.isArray(p.constraints) ? structuredClone(p.constraints) : [];
+      traceEditor.arcs = Array.isArray(p.arcs) ? structuredClone(p.arcs) : [];
       traceEditor.draw();
     }
     if (p.holeTemplate) traceEditor.holeTemplate = structuredClone(p.holeTemplate);
@@ -1611,6 +1627,7 @@ $('libSaveBtn').addEventListener('click', () => {
     // Refs are index-based, so they survive the origin shift unchanged.
     measurements: structuredClone(traceEditor.measurements),
     constraints: structuredClone(traceEditor.constraints),
+    arcs: structuredClone(traceEditor.arcs),
   };
   const list = libLoad();
   const existing = list.findIndex(o => o.name === name);
@@ -1668,6 +1685,7 @@ function loadOutlineIntoSession(o) {
   traceEditor.setCircles((o.circles || []).map(c2 => structuredClone(c2)));
   traceEditor.measurements = Array.isArray(o.measurements) ? structuredClone(o.measurements) : [];
   traceEditor.constraints = Array.isArray(o.constraints) ? structuredClone(o.constraints) : [];
+  traceEditor.arcs = Array.isArray(o.arcs) ? structuredClone(o.arcs) : [];
   traceEditor.draw();
   traceEditor.setSections(state.regions);
   refreshModelFields();

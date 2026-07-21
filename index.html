@@ -336,7 +336,11 @@
       </div>
       <div class="field" id="arcRadiusField" hidden>
         <label for="arcRadius">Arc radius (mm)</label>
-        <input type="text" inputmode="decimal" id="arcRadius">
+        <div class="slider-row">
+          <input type="text" inputmode="decimal" id="arcRadius">
+          <button id="releaseArcBtn" class="btn small" hidden title="Turn this live tangent fillet back into plain, independently-editable points">Release</button>
+        </div>
+        <p id="arcLiveNote" class="hint" hidden>Live fillet — stays tangent as you edit the adjacent edges.</p>
       </div>
 
       <p id="traceInfo" class="info"></p>

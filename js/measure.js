@@ -21,6 +21,7 @@
 import { fitCircle, resampleClosed, signedArea, polygonPerimeter } from './contour.js';
 
 export const REGION_LOOP_BASE = 1000;
+const TAU = Math.PI * 2;
 
 // ---- primitive geometry ----
 
@@ -168,6 +169,63 @@ export function measureInfo(m, geo) {
     default:
       return null;
   }
+}
+
+// ---- tangent fillet arcs ----
+// A fillet arc of radius r tangent to the two straight edges P1b→P1 and
+// P2b→P2 that bracket a corner. Returns { C, r, T1, T2, mid } (r may be
+// shrunk to keep the tangent points between the corner and P1/P2), or null
+// when the edges are parallel / the corner is too shallow. The `mid` point is
+// the arc's closest point to the corner (a stable sweep selector).
+export function filletArc(P1b, P1, P2, P2b, r) {
+  const d1 = { x: P1.x - P1b.x, y: P1.y - P1b.y };
+  const d2 = { x: P2.x - P2b.x, y: P2.y - P2b.y };
+  const den = d1.x * d2.y - d1.y * d2.x;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((P2b.x - P1b.x) * d2.y - (P2b.y - P1b.y) * d2.x) / den;
+  const V = { x: P1b.x + d1.x * t, y: P1b.y + d1.y * t };
+  const nrm = v => { const l = Math.hypot(v.x, v.y) || 1e-9; return { x: v.x / l, y: v.y / l }; };
+  const e1 = nrm({ x: P1.x - V.x, y: P1.y - V.y });
+  const e2 = nrm({ x: P2.x - V.x, y: P2.y - V.y });
+  const dot = Math.max(-1, Math.min(1, e1.x * e2.x + e1.y * e2.y));
+  const phi = Math.acos(dot), alpha = phi / 2;
+  if (alpha < 1e-3 || Math.PI - phi < 1e-3) return null;
+  let rr = r, tanDist = rr / Math.tan(alpha);
+  const maxTan = Math.min(Math.hypot(P1.x - V.x, P1.y - V.y),
+    Math.hypot(P2.x - V.x, P2.y - V.y)) * 0.98;
+  if (tanDist > maxTan) { tanDist = maxTan; rr = tanDist * Math.tan(alpha); }
+  const cenDist = rr / Math.sin(alpha);
+  const bis = nrm({ x: e1.x + e2.x, y: e1.y + e2.y });
+  return {
+    C: { x: V.x + bis.x * cenDist, y: V.y + bis.y * cenDist },
+    r: rr,
+    T1: { x: V.x + e1.x * tanDist, y: V.y + e1.y * tanDist },
+    T2: { x: V.x + e2.x * tanDist, y: V.y + e2.y * tanDist },
+    mid: { x: V.x + bis.x * (cenDist - rr), y: V.y + bis.y * (cenDist - rr) },
+  };
+}
+
+// Exactly n points (n >= 2) along the arc of circle (cx,cy,r) from A to B,
+// picking the sweep whose midpoint is nearest `nearMid`.
+export function arcPointsN(cx, cy, r, A, B, nearMid, n) {
+  const a0 = Math.atan2(A.y - cy, A.x - cx);
+  const a1 = Math.atan2(B.y - cy, B.x - cx);
+  const norm = a => { while (a <= -Math.PI) a += TAU; while (a > Math.PI) a -= TAU; return a; };
+  let sweep = norm(a1 - a0);
+  const mAng = a0 + sweep / 2;
+  const mPt = { x: cx + r * Math.cos(mAng), y: cy + r * Math.sin(mAng) };
+  const mAlt = { x: cx + r * Math.cos(mAng + Math.PI), y: cy + r * Math.sin(mAng + Math.PI) };
+  if (nearMid && Math.hypot(mAlt.x - nearMid.x, mAlt.y - nearMid.y) <
+      Math.hypot(mPt.x - nearMid.x, mPt.y - nearMid.y)) {
+    sweep = sweep > 0 ? sweep - TAU : sweep + TAU;
+  }
+  const m = Math.max(2, n | 0);
+  const out = [];
+  for (let k = 0; k < m; k++) {
+    const a = a0 + sweep * (k / (m - 1));
+    out.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+  }
+  return out;
 }
 
 // Loop stats for the info readout.

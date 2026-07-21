@@ -1408,6 +1408,80 @@ check('resulting arc is tangent to both edges (centre r from each line)',
   `dRight ${tan.distToRight?.toFixed(3)}, dTop ${tan.distToTop?.toFixed(3)}, r ${tan.r}`);
 check('arc points sit cleanly on the fitted circle', tan.rms < 0.05, `rms ${tan.rms?.toFixed(4)}`);
 
+// ---------------------------------------------------------------- first-class (live) arcs
+const arcs = await page.evaluate(async () => {
+  const { fitCircle } = await import('/js/contour.js');
+  const ed = window.__app.traceEditor;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 400;
+  ed.setRectified(c, 4);
+  const build = () => [
+    { x: 0, y: 50 }, { x: 30, y: 50 },
+    { x: 44, y: 50 }, { x: 50, y: 46 }, { x: 50, y: 40 },
+    { x: 50, y: 20 }, { x: 50, y: 0 }, { x: 0, y: 0 },
+  ];
+  ed.setTrace(build().map(p => ({ ...p })), []);
+  ed.setCircles([]);
+  ed.measurements = []; ed.constraints = []; ed.arcs = [];
+  ed.selectedVerts = [2, 3, 4].map(i => ({ loop: -1, idx: i }));
+  const made = ed.makeTangentSelection();
+  const registered = ed.arcs.length;
+  const arc = ed.arcs[0];
+
+  // The two edges are x=50 and y=50; a tangent circle has centre (50-r, 50-r).
+  const centreErr = () => {
+    const f = fitCircle(ed.outer.slice(arc.lo, arc.lo + arc.len));
+    return { dRight: Math.abs(50 - f.cx), dTop: Math.abs(50 - f.cy), r: f.r };
+  };
+  const before = centreErr();
+
+  // Move the vertical edge from x=50 to x=60. After the tangent splice its two
+  // vertices sit just past the arc run (arc.lo+arc.len, +1); reproject and the
+  // fillet must stay tangent to the NEW line x=60.
+  ed.outer[arc.lo + arc.len].x = 60;
+  ed.outer[arc.lo + arc.len + 1].x = 60;
+  ed._reprojectArcsLive();
+  const f2 = fitCircle(ed.outer.slice(arc.lo, arc.lo + arc.len));
+  const stillTangent = { dRight: Math.abs(60 - f2.cx), dTop: Math.abs(50 - f2.cy), r: f2.r };
+
+  // Change the radius via the entity path.
+  ed.selectedVerts = [];
+  for (let k = 0; k < arc.len; k++) ed.selectedVerts.push({ loop: -1, idx: arc.lo + k });
+  const rOk = ed.setArcRadius(4);
+  const f3 = fitCircle(ed.outer.slice(arc.lo, arc.lo + arc.len));
+  const newR = f3.r;
+
+  // Editing a vertex INSIDE the arc's guarded span drops the entity.
+  const preDrop = ed.arcs.length;
+  ed.selection = { type: 'vertex', loop: -1, idx: arc.lo };
+  ed._deleteVertex(ed.selection);
+  const postDrop = ed.arcs.length;
+
+  // Serialize round-trip through a project blob.
+  ed.setTrace(build().map(p => ({ ...p })), []);
+  ed.selectedVerts = [2, 3, 4].map(i => ({ loop: -1, idx: i }));
+  ed.makeTangentSelection();
+  const proj = JSON.parse(window.__app.state ? JSON.stringify({ arcs: ed.arcs }) : '{}');
+  const serialisedCount = proj.arcs.length;
+
+  return { made: made.ok, registered, before, stillTangent, rOk, newR, preDrop, postDrop, serialisedCount };
+});
+
+console.log('\nFirst-class (live) arcs');
+check('tangent fillet registers a persistent arc entity',
+  arcs.made && arcs.registered === 1, `${arcs.registered} arc(s)`);
+check('arc is tangent to both edges on creation',
+  near(arcs.before.dRight, arcs.before.r, 0.05) && near(arcs.before.dTop, arcs.before.r, 0.05),
+  `dRight ${arcs.before.dRight.toFixed(3)}, dTop ${arcs.before.dTop.toFixed(3)}`);
+check('arc re-solves tangent after an adjacent edge moves (x=50→60)',
+  near(arcs.stillTangent.dRight, arcs.stillTangent.r, 0.05) &&
+  near(arcs.stillTangent.dTop, arcs.stillTangent.r, 0.05),
+  `dRight ${arcs.stillTangent.dRight.toFixed(3)}, dTop ${arcs.stillTangent.dTop.toFixed(3)}, r ${arcs.stillTangent.r.toFixed(2)}`);
+check('setArcRadius re-radiuses the live fillet', arcs.rOk && near(arcs.newR, 4, 0.05), `r → ${arcs.newR.toFixed(2)}`);
+check('editing inside the arc span reverts it to plain points',
+  arcs.preDrop === 1 && arcs.postDrop === 0, `${arcs.preDrop} → ${arcs.postDrop}`);
+check('arc entity serialises for project/library save', arcs.serialisedCount === 1, `${arcs.serialisedCount}`);
+
 console.log('\nMeasure/constrain UI pipeline');
 check('vertex picks produce a p2p, rim pick a radius measurement',
   String(ui.measures) === 'p2p,rad', String(ui.measures));
