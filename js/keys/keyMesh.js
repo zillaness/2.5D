@@ -211,23 +211,38 @@ function addBow(mesh, blank, opts = {}) {
   const realId = opts.bow === false ? null : (opts.bowStyle || blank.bow);
   const real = realId ? getBow(realId) : null;
   if (real) {
-    // Close the open neck chain by bridging its ends into the blade (+x overlap)
-    // so bow and blade fuse into one printable body.
+    // Close the open neck chain by bridging its ends WELL into the blade so the
+    // two bodies share a solid ~5mm overlap — a 1mm touch slices as two separate
+    // components. (The neck spans past the blade top/bottom = the shoulder stop.)
     const a = real[0], b = real[real.length - 1];
-    const outline = real.concat([[1.0, b[1]], [1.0, a[1]]]);
-    extrudePolyXH(mesh, outline, [], thick);
+    const neck = Math.min(5, cutCentre(blank.spec, 0) * IN_TO_MM - 0.5);
+    const outline = real.concat([[neck, b[1]], [neck, a[1]]]);
+    // Keyring hole at the bow's area centroid (guaranteed inside the ornate shape),
+    // nudged toward the far end.
+    let A = 0, cx = 0, ch = 0;
+    for (let i = 0; i < real.length; i++) {
+      const [x0, h0] = real[i], [x1, h1] = real[(i + 1) % real.length];
+      const cr = x0 * h1 - x1 * h0; A += cr; cx += (x0 + x1) * cr; ch += (h0 + h1) * cr;
+    }
+    A *= 0.5; cx /= 6 * A; ch /= 6 * A;
+    const minX = Math.min(...real.map(p => p[0]));
+    const hx = cx * 0.5 + minX * 0.5, hr = Math.min(2.5, w.height / 3);
+    const hole = [];
+    for (let deg = 0; deg < 360; deg += 18) { const r = deg * Math.PI / 180; hole.push([hx + hr * Math.cos(r), ch + hr * Math.sin(r)]); }
+    extrudePolyXH(mesh, outline, [hole], thick);
     return;
   }
 
-  // Generic paddle fallback.
+  // Generic paddle fallback. Overlap the blade by ~5mm so it welds (see above).
   const bowLen = opts.bowLen ?? 22, bowH = opts.bowH ?? 22, rEnd = bowH / 2;
-  const outline = [[0.5, midH - bowH / 2]];
+  const neck = Math.min(5, cutCentre(blank.spec, 0) * IN_TO_MM - 0.5);
+  const outline = [[neck, midH - bowH / 2]];
   const xc = -(bowLen - rEnd);
   for (let deg = -90; deg <= 90; deg += 12) {
     const r = deg * Math.PI / 180;
     outline.push([xc - rEnd * Math.cos(r), midH + rEnd * Math.sin(r)]);
   }
-  outline.push([0.5, midH + bowH / 2]);
+  outline.push([neck, midH + bowH / 2]);
   const hole = [];
   for (let deg = 0; deg < 360; deg += 20) {
     const r = deg * Math.PI / 180;
