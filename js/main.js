@@ -31,6 +31,7 @@ import { TraceEditor } from './ui/traceEditor.js';
 import { Viewer3D } from './viewer3d.js';
 import { importCad } from './import/cadImport.js';
 import { importPDF } from './import/pdfImport.js';
+import { readTitleBlock, suggestScale } from './import/pdfScale.js';
 
 const $ = id => document.getElementById(id);
 
@@ -1552,12 +1553,26 @@ function openCadModal(result, name) {
     grid.appendChild(cell);
     requestAnimationFrame(() => drawViewThumb(cv, v));
   });
-  const unitsNote = result.unitsKnown
+  let unitsNote = result.unitsKnown
     ? `Units from file: ${result.unitName}. ${result.views.length} view(s) found.`
     : `The file has no real units — set the overall width below. ${result.views.length} view(s) found.`;
+
+  // PDF: read the title block + a dimension to suggest the true overall width.
+  cadImportState.pdfName = null;
+  if (result.format === 'pdf' && result.texts && result.views[0]) {
+    const tb = readTitleBlock(result.texts);
+    const sg = suggestScale(result.views[0], result.texts, tb);
+    cadImportState.suggestWidthMm = sg.realWidthMm;
+    cadImportState.pdfName = tb.name;
+    unitsNote = `${sg.note}. ${result.views.length} view(s) found.`;
+  }
+
   $('cadUnitsNote').textContent = unitsNote;
   $('cadWidthRow').hidden = result.unitsKnown;
-  if (!result.unitsKnown && result.views[0]) $('cadWidth').value = fmtDim(result.views[0].w);
+  if (!result.unitsKnown && result.views[0]) {
+    const prefill = cadImportState.suggestWidthMm || result.views[0].w;
+    $('cadWidth').value = fmtDim(prefill);
+  }
   $('cadWarn').hidden = !(result.warnings && result.warnings.length);
   $('cadWarn').textContent = (result.warnings || []).join('\n');
   $('cadUseBtn').disabled = cadSelected < 0;
@@ -1573,10 +1588,11 @@ function useCadView() {
     if (wMm > 0 && v.w > 0) scale = wMm / v.w;
   }
   const sc = pts => pts.map(p => ({ x: p.x * scale, y: p.y * scale }));
-  const name = (cadImportState.name || 'drawing').replace(/\.[^.]+$/, '');
+  const name = (cadImportState.pdfName || cadImportState.name || 'drawing')
+    .replace(/\.[^.]+$/, '').replace(/[^\w.\- ]+/g, '').trim() || 'drawing';
   loadOutlineIntoSession({ name, outer: sc(v.outer), holes: v.holes.map(sc), circles: [] });
   $('cadModal').hidden = true;
-  toast(`Imported “${name}” from ${cadImportState.format.toUpperCase()}.`);
+  toast(`Imported “${name}” from ${(cadImportState.format || 'cad').toUpperCase()}.`);
 }
 
 // Route an import result into the picker (or straight to trace when a single

@@ -1308,6 +1308,58 @@ if (pdfHasLib) {
     `${pdfInt.tris} tris, ${pdfInt.bad} bad`);
 }
 
+// ---------- 16. PDF: read the drawing (title block + dimension → scale) ----------
+
+// SCALE 1:2 drawing — geometry printed at 40×25 mm, real part is 80×50 mm.
+// Title block: units MM, TITLE BRACKET-01, width dimension "80", height "50".
+const mmpt = 40 * 72 / 25.4;
+const SCALED_PDF = buildPDF(
+  `1 w\n${rectMM(10, 10, 40, 25)}\n` +
+  `BT /F1 8 Tf ${28*72/25.4} ${6*72/25.4} Td (80) Tj ET\n` +
+  `BT /F1 8 Tf ${2*72/25.4} ${20*72/25.4} Td (50) Tj ET\n` +
+  `BT /F1 7 Tf ${10*72/25.4} ${60*72/25.4} Td (SCALE 1:2) Tj ET\n` +
+  `BT /F1 7 Tf ${40*72/25.4} ${60*72/25.4} Td (MM) Tj ET\n` +
+  `BT /F1 7 Tf ${10*72/25.4} ${66*72/25.4} Td (TITLE: BRACKET-01) Tj ET`
+);
+
+if (pdfHasLib) {
+  const readRes = await page.evaluate(async (b64) => {
+    const { importPDF } = await import('./js/import/pdfImport.js');
+    const { readTitleBlock, suggestScale } = await import('./js/import/pdfScale.js');
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const r = await importPDF(bytes);
+    const tb = readTitleBlock(r.texts);
+    const sg = suggestScale(r.views[0], r.texts, tb);
+    return { printedW: r.views[0].w, tb, sg };
+  }, SCALED_PDF.toString('base64'));
+
+  console.log('\nPDF — read the drawing (title block + scale)');
+  check('title block: units MM, scale 1:2, part name read',
+    readRes.tb.units === 'mm' && readRes.tb.scaleNote && readRes.tb.scaleNote.drawn === 1 &&
+    readRes.tb.scaleNote.real === 2 && /BRACKET-01/.test(readRes.tb.name || ''),
+    `${readRes.tb.units}, ${JSON.stringify(readRes.tb.scaleNote)}, "${readRes.tb.name}"`);
+  check('printed geometry is ~40 mm; dimension sets true width to ~80 mm',
+    near(readRes.printedW, 40, 0.6) && near(readRes.sg.realWidthMm, 80, 0.6),
+    `printed ${readRes.printedW.toFixed(1)} → real ${readRes.sg.realWidthMm.toFixed(1)}`);
+
+  // Integration: import scaled PDF → modal prefills ~80 → Use → step-2 trace ~80 mm.
+  await page.setInputFiles('#cadFileInput',
+    { name: 'bracket.pdf', mimeType: 'application/pdf', buffer: SCALED_PDF });
+  await page.waitForSelector('#cadModal:not([hidden])', { timeout: 8000 }).catch(() => {});
+  const prefill = await page.evaluate(() => parseFloat(document.getElementById('cadWidth').value));
+  await page.click('#cadUseBtn');
+  await page.waitForFunction(() => window.__app.state.step === 2 && window.__app.traceEditor.outer.length >= 4,
+    null, { timeout: 8000 }).catch(() => {});
+  const scaled = await page.evaluate(() => {
+    const t = window.__app.traceEditor.getTrace();
+    let minX = 1e9, maxX = -1e9; for (const p of t.outer) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); }
+    return { w: maxX - minX, name: window.__app.state.fileName };
+  });
+  check('scaled PDF: width prefilled ~80 and trace rescaled to ~80 mm',
+    near(prefill, 80, 1) && near(scaled.w, 80, 1.5), `prefill ${prefill}, trace ${scaled.w.toFixed(1)}`);
+  check('part name from title block used as project name', /BRACKET-01/.test(scaled.name), scaled.name);
+}
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 
