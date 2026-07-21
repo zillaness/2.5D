@@ -125,6 +125,16 @@ function addBlade(mesh, blank, code, weld = false) {
     const f = scaleAt(L);
     return f === 1 ? oriented : oriented.map(([t, h]) => [t, hMid + (h - hMid) * f]);
   });
+  // For welding, the bow is the SAME thickness as the blade (coplanar faces for
+  // flat printing), so the blade's flat sides sit exactly on the bow neck
+  // rectangle's edges — the weld cap would degenerate. Pull the shoulder ring's
+  // flat sides in by a hair (grooves untouched) so it stays strictly inside the
+  // neck; it tapers back to full thickness by the next station (a tiny shoulder
+  // relief, hidden right where the bow meets the blade).
+  if (weld && stations[0] === 0) {
+    const lim = w.thickness / 2 - 0.15;
+    ringLoops[0] = ringLoops[0].map(([t, h]) => [Math.sign(t) * Math.min(Math.abs(t), lim), h]);
+  }
   const rings = stations.map((L, i) => ringLoops[i].map(([t, h]) => mesh.v(L, t, h)));
 
   const m = ringLoops[0].length;
@@ -232,7 +242,9 @@ function addBowWeld(mesh, blank, blade, opts = {}) {
 // manufacturer bows and the generic printable bow.
 function weldBowOutline(mesh, blank, blade, src) {
   const w = wardingFor(blank);
-  const tb = w.thickness + 1.0;                 // bow thicker so blade ⊂ neck
+  const tb = w.thickness;                        // bow same thickness as blade →
+                                                 // top/bottom faces coplanar so the
+                                                 // whole key prints flat, no supports
   const real = [src[0]];                        // drop consecutive dups (open chain)
   for (let i = 1; i < src.length; i++) {
     const q = real[real.length - 1];
