@@ -233,34 +233,44 @@ npm run build        # regenerate dist/2.5d-local.html
 
 ### Shipped
 
-Card/bill/coin references, heat-set inserts, DXF export, STL quality presets,
-hole drag rework (centre = move, rim = resize), point multi-select
-(Ctrl-click + marquee) with group move/delete, arc/line fitting and
-densify/reduce on a selected run, rotate view 90°, and the container outline
-library are all **done** and in the app.
+Card/bill/coin references, **vector CAD import (DXF/SVG)** with a multi-view
+picker, heat-set inserts, DXF export, STL quality presets, hole drag rework
+(centre = move, rim = resize), point multi-select (Ctrl-click + marquee) with
+group move/delete, arc/line fitting and densify/reduce on a selected run,
+rotate view 90°, and the container outline library are all **done** and in the
+app.
 
-### Next up (value-per-effort)
+### Next up
 
-- **Tool-foam negative export** — shadow-foam drawer layout: a block minus
-  the offset outline. The simplest organization feature; start here.
-- **Gridfinity bin export** — a bin with the object's outline as a cutout
-  (build on the open Gridfinity spec; TraceFinity-style tracers are prior
-  art).
-- **Custom Gridfinity baseplates** shaped to a saved drawer/toolbox outline.
-- **Surface textures** — knurling / grip ridges on selected faces, with a
-  second detection threshold to segment sub-regions of the object from the
-  photo ("3D-printed painting": what's connected at one level vs. raised
-  detail at another).
+- **PDF import + read the drawing** — import a vector PDF (geometry from its
+  vector layer, units + dimension numbers from its text layer, no OCR); OCR
+  (Tesseract) only as a fallback for scanned/image PDFs. Heavy deps (pdf.js +
+  Tesseract) inlined into the single file. This is the "picture of a CAD
+  drawing → CAD out" path.
 - **Radial lens-distortion estimation** from the reference's edges (they
   should be straight — their curvature measures the distortion).
 
-### Bigger bets
+### Small / low priority
+
+- **Rotate on the corner-setting step** (step 1) — the trace-step rotate is
+  already shipped; this adds it earlier in the flow.
+- **Comma-as-decimal input** (`12,7`) — European decimal notation.
+
+### Horizon
 
 - **Keys** — trace your own key's blade profile and pick a keyway/blank
   (Schlage C, Kwikset KW1/4, …), optionally auto-detecting the type. Keys are
-  small, so the coin or card reference is the right scale — a full sheet of
-  paper is overkill. (Bitting-depth libraries would follow.)
-- **Beyond 2.5D: photogrammetry** — multiple photos around the object
-  reconstructed into a full 3D mesh (structure-from-motion + multi-view
-  stereo). A different order of machinery than the current single-shot
-  pipeline; the reference would still set scale/ground.
+  small, so the coin or card reference is the right scale.
+- **Full 3D from multi-view drawings** — reconstruct a solid from top/front/
+  side by extruding each view and intersecting (needs a 3D boolean kernel).
+  The Phase 1 view detection is the groundwork; see `docs/cad-import-spec.md`.
+
+### Tabled (deprioritized for now)
+
+- Photo/scan line-art vectorization (two-point scale) — only needed to recover
+  geometry from a pure raster photo of a drawing; PDF covers the common case.
+- Tool-foam negative export (block minus offset outline).
+- Gridfinity bin with the object as a cutout.
+- Custom Gridfinity baseplates shaped to a saved outline.
+- Surface textures / knurling via a second detection threshold.
+- Photogrammetry — multi-photo full-3D reconstruction.
