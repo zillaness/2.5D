@@ -551,29 +551,29 @@ export async function buildKeyMeshCSG(blank, code, opts = {}) {
   // bed plane). opts.debossLoops = array of (x,h) glyph loops already placed on
   // the bow (EvenOdd handles letter holes); opts.debossDepth mm (default 0.5).
   if (opts.debossLoops && opts.debossLoops.length) {
-    const raised = opts.debossMode === 'raised';         // recessed (engrave) vs proud (raised)
-    const d = Math.min((raised ? opts.embossHeight : opts.debossDepth) || (raised ? 0.4 : 0.5), tb * 0.6);
     const side = opts.debossSide || 'up';                // 'up' | 'down' | 'both'
-    const stamp = (loops, zT) => new CrossSection(loops, 'EvenOdd').extrude(d).translate([0, 0, zT]).rotate([90, 0, 0]);
-    // Engrave sinks a pocket into the face; raised stands a prism proud of it.
-    // After rotate([90,0,0]) the extrude Z maps to −Y, so zT seats the slab on the
-    // chosen face. UP = +y face, DOWN = −y face.
-    const applyFace = (loops, up) => {
-      const zT = up ? (raised ? -tb / 2 - d : -tb / 2) : (raised ? tb / 2 : tb / 2 - d);
-      const s = stamp(loops, zT);
-      key = raised ? key.add(s) : key.subtract(s);
-    };
+    const wantRaised = opts.debossMode === 'raised';
     const mirror = (loops) => {                           // flip x about the label centre
       let mn = Infinity, mx = -Infinity;
       for (const l of loops) for (const p of l) { if (p[0] < mn) mn = p[0]; if (p[0] > mx) mx = p[0]; }
       const c = (mn + mx) / 2;
       return loops.map(l => l.map(([x, h]) => [2 * c - x, h]));
     };
-    // The glyphs are authored in the (x,h) plane; the UP (+y) face is VIEWED from
-    // +y, which flips x (screen-right = −x), so mirror the up face to read right.
-    // The DOWN (−y) face is viewed from −y and reads as-authored.
-    if (side === 'up' || side === 'both') applyFace(mirror(opts.debossLoops), true);
-    if (side === 'down' || side === 'both') applyFace(opts.debossLoops, false);
+    // Engrave sinks a pocket into the face; raised stands a prism proud of it.
+    // After rotate([90,0,0]) the extrude Z maps to −Y, so zT seats the slab on the
+    // chosen face (UP = +y, DOWN = −y). RAISED only makes sense on the TOP face —
+    // a prism on the bottom face points into the print bed and can't print — so the
+    // bottom is always engraved (giving "raised top + engraved bottom" on Both).
+    const mkStamp = (loops, up, raised) => {
+      const d = Math.min((raised ? opts.embossHeight : opts.debossDepth) || (raised ? 0.4 : 0.5), tb * 0.6);
+      const zT = up ? (raised ? -tb / 2 - d : -tb / 2) : (raised ? tb / 2 : tb / 2 - d);
+      const s = new CrossSection(loops, 'EvenOdd').extrude(d).translate([0, 0, zT]).rotate([90, 0, 0]);
+      key = raised ? key.add(s) : key.subtract(s);
+    };
+    // UP face is viewed from +y (screen-right = −x) → mirror to read right; DOWN
+    // face is viewed from −y and reads as-authored.
+    if (side === 'up' || side === 'both') mkStamp(mirror(opts.debossLoops), true, wantRaised);
+    if (side === 'down' || side === 'both') mkStamp(opts.debossLoops, false, false);
   }
 
   const out = key.getMesh();

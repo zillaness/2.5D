@@ -836,8 +836,10 @@ function debossLoopsFor() {
     // Warn if it only fit by shrinking below a legible size, or still doesn't fit.
     let hlo = Infinity, hhi = -Infinity;
     for (const l of loops) for (const p of l) { if (p[1] < hlo) hlo = p[1]; if (p[1] > hhi) hhi = p[1]; }
-    const warn = (!fits(loops) || (rot % 180 === 90 ? (hhi - hlo) : (hhi - hlo)) < 1.4)
-      ? 'Label is large for this bow — it was shrunk to fit. Shorten it or try a different orientation for a bolder engrave.' : '';
+    let warn = (!fits(loops) || (hhi - hlo) < 1.4)
+      ? 'Label is large for this bow — it was shrunk to fit. Shorten it or try a different orientation for a bolder mark.' : '';
+    // Raised only prints on the top face (a bottom prism points into the bed).
+    if (mode === 'raised' && side === 'down') warn = 'Raised text can only print on the TOP face (the bottom faces the bed) — the bottom was engraved instead.';
     return { loops, side, mode, warn };
   } catch { return null; }
 }
@@ -879,16 +881,20 @@ initBlanks();
   if (tb) tb.onclick = () => { const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; apply(t); try { localStorage.setItem(KEY, t); } catch { /* ignore */ } };
 }
 // Minimize the controls panel — hand the photo the full window width while tracing.
+// The Hide button lives ON the panel; a floating tab brings it back.
 {
-  const pb = $('panelBtn'), lay = document.querySelector('.keys-layout');
-  if (pb && lay) pb.onclick = () => {
-    const hid = lay.classList.toggle('panel-hidden');
-    pb.textContent = hid ? '⇥ Show panel' : '⇤ Hide panel';
+  const pb = $('panelBtn'), ps = $('panelShow'), lay = document.querySelector('.keys-layout');
+  const setHidden = (hid) => {
+    if (!lay) return;
+    lay.classList.toggle('panel-hidden', hid);
+    if (ps) ps.hidden = !hid;
     if (state.img) fitCanvas();
     if (viewer && viewer.resize) viewer.resize();
     window.dispatchEvent(new Event('resize'));
-    draw();
+    if (state.img) draw();
   };
+  if (pb) pb.onclick = () => setHidden(true);
+  if (ps) ps.onclick = () => setHidden(false);
 }
 // Reference-rectangle size picker
 {

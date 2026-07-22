@@ -23,10 +23,12 @@ html[data-theme="light"] {
 header { display: flex; align-items: center; gap: 10px; }
 .header-tools { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 
-/* ── Collapsible sidebar (minimize to give the photo the full width). ── */
+/* ── Collapsible sidebar (Hide lives on the panel; a tab brings it back). ── */
 .keys-layout.panel-hidden { grid-template-columns: 1fr 1fr; }
 .keys-layout.panel-hidden.no3d { grid-template-columns: 1fr; }
 .keys-layout.panel-hidden .panel { display: none; }
+.panel-top { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.panel-show { position: fixed; left: 10px; top: 70px; z-index: 40; }
 
 /* ── Compaction so the controls fit a 14" laptop without scrolling. ── */
 .keys-layout .panel { padding: 12px 12px 10px; }
