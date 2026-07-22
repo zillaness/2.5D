@@ -12,6 +12,17 @@ WITH the Commons Clause** — a non-commercial, source-available license.
 
 Copyright holder: **Projects and Mods**
 
+**Two licenses, split by content type** (the standardized setup):
+
+| What | License | File |
+|------|---------|------|
+| Source code (software) | GPL-3.0-or-later WITH Commons Clause | `LICENSE` |
+| Original artwork, icons, diagrams | CC BY-NC-SA 4.0 | `LICENSE-ASSETS` |
+
+Both are non-commercial + share-alike; they just use the right instrument for
+each medium (a software license for code, a Creative Commons license for
+creative assets).
+
 > Note: with the Commons Clause added, this is **source-available, not "open
 > source"** in the formal OSI/FSF sense (those require allowing commercial use).
 > Don't label it simply "GPL-3.0" — always cite "GPL-3.0-or-later WITH Commons
@@ -86,16 +97,42 @@ short notice instead of an `SPDX-License-Identifier` line.
 
 ---
 
-## 3. README blurb + badge
+## 3. Assets (artwork, icons, diagrams) — CC BY-NC-SA 4.0
+
+Code licenses fit code, not pictures. Put **original** visual assets — logo/app
+icon, illustrations, diagrams — under **CC BY-NC-SA 4.0** (attribution,
+non-commercial, share-alike) in a separate `LICENSE-ASSETS` file.
+
+- Get the full text: https://raw.githubusercontent.com/spdx/license-list-data/main/text/CC-BY-NC-SA-4.0.txt
+- `LICENSE-ASSETS` = a short scope header (what it covers, copyright, attribution
+  line) + the full CC BY-NC-SA 4.0 text.
+- **Attribution line:** `Artwork © Projects and Mods — CC BY-NC-SA 4.0`.
+- **Scope carefully.** The assets license covers only artwork YOU created. It does
+  **not** cover the source code (that's `LICENSE`) or third-party/reference files
+  that carry their own license (e.g. keygen output is CC0; manufacturer
+  charts/models keep their own terms). Say so explicitly in the header.
+
+Optional: embed the attribution near where the asset lives (image alt text, an
+SVG `<title>`, or a `CREDITS`/`README` line).
+
+## 4. README blurb + badges
 
 ```md
 ## License
 
-**GPL-3.0-or-later WITH the [Commons Clause](https://commonsclause.com/)** —
-non-commercial, source-available. © Projects and Mods.
+- **Code:** [GPL-3.0-or-later WITH the Commons Clause](LICENSE) — non-commercial,
+  source-available. You may use, modify, and share the source (modifications stay
+  under the same terms), but may **not Sell** the Software.
+- **Artwork & diagrams:** [CC BY-NC-SA 4.0](LICENSE-ASSETS) — © Projects and Mods.
 
-You may use, modify, and share the source (modifications must stay under the same
-terms), but you may **not Sell** the Software. See [LICENSE](LICENSE).
+Third-party/reference material keeps its own license.
+```
+
+Badges:
+
+```md
+![Code: GPLv3 + Commons Clause](https://img.shields.io/badge/code-GPLv3%20%2B%20Commons%20Clause-blue.svg)
+![Assets: CC BY-NC-SA 4.0](https://img.shields.io/badge/assets-CC%20BY--NC--SA%204.0-lightgrey.svg)
 ```
 
 Optional badge:
@@ -119,6 +156,6 @@ Optional badge:
   grant a separate commercial license — dual-licensing.
 - The name in the copyright/Licensor line can be any name you choose (a project
   name/handle like "Projects and Mods" is fine — it need not be a legal name).
-- **Assets** (artwork, diagrams, docs) can instead use **CC BY-NC-SA 4.0** if you
-  want the Creative-Commons non-commercial terms for non-code files; add a
-  separate `LICENSE-ASSETS` and note which files it covers.
+- **Assets vs code:** keep them in separate files (`LICENSE` for code,
+  `LICENSE-ASSETS` for artwork) — see section 3. Don't try to cover images with a
+  code license or code with a CC license; use the right instrument for each.
