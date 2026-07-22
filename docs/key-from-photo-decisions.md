@@ -127,14 +127,26 @@ repo README. Links:
 
 (Exact URLs TBD — waiting on the channel / Ko-fi / referral URLs.)
 
-## TODO — key shape / mesh quality (not urgent)
+## Key shape / mesh quality (partly DONE)
 
-Improve the look and shape of the generated key vs. keygen — keygen's blade and
-bow silhouettes read as more "real." Candidates: cleaner bow outlines
-(polygonise arcs, per-manufacturer bows for BEST/SFIC instead of the generic
-one), a proper tip taper/bevel that matches factory keys, and a smoother
-blade-to-bow neck. Reference keygen's OpenSCAD geometry. User flagged this as
-desirable but low-priority.
+Making the generated key read more "real" (js/keys/keyMesh.js):
+
+- **DONE — parametric paddle bow with a waisted neck.** `paddleBowOutline()`
+  replaces the old sharp vertical flare with concave fillet arcs blending the slim
+  neck into the head, and uses 6° arc segments (was 12°). Shared by the welded and
+  CSG paths so they can't diverge.
+- **DONE — BEST gets its own bow.** `blank.bow = 'best'` selects a fuller
+  SFIC-style head (`GENERIC_BOWS.best`) instead of the bare generic paddle.
+- **DONE — rounded tip nose.** The tip bevel now follows a circular ease
+  (`sqrt(1-(1-t)²)`) so it reads like a factory nose, not a straight chamfer —
+  still a single monotonic top span, so the cap stays watertight.
+- Validated watertight on every blank in both the native weld and Manifold CSG
+  paths (boundary/non-manifold edges = 0).
+- **Still open:** real keygen-extracted BEST/SFIC silhouette (the extractor
+  defers it — `BOW_CFG` in scripts/extract-warding.mjs; its SFIC outline
+  mis-detects and needs a dedicated orientation pass). The manufacturer
+  Schlage/Kwikset/Master bows are already keygen polygons; BEST is the last
+  parametric one.
 
 ## Read-direction safety
 

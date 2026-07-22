@@ -205,6 +205,7 @@ export const BLANKS = [
     name: 'BEST A2 (7-pin, A keyway)',
     positions: 7,
     verified: true,
+    bow: 'best',             // SFIC-tuned parametric bow (no keygen silhouette yet)
     warding: 'best:a',
     wardingOptions: ['best:a', 'best:b', 'best:c'],
     spec: { ...BEST_A2_SPEC, positions: 7 },

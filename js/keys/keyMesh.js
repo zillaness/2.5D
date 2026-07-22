@@ -108,8 +108,15 @@ function addBlade(mesh, blank, code, weld = false) {
   let deepestRoot = uncutH;
   for (let c = clo; c <= chi; c++) deepestRoot = Math.min(deepestRoot, rootDepthForCode(s, c) * IN_TO_MM);
   const tipMinH = deepestRoot;
-  const tipTop = (L) => L <= rampStart ? Infinity
-    : uncutH - (uncutH - tipMinH) * (L - rampStart) / tipRamp;
+  // Round the nose: ease the top-edge bevel along a circular curve (not a straight
+  // chamfer) so the tip reads like a factory key's rounded nose. Still a single
+  // monotonic top span, so the cap stays watertight.
+  const tipTop = (L) => {
+    if (L <= rampStart) return Infinity;
+    const t = Math.min(1, (L - rampStart) / tipRamp);
+    const ease = Math.sqrt(1 - (1 - t) * (1 - t));         // circular ease-out
+    return uncutH - (uncutH - tipMinH) * ease;
+  };
 
   // L breakpoints: cut centres, flat edges and wall feet, plus a fine grid, so
   // the milled V-cuts (and the tip ramp) are captured crisply.
@@ -241,6 +248,40 @@ function bowKeyringHole(real, w) {
   return hole;
 }
 
+// ── parametric paddle bow (keyways without a keygen silhouette) ──────────────
+// Tuned per family so BEST reads like a BEST bow, not the bare generic paddle.
+const GENERIC_BOWS = {
+  generic: { bowLen: 20, bowH: 22,   neck: 5,   flare: 3.0 },
+  best:    { bowLen: 23, bowH: 25.5, neck: 4.5, flare: 3.6 },  // fuller SFIC-style head
+};
+function genericBowParams(blank, opts = {}) {
+  return GENERIC_BOWS[opts.bowStyle || blank.bow] || GENERIC_BOWS.generic;
+}
+
+// Paddle-bow outline in (x,h): a rounded head on a slim neck, with concave "waist"
+// fillets blending the neck into the paddle so the blade→bow transition is smooth
+// (not a hard step), and fine arc segments so the curves read clean. `neckX` caps
+// the open neck end — 0 for the welded build, +overlap for the CSG union. Order:
+// shoulder-bottom → neck → bottom waist → far round end → top waist → shoulder-top.
+function paddleBowOutline(w, p) {
+  const H = w.height, midH = H / 2;
+  const { bowLen, bowH, neck } = p, neckX = p.neckX ?? 0, seg = p.seg ?? 6;
+  const flare = Math.min(p.flare ?? 3, neck - 0.5);
+  const rEnd = bowH / 2, ry = bowH / 2 - H / 2;
+  const xEndC = -neck - flare - (bowLen - rEnd);      // far-end arc centre
+  const ell = (cx, cy, rx, rr, a0, a1) => {           // elliptical arc, a0→a1 in deg
+    const n = Math.max(1, Math.round(Math.abs(a1 - a0) / seg)), o = [];
+    for (let i = 0; i <= n; i++) { const a = (a0 + (a1 - a0) * i / n) * Math.PI / 180; o.push([cx + rx * Math.cos(a), cy + rr * Math.sin(a)]); }
+    return o;
+  };
+  const pts = [[neckX, midH - H / 2], [-neck, midH - H / 2]];      // shoulder + neck bottom
+  pts.push(...ell(-neck, midH - bowH / 2, flare, ry, 90, 180));    // bottom waist (concave)
+  pts.push(...ell(xEndC, midH, rEnd, rEnd, -90, -270));            // far round end (far side)
+  pts.push(...ell(-neck, midH + bowH / 2, flare, ry, 180, 270));   // top waist (concave)
+  pts.push([-neck, midH + H / 2], [neckX, midH + H / 2]);          // neck + shoulder top
+  return pts;
+}
+
 // ── bow (welded) ─────────────────────────────────────────────────────────────
 // Weld the real manufacturer bow to the blade as ONE manifold — no overlapping
 // shells (which slice as separate/voided parts under even-odd fill). The bow is a
@@ -311,27 +352,12 @@ function weldBowOutline(mesh, blank, blade, src) {
 }
 
 // ── bow (generic, fallback for keyways without a real bow, e.g. BEST) ─────────
-// Built as an OPEN outline (neck-bottom → rounded far end → neck-top) so it welds
-// to the blade as one manifold, same as the real bows. The keyring hole is added
-// by weldBowOutline from the outline centroid.
+// Built as an OPEN outline (shoulder → waisted neck → rounded far end → neck →
+// shoulder) so it welds to the blade as one manifold, same as the real bows. The
+// keyring hole is added by weldBowOutline from the outline centroid.
 function addBow(mesh, blank, blade, opts = {}) {
-  const w = wardingFor(blank), H = w.height, midH = H / 2;
-  const bowLen = opts.bowLen ?? 20, bowH = opts.bowH ?? 22, rEnd = bowH / 2;
-  const neck = opts.neck ?? 5;                   // full-height blade neck before the paddle,
-                                                 // so the wide bow doesn't butt into cut #1
-  const xc = -neck - (bowLen - rEnd);            // paddle round-end centre
-  const outline = [
-    [0, midH - H / 2],                           // shoulder bottom (weld end, blade height)
-    [-neck, midH - H / 2],                        // neck bottom
-    [-neck, midH - bowH / 2],                     // flare out to the paddle
-  ];
-  for (let deg = -90; deg <= 90; deg += 12) {     // round the far end, bottom → top
-    const r = deg * Math.PI / 180;
-    outline.push([xc - rEnd * Math.cos(r), midH + rEnd * Math.sin(r)]);
-  }
-  outline.push([-neck, midH + bowH / 2]);         // paddle top
-  outline.push([-neck, midH + H / 2]);            // flare back in to the neck
-  outline.push([0, midH + H / 2]);                // shoulder top (weld end)
+  const w = wardingFor(blank);
+  const outline = paddleBowOutline(w, { ...genericBowParams(blank, opts), neckX: 0 });
   weldBowOutline(mesh, blank, blade, outline);
 }
 
@@ -356,11 +382,8 @@ export function bowOutline(blank, opts = {}) {
     for (let i = 1; i < src.length; i++) { const q = pts[pts.length - 1]; if (Math.abs(src[i][0] - q[0]) > 1e-3 || Math.abs(src[i][1] - q[1]) > 1e-3) pts.push(src[i]); }
     pts[0][0] = 0; pts[pts.length - 1][0] = 0;          // pin neck ends to x=0
     outline = pts.concat([[overlap, pts[pts.length - 1][1]], [overlap, pts[0][1]]]);
-  } else {                                             // generic paddle + neck
-    const bowLen = 20, bowH = 22, rEnd = bowH / 2, neck = 5, xc = -neck - (bowLen - rEnd);
-    outline = [[overlap, midH - H / 2], [-neck, midH - H / 2], [-neck, midH - bowH / 2]];
-    for (let deg = -90; deg <= 90; deg += 12) { const r = deg * Math.PI / 180; outline.push([xc - rEnd * Math.cos(r), midH + rEnd * Math.sin(r)]); }
-    outline.push([-neck, midH + bowH / 2], [-neck, midH + H / 2], [overlap, midH + H / 2]);
+  } else {                                             // parametric paddle + waisted neck
+    outline = paddleBowOutline(w, { ...genericBowParams(blank, opts), neckX: overlap });
   }
   return area2(outline) < 0 ? outline.reverse() : outline;   // CCW
 }

@@ -5,6 +5,10 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v4.0  nicer keys: BEST gets its own fuller SFIC-style bow (was the bare
+//         generic paddle); the generic/BEST bows now have concave "waist" fillets
+//         easing the neck into the head + finer arcs; the blade tip is a rounded
+//         (circular-eased) nose instead of a straight chamfer.
 //   v3.9  shape-based bow auto-detection: flood-fill finds the keyring hole (the
 //         bow's unique feature) — else the silhouette's principal-axis wide end —
 //         and orients back[0] to the bow, so the bitting can't default backwards.
@@ -51,4 +55,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v3.9';
+export const VERSION = 'v4.0';
