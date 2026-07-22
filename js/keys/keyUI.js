@@ -7,7 +7,7 @@
 
 import { BLANKS, getBlank, wardingFor, IN_TO_MM } from './blanks.js';
 import { cutCentre, rootDepthForCode, codeRange } from './blanks.js';
-import { decode, findValleys, rootDepthMm, snapDepthMm, spacingMm } from './decode.js';
+import { decode, rootDepthMm, snapDepthMm, spacingMm } from './decode.js';
 import { checkMACS } from './bitting.js';
 import { buildKeyMesh } from './keyMesh.js';
 import { Viewer3D } from '../viewer3d.js';
@@ -25,7 +25,7 @@ const state = {
   blank: getBlank('SC1'), wardingId: null,
   overrides: {},                 // {position: code}
   decoded: null, mesh: null,
-  drag: null, scaleClicks: null,
+  drag: null, cardQuad: null,
 };
 
 let viewer = null;
@@ -66,9 +66,26 @@ function loadImage(src) {
     fitCanvas();
     autoPlace();
     redecode(true);
+    const pt = $('photoTools'); if (pt) pt.hidden = false;
     status('Adjust the shoulder/tip if needed, then confirm/drag the cut depths.');
   };
   img.src = src;
+}
+
+// Rotate 90° CW / mirror (left–right) / flip (top–bottom) the working image.
+// Re-renders the pixels so the whole pipeline (auto-place, sampling, decode)
+// just works in the new orientation. Orientation change resets the card box; the
+// mm scale is orientation-invariant, so a set scale is kept.
+function transformImage(kind) {
+  if (!state.img) return;
+  const iw = state.img.naturalWidth, ih = state.img.naturalHeight;
+  const c = document.createElement('canvas'), g = c.getContext('2d');
+  if (kind === 'rot') { c.width = ih; c.height = iw; g.translate(ih, 0); g.rotate(Math.PI / 2); }
+  else if (kind === 'mirror') { c.width = iw; c.height = ih; g.translate(iw, 0); g.scale(-1, 1); }
+  else { c.width = iw; c.height = ih; g.translate(0, ih); g.scale(1, -1); } // flip
+  g.drawImage(state.img, 0, 0);
+  state.cardQuad = null;
+  loadImage(c.toDataURL('image/png'));
 }
 
 function fitCanvas() {
@@ -127,9 +144,15 @@ function autoPlace() {
   let shb = bowAtMax ? bins - 1 : 0; const dirb = bowAtMax ? -1 : 1;
   for (let b = bowAtMax ? bins - 1 : 0; b >= 0 && b < bins; b += dirb)
     if (prof[b] > 1.4 * bladeLvl) { shb = b; break; }
-  const shX = minx + (shb / bins) * (maxx - minx);
-  state.shoulder = horizontal ? { x: shX, y: cy } : { x: cx, y: miny + (shb / bins) * (maxy - miny) };
-  state.tip = bowAtMax ? { x: minx + 2 * step, y: cy } : { x: maxx - 2 * step, y: cy };
+  // Tip is the end OPPOSITE the bow. bowAtMax means the bow sits at the min
+  // coordinate, so the tip is at the max end (and vice-versa).
+  if (horizontal) {
+    state.shoulder = { x: minx + (shb / bins) * (maxx - minx), y: cy };
+    state.tip = { y: cy, x: bowAtMax ? maxx - 2 * step : minx + 2 * step };
+  } else {
+    state.shoulder = { x: cx, y: miny + (shb / bins) * (maxy - miny) };
+    state.tip = { x: cx, y: bowAtMax ? maxy - 2 * step : miny + 2 * step };
+  }
 }
 const median = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
@@ -182,12 +205,25 @@ function reprofile() {
   state.pxPerMm = pxPerMm;
   $('scaleReadout').textContent = `${pxPerMm.toFixed(2)} px/mm` + (state.manualScale ? '' : ' (auto)');
   state.profile = raw.map(r => ({ u: r.up / pxPerMm, h: r.ext / pxPerMm }));
-  // Look for the cuts only in the cut region — past the shoulder flat, short of
-  // the tip taper — so tapering/edge effects aren't mistaken for cuts.
-  const cutLo = cutCentre(spec, 0) * IN_TO_MM - spacingMm(spec) * 0.7;
-  const cutHi = cutCentre(spec, spec.positions - 1) * IN_TO_MM + spacingMm(spec) * 0.7;
-  const region = state.profile.filter(p => p.u >= cutLo && p.u <= cutHi);
-  state.cutUs = findValleys(region, spec.positions, spacingMm(spec) * 0.55);
+  // Anchor each cut at its KNOWN manufacturing position (measured from the
+  // shoulder datum the user set) and snap it to the nearest valley within a small
+  // window. This is robust to perspective without the global mis-registration a
+  // free valley search hits on real photos, where the warding groove, card edge
+  // and tip taper all read as false minima (the "4-9-0-0-0" garbage).
+  state.cutUs = [];
+  for (let i = 0; i < spec.positions; i++) {
+    const u0 = cutCentre(spec, i) * IN_TO_MM;
+    state.cutUs.push(nearestValleyU(state.profile, u0, spacingMm(spec) * 0.45));
+  }
+}
+// u of the deepest profile sample within ±win of u0 (falls back to u0 if empty).
+function nearestValleyU(profile, u0, win) {
+  let best = null, bh = Infinity;
+  for (const p of profile) {
+    if (p.u < u0 - win || p.u > u0 + win) continue;
+    if (p.h < bh) { bh = p.h; best = p.u; }
+  }
+  return best == null ? u0 : best;
 }
 
 function redecode(reprof = false) {
@@ -215,9 +251,14 @@ function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!state.img) return;
   ctx.drawImage(state.img, state.view.ox, state.view.oy, state.img.naturalWidth * state.view.s, state.img.naturalHeight * state.view.s);
-  if (state.scaleClicks) {
-    ctx.fillStyle = '#37b6ff';
-    for (const p of state.scaleClicks) { const c = toCanvas(p); ctx.beginPath(); ctx.arc(c.x, c.y, 5, 0, 7); ctx.fill(); }
+  if (state.cardQuad) {
+    const c = state.cardQuad.map(toCanvas);
+    ctx.strokeStyle = '#37b6ff'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+    ctx.beginPath(); ctx.moveTo(c[0].x, c[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y);
+    ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+    for (const p of c) dot(p, '#37b6ff', 7);
+    label(c[0], 'card');
   }
   if (!state.shoulder || !state.tip) return;
   const o = state.shoulder, t = state.tip;
@@ -260,10 +301,8 @@ function label(p, s) { ctx.fillStyle = '#fff'; ctx.font = 'bold 14px monospace';
 function hit(p, target) { const c = toCanvas(target); return Math.hypot(c.x - p.x, c.y - p.y) < 14; }
 canvas.addEventListener('pointerdown', (e) => {
   const p = { x: e.offsetX, y: e.offsetY };
-  if (state.scaleClicks) {
-    state.scaleClicks.push(toImage(p));
-    if (state.scaleClicks.length === 2) finishScale();
-    draw(); return;
+  if (state.cardQuad) {                    // grab a card corner if one is near
+    for (let i = 0; i < 4; i++) if (hit(p, state.cardQuad[i])) { state.drag = { kind: 'card', idx: i }; return; }
   }
   if (state.shoulder && hit(p, state.shoulder)) state.drag = { kind: 'shoulder' };
   else if (state.tip && hit(p, state.tip)) state.drag = { kind: 'tip' };
@@ -280,6 +319,7 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   if (!state.drag) return;
   const p = toImage({ x: e.offsetX, y: e.offsetY });
+  if (state.drag.kind === 'card') { state.cardQuad[state.drag.idx] = p; applyCardScale(); draw(); return; }
   if (state.drag.kind === 'shoulder') state.shoulder = p;
   else if (state.drag.kind === 'tip') state.tip = p;
   else if (state.drag.kind === 'depth') {
@@ -295,22 +335,47 @@ window.addEventListener('pointerup', () => {
   state.drag = null;
 });
 
-// ── scale ────────────────────────────────────────────────────────────────────
-$('scaleBtn').onclick = () => { state.scaleClicks = []; status('Click two points a known distance apart…'); draw(); };
-function finishScale() {
-  const [a, b] = state.scaleClicks;
-  const px = Math.hypot(b.x - a.x, b.y - a.y);
-  const mm = parseFloat(prompt('Distance between the two points (mm)?', '85.6'));
-  state.scaleClicks = null;
-  if (mm > 0) {
-    state.manualScale = px / mm;
-    status('Scale set (overrides auto). Adjust cut depths.');
+// ── scale (align the card's four corners) ─────────────────────────────────────
+// A CR80 card is 85.60 × 53.98 mm. Drag its four corners onto the card in the
+// photo; the known edge lengths set px/mm. All in-page (no prompt(), which is
+// blocked in the sandboxed artifact iframe).
+const CARD_LONG = 85.60, CARD_SHORT = 53.98;
+$('scaleBtn').onclick = () => {
+  if (!state.img) { status('Load a photo first.'); return; }
+  const { w, h } = state.sample;
+  // Default box in card proportions, centred, so the corners start near the card.
+  const cw = w * 0.6, ch = cw * (CARD_SHORT / CARD_LONG);
+  const x0 = (w - cw) / 2, y0 = (h - ch) / 2;
+  state.cardQuad = [
+    { x: x0, y: y0 }, { x: x0 + cw, y: y0 },
+    { x: x0 + cw, y: y0 + ch }, { x: x0, y: y0 + ch },
+  ];
+  applyCardScale();
+  status('Drag the 4 corners onto the card’s corners. Scale updates as you drag.');
+  draw();
+};
+function applyCardScale() {
+  const q = state.cardQuad; if (!q) return;
+  const d = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+  const hAvg = (d(q[0], q[1]) + d(q[3], q[2])) / 2;   // top & bottom edges
+  const vAvg = (d(q[0], q[3]) + d(q[1], q[2])) / 2;   // left & right edges
+  const [lng, srt] = hAvg >= vAvg ? [hAvg, vAvg] : [vAvg, hAvg];
+  const pxPerMm = (lng / CARD_LONG + srt / CARD_SHORT) / 2;
+  if (pxPerMm > 0) {
+    state.manualScale = pxPerMm;
+    $('scaleReadout').textContent = `${pxPerMm.toFixed(2)} px/mm (card)`;
     redecode(true);
-  } else draw();
+  }
 }
 
 // ── buttons ──────────────────────────────────────────────────────────────────
-$('fileInput').onchange = (e) => { const f = e.target.files[0]; if (f) loadImage(URL.createObjectURL(f)); };
+$('fileInput').onchange = (e) => {
+  const f = e.target.files[0];
+  if (f) { state.manualScale = null; state.cardQuad = null; loadImage(URL.createObjectURL(f)); }
+};
+$('rotateBtn').onclick = () => transformImage('rot');
+$('mirrorBtn').onclick = () => transformImage('mirror');
+$('flipVBtn').onclick = () => transformImage('flip');
 $('autoBtn').onclick = () => { autoPlace(); redecode(true); };
 $('genBtn').onclick = () => generate();
 $('exportBtn').onclick = () => {

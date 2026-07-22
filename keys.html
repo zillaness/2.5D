@@ -35,14 +35,21 @@
     <div class="field">
       <label>1 · Photo</label>
       <input type="file" id="fileInput" accept="image/*">
-      <p class="hint">Key flat on a card (85.60 × 53.98 mm), shoulder and cuts visible.</p>
+      <div class="btn-row" id="photoTools" hidden>
+        <button class="btn small" id="rotateBtn" title="Rotate 90° clockwise">⟳ Rotate</button>
+        <button class="btn small" id="mirrorBtn" title="Flip left–right">⇄ Mirror</button>
+        <button class="btn small" id="flipVBtn" title="Flip top–bottom">⇅ Flip</button>
+      </div>
+      <p class="hint">Key flat on a card (85.60 × 53.98 mm), shoulder and cuts visible.
+      Use Rotate/Mirror/Flip to orient the key roughly level, bow to one side.</p>
     </div>
 
     <div class="field">
       <label>2 · Scale</label>
-      <button class="btn small" id="scaleBtn">Set scale — click 2 points</button>
+      <button class="btn small" id="scaleBtn">Set scale — align the card</button>
       <span id="scaleReadout" class="mono"></span>
-      <p class="hint">Click the two long edges of the card, then enter 85.6 mm (or any known length).</p>
+      <p class="hint">Drag the 4 corners of the dashed box onto the card's corners
+      (85.60 × 53.98 mm). Scale updates live as you drag.</p>
     </div>
 
     <div class="field">
