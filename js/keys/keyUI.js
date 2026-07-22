@@ -212,11 +212,15 @@ function reprofile() {
   //  · one cut dot per position, dropped on the milled edge at the nearest valley
   const his = raw.map(r => r.hi), los = raw.map(r => r.lo);
   const backIsHi = spread(his) < spread(los);
-  const backOff = median(backIsHi ? his : los);
-  state.back = [
-    { x: o.x + n.x * backOff, y: o.y + n.y * backOff },
-    { x: t.x + n.x * backOff, y: t.y + n.y * backOff },
-  ];
+  // Fit the back line to the ACTUAL detected back-edge points (not parallel to the
+  // bow-tilted axis) so it — and the shoulder line square to it — line up.
+  const bpts = raw.map(r => {
+    const off = backIsHi ? r.hi : r.lo;
+    return { x: o.x + d.x * r.up + n.x * off, y: o.y + d.y * r.up + n.y * off };
+  });
+  const avg = (arr) => ({ x: arr.reduce((s, p) => s + p.x, 0) / arr.length, y: arr.reduce((s, p) => s + p.y, 0) / arr.length });
+  const kk = Math.max(3, Math.floor(bpts.length * 0.15));
+  state.back = [avg(bpts.slice(0, kk)), avg(bpts.slice(-kk))];
   const edgeAtPx = (upPx) => {                       // milled-edge offset near up
     let best = null, bd = Infinity;
     for (const r of raw) { const dd = Math.abs(r.up - upPx); if (dd < bd) { bd = dd; best = r; } }
@@ -297,32 +301,37 @@ function draw() {
     label(c[0], 'card');
   }
   if (!state.shoulder || !state.tip) return;
-  const o = state.shoulder, t = state.tip;
-  const dx = t.x - o.x, dy = t.y - o.y, L = Math.hypot(dx, dy) || 1;
-  const n = { x: -dy / L, y: dx / L };
-  const co = toCanvas(o);
-  // shoulder line (blue) — where the cuts start
+  // Direction along the blade: prefer the (draggable) back edge — it's the
+  // reliable straight reference — so the shoulder line stays square to the blade
+  // even if the auto axis was tilted by the bow.
+  let du;
+  if (state.back) { const [A, B] = state.back, dl = { x: B.x - A.x, y: B.y - A.y }, Ll = Math.hypot(dl.x, dl.y) || 1; du = { x: dl.x / Ll, y: dl.y / Ll }; }
+  else { const dx = state.tip.x - state.shoulder.x, dy = state.tip.y - state.shoulder.y, L = Math.hypot(dx, dy) || 1; du = { x: dx / L, y: dy / L }; }
+  const nn = { x: -du.y, y: du.x };                 // perpendicular (across the blade)
+  const co = toCanvas(state.shoulder);
+  // shoulder line (blue) — perpendicular to the blade, where the cuts start
   const sh = state.blank.spec.bladeHeight * IN_TO_MM * (state.pxPerMm || 4) * 1.3 * state.view.s;
-  line({ x: co.x + n.x * sh, y: co.y + n.y * sh }, { x: co.x - n.x * sh, y: co.y - n.y * sh }, '#37b6ff', 3);
-  dot(co, '#37b6ff', 7); label(co, 'shoulder');
+  line({ x: co.x + nn.x * sh, y: co.y + nn.y * sh }, { x: co.x - nn.x * sh, y: co.y - nn.y * sh }, '#37b6ff', 3);
+  dot(co, '#37b6ff', 6); label(co, 'shoulder');
   // back-edge line (green) — the depth-zero datum
   if (state.back) {
     const a = toCanvas(state.back[0]), b = toCanvas(state.back[1]);
     line(a, b, '#4ec98a', 3);
-    dot(a, '#4ec98a', 7); dot(b, '#4ec98a', 7); label(b, 'back');
+    dot(a, '#4ec98a', 6); dot(b, '#4ec98a', 6); label(b, 'back');
   }
-  // cut dots (red) with a depth line down to the back edge + code label
+  // cut handles: a thin height line (parallel to the blade) at each valley, with
+  // a faint drop line to the back edge — so the key stays visible underneath.
   if (state.decoded && state.decoded.fromHandles && state.back) {
-    const [A, B] = state.back, dl = { x: B.x - A.x, y: B.y - A.y }, Ll = Math.hypot(dl.x, dl.y) || 1;
-    const du = { x: dl.x / Ll, y: dl.y / Ll };
+    const [A] = state.back;
     for (const cut of state.decoded.cuts) {
       const cp = toCanvas(cut.pt);
       const tp = (cut.pt.x - A.x) * du.x + (cut.pt.y - A.y) * du.y;   // foot on back line
       const cf = toCanvas({ x: A.x + du.x * tp, y: A.y + du.y * tp });
       const col = state.decoded.ambiguous.includes(cut.i) ? '#ffcc33' : '#ff5b5b';
-      line(cf, cp, col, 2);
-      dot(cp, col, 8);
-      label({ x: cp.x - 5, y: cp.y - 11 }, String(cut.code));
+      line(cf, cp, 'rgba(255,120,120,0.35)', 1);                     // faint depth drop
+      const hw = 14;                                                 // half-length px
+      line({ x: cp.x - du.x * hw, y: cp.y - du.y * hw }, { x: cp.x + du.x * hw, y: cp.y + du.y * hw }, col, 2.5);
+      label({ x: cp.x + hw - 2, y: cp.y - 4 }, String(cut.code));
     }
   }
 }
