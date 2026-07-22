@@ -371,24 +371,17 @@ function draw() {
     }
     label(c[0], 'card · line up the edges');
   }
-  if (!state.shoulder || !state.tip) return;
-  // Direction along the blade: prefer the (draggable) back edge — it's the
-  // reliable straight reference — so the shoulder line stays square to the blade
-  // even if the auto axis was tilted by the bow.
-  let du;
-  if (state.back) { const [A, B] = state.back, dl = { x: B.x - A.x, y: B.y - A.y }, Ll = Math.hypot(dl.x, dl.y) || 1; du = { x: dl.x / Ll, y: dl.y / Ll }; }
-  else { const dx = state.tip.x - state.shoulder.x, dy = state.tip.y - state.shoulder.y, L = Math.hypot(dx, dy) || 1; du = { x: dx / L, y: dy / L }; }
-  const nn = { x: -du.y, y: du.x };                 // perpendicular (across the blade)
-  const co = toCanvas(state.shoulder);
-  // shoulder line (blue) — perpendicular to the blade, where the cuts start
-  const sh = state.blank.spec.bladeHeight * IN_TO_MM * (state.pxPerMm || 4) * 1.3 * state.view.s;
-  line({ x: co.x + nn.x * sh, y: co.y + nn.y * sh }, { x: co.x - nn.x * sh, y: co.y - nn.y * sh }, '#37b6ff', 3);
-  dot(co, '#37b6ff', 6); label(co, 'shoulder');
+  if (!state.back) return;
+  // Direction along the blade comes from the (draggable) back edge — the reliable
+  // straight reference. (The shoulder is no longer a datum; the decode measures
+  // from the back edge + cut spacing.)
+  const [bA, bB] = state.back, bdl = { x: bB.x - bA.x, y: bB.y - bA.y }, bLl = Math.hypot(bdl.x, bdl.y) || 1;
+  const du = { x: bdl.x / bLl, y: bdl.y / bLl };
   // back-edge line (green) — the depth-zero datum
-  if (state.back) {
+  {
     const a = toCanvas(state.back[0]), b = toCanvas(state.back[1]);
     line(a, b, '#4ec98a', 3);
-    dot(a, '#4ec98a', 6); dot(b, '#4ec98a', 6); label(b, 'back');
+    dot(a, '#4ec98a', 6); dot(b, '#4ec98a', 6); label(b, 'back edge');
   }
   // cut handles: a thin height line (parallel to the blade) at each valley, with
   // a faint drop line to the back edge — so the key stays visible underneath.
@@ -425,8 +418,6 @@ canvas.addEventListener('pointerdown', (e) => {
   // cut dots first (they sit on top), then the back-line ends, then shoulder/tip
   if (state.cutPts) { for (let i = 0; i < state.cutPts.length; i++) if (hit(p, state.cutPts[i])) { state.drag = { kind: 'cut', idx: i }; return; } }
   if (state.back) { for (let i = 0; i < 2; i++) if (hit(p, state.back[i])) { state.drag = { kind: 'back', idx: i }; return; } }
-  if (state.shoulder && hit(p, state.shoulder)) { state.drag = { kind: 'shoulder' }; return; }
-  if (state.tip && hit(p, state.tip)) { state.drag = { kind: 'tip' }; return; }
   // empty space → pan the view
   if (state.img) state.drag = { kind: 'pan', sx: e.offsetX, sy: e.offsetY, ox: state.view.ox, oy: state.view.oy };
 });
@@ -684,6 +675,15 @@ function meshStats(pos) {
 
 initBlanks();
 { const el = $('appVersion'); if (el) el.textContent = VERSION; }
+// Diagram modal
+{
+  const modal = $('diagramModal'), openB = $('diagramBtn'), closeB = $('diagramClose');
+  const close = () => { if (modal) modal.hidden = true; };
+  if (openB) openB.onclick = () => { if (modal) modal.hidden = false; };
+  if (closeB) closeB.onclick = close;
+  if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+}
 window.addEventListener('resize', () => { if (state.img) { fitCanvas(); draw(); } });
 
 // Expose for headless testing.

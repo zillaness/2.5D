@@ -14,6 +14,15 @@
 details.help { margin-top: 8px; }
 details.help summary { cursor: pointer; font-size: 12px; color: #37b6ff; }
 details.help svg { width: 100%; height: auto; margin: 6px 0; border-radius: 6px; border: 1px solid #232b34; }
+.modal { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  background: rgba(4, 7, 10, 0.82); padding: 24px; box-sizing: border-box; }
+.modal[hidden] { display: none; }
+.modal-card { position: relative; background: #0e1216; border: 1px solid #2a333d; border-radius: 12px;
+  padding: 14px; width: min(1100px, 96vw); max-height: 92vh; overflow: auto; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6); }
+.modal-card svg { width: 100%; height: auto; display: block; border-radius: 8px; }
+.modal-close { position: absolute; top: 10px; right: 12px; width: 32px; height: 32px; z-index: 1;
+  background: #1b232c; color: #cdd6df; border: 1px solid #2a333d; border-radius: 7px; font-size: 15px; cursor: pointer; }
+.modal-close:hover { background: #263039; color: #fff; }
 .keys-layout .panel { overflow-y: auto; }
 .keys-layout .stage {
   position: relative;
