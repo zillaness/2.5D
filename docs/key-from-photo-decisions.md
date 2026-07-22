@@ -101,6 +101,26 @@ the installer (offline, big, per-OS builds) or detecting an installed OpenSCAD
 version; the browser app gets keygen-quality connections today via Manifold CSG,
 so this is only needed to unlock keygen-exclusive features later.
 
+## Deployment
+
+- **GitHub Pages** serves the bundled apps from the `gh-pages` branch (root):
+  `index.html` = Funny Looking Rock, `2.5d.html` = the 2.5D photo tool. Rebuild
+  (`node build.mjs`) then copy `dist/funny-looking-rock.html` → `gh-pages`
+  `index.html` to update. (Enable once in repo Settings → Pages → Deploy from a
+  branch → `gh-pages` / root.)
+
+## TODO — attribution / support links
+
+Add footer links to **Projects and Mods** in three places: (1) on the app pages
+themselves — both Funny Looking Rock and 2.5D — as a small footer, and (2) in the
+repo README. Links:
+
+- **YouTube** — Projects and Mods channel
+- **Ko-fi** — support/tip link
+- **Claude Code referral** — referral link (built with Claude Code)
+
+(Exact URLs TBD — waiting on the channel / Ko-fi / referral URLs.)
+
 ## Next
 
 - Clean up the KW1 flat outline (polygonise bow arcs properly), separate
