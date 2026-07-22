@@ -151,10 +151,23 @@ that still looks plausible, so:
 - The bitting field **warns** to reverse the code before copying into keygen or
   reading a BEST spec sheet.
 
-## Next
+## TODO — shape-based bow auto-detection (classical CV, in scope)
 
-- Clean up the KW1 flat outline (polygonise bow arcs properly), separate
-  blade-blank vs bow, establish shoulder datum in the profile.
-- Build `js/keys/keyMesh.js`: extrude the flat blade + bow, carve the decoded
-  V-cuts along the top edge, emboss the code on the bow, export STL.
-- Collect Tier-1 flat models / cross-sections (SC1, M1, WR5, Y1).
+Detect the bow directly from the key silhouette so orientation (and ideally the
+whole trace) is set automatically — a stronger version of today's "material past
+the blade end" heuristic. All classical CV on the canvas `ImageData`, no ML, no
+network, stays in the standalone file:
+
+- **Primary — keyring-hole detection.** Flood-fill the background inward from the
+  image border; any enclosed non-key region is the ring hole, which only the bow
+  has → that end is unambiguously the bow. Strongest, most bow-specific cue.
+- **Fallback — PCA width profile.** Take the key's principal axis from image
+  moments (no user trace needed), walk it measuring perpendicular width; the wide
+  blobby end is the bow, the thin notched end is the blade.
+- Feed the result into `state.back` orientation (same target as the current
+  auto-orient); keep the "tip →" arrow + Flip as the override for occluded-hole /
+  cluttered-background cases. Could extend to full auto-place (axis + bow end +
+  back line) later.
+- Not ML: neural-net recognition would mean inlining multi-MB weights or a cloud
+  call (breaks offline/private) — unnecessary for a rigid shape with a literal
+  hole in it.
