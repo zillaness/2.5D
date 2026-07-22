@@ -114,7 +114,11 @@ export function placeLoopsInBox(text, box, opts = {}) {
   for (const l of loops) for (const p of l) { if (p[0] < mnx) mnx = p[0]; if (p[0] > mxx) mxx = p[0]; if (p[1] < mny) mny = p[1]; if (p[1] > mxy) mxy = p[1]; }
   const tw = mxx - mnx, th = mxy - mny;
   const bw = box.x1 - box.x0, bh = box.z1 - box.z0;
-  const sc = Math.min(bw / tw, bh / th) * (opts.fill || 0.9);
+  let sc = Math.min(bw / tw, bh / th) * (opts.fill || 0.9);
+  // Cap the character height (t.h is the unrotated ink height) so a short label —
+  // a single letter especially — engraves at a sane size instead of ballooning to
+  // fill the whole head.
+  if (opts.maxMm && t.h > 0) sc = Math.min(sc, opts.maxMm / t.h);
   const ox = box.x0 + (bw - tw * sc) / 2, oz = box.z0 + (bh - th * sc) / 2;
   // px→mm with a y-flip (canvas y-down → h up).
   return loops.map(l => l.map(([px, py]) => [ox + (px - mnx) * sc, oz + (th - (py - mny)) * sc]));

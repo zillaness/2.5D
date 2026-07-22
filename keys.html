@@ -115,20 +115,24 @@
         <button class="btn small" id="debossCodeBtn" type="button" title="Use the decoded bitting code">Bitting code</button>
       </div>
       <div class="deboss-row">
-        <select id="debossRotSel" title="Text orientation (regenerate to preview)">
-          <option value="0">Level</option>
-          <option value="90">Rotate 90°</option>
-          <option value="180">Upside down</option>
-          <option value="270">Rotate 270°</option>
+        <select id="debossModeSel" title="Recessed engraving or raised lettering">
+          <option value="engrave">Engrave</option>
+          <option value="raised">Raised</option>
         </select>
-        <select id="debossSideSel" title="Which face to engrave">
+        <select id="debossRotSel" title="Text orientation (regenerate to preview)">
+          <option value="270" selected>Tip down</option>
+          <option value="90">Tip up</option>
+          <option value="0">Level</option>
+          <option value="180">Upside&nbsp;down</option>
+        </select>
+        <select id="debossSideSel" title="Which face to mark">
           <option value="up">Up face</option>
           <option value="down">Down face</option>
-          <option value="both">Both faces</option>
+          <option value="both">Both</option>
         </select>
       </div>
-      <p class="hint">Engraved into the bow, clear of the hole; shrinks as you type. Print the
-      <b>up face</b> up.</p>
+      <p class="hint">Marked on the bow, clear of the hole; a small fixed size. <b>Tip&nbsp;down</b> reads
+      right on a keyring; <b>Tip&nbsp;up</b> on a retractor. Print the <b>up face</b> up.</p>
     </div>
 
     <div class="btn-row">

@@ -5,6 +5,9 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v4.4  deboss: label size capped (single letters no longer balloon); default
+//         orientation is Tip-down (270°, reads on a hanging keyring) with Tip-up
+//         (90°) next; add a Raised (embossed) option alongside Engrave.
 //   v4.3  UI: light/dark toggle (top-right, persists) for photo contrast; a
 //         minimize-panel button; controls compacted (collapsible help) to fit a
 //         14" laptop without scrolling; deboss gains orientation + one/both sides
@@ -65,4 +68,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v4.3';
+export const VERSION = 'v4.4';

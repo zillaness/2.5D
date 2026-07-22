@@ -785,8 +785,9 @@ function debossLoopsFor() {
   const raw = ($('debossInput')?.value || '').trim().slice(0, 14);
   if (!raw) return null;
   try {
-    const rot = +($('debossRotSel')?.value || 0);
+    const rot = +($('debossRotSel')?.value ?? 270);
     const side = $('debossSideSel')?.value || 'up';
+    const mode = $('debossModeSel')?.value || 'engrave';
     const bow = bowOutline(state.blank);                    // (x,h) bow outline
     const xs = bow.map(p => p[0]), hs = bow.map(p => p[1]);
     const minX = Math.min(...xs), hMin = Math.min(...hs), hMax = Math.max(...hs);
@@ -799,8 +800,11 @@ function debossLoopsFor() {
     if (x1 - x0 < 4) { x0 = minX + 1.5; x1 = -1.0; }        // clear band too small → whole head
     const zHalf = hh * (rot % 180 === 90 ? 0.44 : 0.32);    // taller band when text runs vertical
     const box = { x0, x1, z0: mh - zHalf, z1: mh + zHalf };
-    const loops = placeLoopsInBox(raw, box, { fill: 0.92, rot });
-    return loops.length ? { loops, side } : null;
+    // Cap the character height so short labels don't balloon (≈ a third of the
+    // blade height, clamped to a sane engraving size).
+    const maxMm = Math.min(4.5, (hMax - hMin) * 0.32);
+    const loops = placeLoopsInBox(raw, box, { fill: 0.92, rot, maxMm });
+    return loops.length ? { loops, side, mode } : null;
   } catch { return null; }
 }
 
@@ -808,7 +812,7 @@ async function generate() {
   if (!state.decoded) return;
   status('Generating…');
   const deb = debossLoopsFor();
-  const opts = { wardingId: state.wardingId, debossLoops: deb?.loops || null, debossSide: deb?.side || 'up', debossDepth: 0.5 };
+  const opts = { wardingId: state.wardingId, debossLoops: deb?.loops || null, debossSide: deb?.side || 'up', debossMode: deb?.mode || 'engrave', debossDepth: 0.5, embossHeight: 0.4 };
   let m;
   try { m = await buildKeyMeshCSG(state.blank, state.decoded.code, opts); }   // keygen-style CSG union
   catch (e) { m = buildKeyMesh(state.blank, state.decoded.code, opts); }       // native weld fallback

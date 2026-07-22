@@ -551,20 +551,26 @@ export async function buildKeyMeshCSG(blank, code, opts = {}) {
   // bed plane). opts.debossLoops = array of (x,h) glyph loops already placed on
   // the bow (EvenOdd handles letter holes); opts.debossDepth mm (default 0.5).
   if (opts.debossLoops && opts.debossLoops.length) {
-    const depth = Math.min(opts.debossDepth || 0.5, tb * 0.6);
+    const raised = opts.debossMode === 'raised';         // recessed (engrave) vs proud (raised)
+    const d = Math.min((raised ? opts.embossHeight : opts.debossDepth) || (raised ? 0.4 : 0.5), tb * 0.6);
     const side = opts.debossSide || 'up';                // 'up' | 'down' | 'both'
-    const stamp = (loops, zT) => new CrossSection(loops, 'EvenOdd').extrude(depth).translate([0, 0, zT]).rotate([90, 0, 0]);
-    // UP (+y) face: seat the pocket against +tb/2 going inward.
-    if (side === 'up' || side === 'both') key = key.subtract(stamp(opts.debossLoops, -tb / 2));
-    // DOWN (−y) face: mirror x about the label centre so it reads correctly from
-    // the back, and seat the pocket against −tb/2.
-    if (side === 'down' || side === 'both') {
+    const stamp = (loops, zT) => new CrossSection(loops, 'EvenOdd').extrude(d).translate([0, 0, zT]).rotate([90, 0, 0]);
+    // Engrave sinks a pocket into the face; raised stands a prism proud of it.
+    // After rotate([90,0,0]) the extrude Z maps to −Y, so zT seats the slab on the
+    // chosen face. UP = +y face, DOWN = −y face.
+    const applyFace = (loops, up) => {
+      const zT = up ? (raised ? -tb / 2 - d : -tb / 2) : (raised ? tb / 2 : tb / 2 - d);
+      const s = stamp(loops, zT);
+      key = raised ? key.add(s) : key.subtract(s);
+    };
+    const mirror = (loops) => {                           // read correctly from the back
       let mn = Infinity, mx = -Infinity;
-      for (const l of opts.debossLoops) for (const p of l) { if (p[0] < mn) mn = p[0]; if (p[0] > mx) mx = p[0]; }
+      for (const l of loops) for (const p of l) { if (p[0] < mn) mn = p[0]; if (p[0] > mx) mx = p[0]; }
       const c = (mn + mx) / 2;
-      const mir = opts.debossLoops.map(l => l.map(([x, h]) => [2 * c - x, h]));
-      key = key.subtract(stamp(mir, tb / 2 - depth));
-    }
+      return loops.map(l => l.map(([x, h]) => [2 * c - x, h]));
+    };
+    if (side === 'up' || side === 'both') applyFace(opts.debossLoops, true);
+    if (side === 'down' || side === 'both') applyFace(mirror(opts.debossLoops), false);
   }
 
   const out = key.getMesh();
