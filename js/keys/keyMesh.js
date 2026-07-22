@@ -16,7 +16,7 @@
 
 import earcut from '../../vendor/earcut.js';
 import {
-  wardingFor, cutCentre, rootDepthForCode, IN_TO_MM,
+  wardingFor, cutCentre, rootDepthForCode, codeRange, IN_TO_MM,
 } from './blanks.js';
 import { toBinarySTL } from '../exporters.js';
 import { getBow } from './bows.js';
@@ -91,12 +91,21 @@ function addBlade(mesh, blank, code, weld = false) {
   const tipFlat = 1.0;                       // mm of full-height blade past last cut
   const tipL = lastCut + tipFlat + tipRamp;
   const rampStart = tipL - tipRamp;
-  const hMid = w.height / 2;
-  // Taper the tip: scale the cross-section's height toward the blade centreline
-  // over the last few mm so the key ends in a ramp/point that guides into the
-  // keyway, instead of a blunt square end.
-  const scaleAt = (L) => L <= rampStart ? 1
-    : Math.max(0.12, 1 - (L - rampStart) / tipRamp);
+  // Taper the tip by beveling the TOP edge down over the last few mm — NOT by
+  // squeezing the whole cross-section toward the centreline (that compresses the
+  // warding grooves into a section that won't enter the keyway). The warding
+  // stays full-size; only the top comes down, like a real key tip. Use the same
+  // top-clip path the bitting cuts use, so it stays watertight.
+  const uncutH = w.height;
+  // Don't bevel below the deepest legal cut depth — deeper than that dips into the
+  // warding grooves (multi-span top) and the tip cap would leak. That depth is
+  // designed to clear the wards, so it's exactly how far a real tip can ramp.
+  const [clo, chi] = codeRange(s);
+  let deepestRoot = uncutH;
+  for (let c = clo; c <= chi; c++) deepestRoot = Math.min(deepestRoot, rootDepthForCode(s, c) * IN_TO_MM);
+  const tipMinH = deepestRoot;
+  const tipTop = (L) => L <= rampStart ? Infinity
+    : uncutH - (uncutH - tipMinH) * (L - rampStart) / tipRamp;
 
   // L breakpoints: cut centres, flat edges and wall feet, plus a fine grid, so
   // the milled V-cuts (and the tip ramp) are captured crisply.
@@ -118,12 +127,11 @@ function addBlade(mesh, blank, code, weld = false) {
   // Clean the source cross-section once (drop rounding-duplicate closing points
   // that would otherwise leave a degenerate triangle in each end cap).
   const wprofile = dedupe(w.profile);
-  // Clipped, tip-scaled cross-section at each station.
+  // Clip the cross-section top at each station: the lower of the bitting height
+  // and the tip bevel. Warding thickness/sides stay full so the tip fits.
   const ringLoops = stations.map(L => {
-    const loop = clipProfileAtTop(wprofile, hTopAt(L));
-    const oriented = area2(loop) < 0 ? loop.slice().reverse() : loop; // CCW in t,h
-    const f = scaleAt(L);
-    return f === 1 ? oriented : oriented.map(([t, h]) => [t, hMid + (h - hMid) * f]);
+    const loop = clipProfileAtTop(wprofile, Math.min(hTopAt(L), tipTop(L)));
+    return area2(loop) < 0 ? loop.slice().reverse() : loop; // CCW in t,h
   });
   // For welding, the bow is the SAME thickness as the blade (coplanar faces for
   // flat printing), so the blade's flat sides sit exactly on the bow neck
