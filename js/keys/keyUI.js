@@ -758,6 +758,16 @@ $('autoBtn').onclick = () => { autoPlace(); redecode(true); };
 $('flipBtn').onclick = () => { if (state.back) { state.back.reverse(); decodeFromHandles(); draw(); } };
 $('genBtn').onclick = () => generate();
 { const b = $('debossCodeBtn'); if (b) b.onclick = () => { if (state.decoded) $('debossInput').value = state.decoded.code.join('-'); }; }
+// Live note explaining what the mode/side combination will do (raised is top-only).
+function updateDebossNote() {
+  const el = $('debossNote'); if (!el) return;
+  const mode = $('debossModeSel')?.value, side = $('debossSideSel')?.value;
+  let msg = '';
+  if (mode === 'raised' && side === 'both') msg = 'ℹ️ Raised prints only on the top face, so this makes it <b>raised on top, engraved on the bottom</b>.';
+  else if (mode === 'raised' && side === 'down') msg = 'ℹ️ Raised can’t print on the bottom (it faces the bed) — the bottom will be <b>engraved</b> instead.';
+  el.innerHTML = msg; el.hidden = !msg;
+}
+{ const m = $('debossModeSel'), s = $('debossSideSel'); if (m) m.addEventListener('change', updateDebossNote); if (s) s.addEventListener('change', updateDebossNote); updateDebossNote(); }
 $('exportBtn').onclick = () => {
   if (!state.mesh) return;
   const name = `${state.blank.id}_${state.decoded.code.join('')}`;

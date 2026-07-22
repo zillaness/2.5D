@@ -5,6 +5,8 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v4.7  live note under the label explains Raised+Both = raised top / engraved
+//         bottom (and raised+bottom becomes engraved), shown as you pick it.
 //   v4.6  raised prints only on the TOP face — the bottom is always engraved (so
 //         Both = raised top + engraved bottom), with a warning on raised-bottom;
 //         Hide-panel button moved onto the panel with a floating Show tab; 2.5D
@@ -77,4 +79,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v4.6';
+export const VERSION = 'v4.7';
