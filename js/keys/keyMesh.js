@@ -563,14 +563,17 @@ export async function buildKeyMeshCSG(blank, code, opts = {}) {
       const s = stamp(loops, zT);
       key = raised ? key.add(s) : key.subtract(s);
     };
-    const mirror = (loops) => {                           // read correctly from the back
+    const mirror = (loops) => {                           // flip x about the label centre
       let mn = Infinity, mx = -Infinity;
       for (const l of loops) for (const p of l) { if (p[0] < mn) mn = p[0]; if (p[0] > mx) mx = p[0]; }
       const c = (mn + mx) / 2;
       return loops.map(l => l.map(([x, h]) => [2 * c - x, h]));
     };
-    if (side === 'up' || side === 'both') applyFace(opts.debossLoops, true);
-    if (side === 'down' || side === 'both') applyFace(mirror(opts.debossLoops), false);
+    // The glyphs are authored in the (x,h) plane; the UP (+y) face is VIEWED from
+    // +y, which flips x (screen-right = −x), so mirror the up face to read right.
+    // The DOWN (−y) face is viewed from −y and reads as-authored.
+    if (side === 'up' || side === 'both') applyFace(mirror(opts.debossLoops), true);
+    if (side === 'down' || side === 'both') applyFace(opts.debossLoops, false);
   }
 
   const out = key.getMesh();

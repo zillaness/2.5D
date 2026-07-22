@@ -777,10 +777,30 @@ $('bittingInput').oninput = (e) => {
   showBitting(); $('genBtn').disabled = false; draw();
 };
 
-// Compute the deboss glyph loops placed on the bow head (+ which side to engrave),
-// or null when the label is empty. The text is fit into a box between the keyring
-// hole's neck-side edge and the neck, so it stays clear of the hole; it's centre-
-// justified and auto-shrinks as the label grows. Honours the rotation + side UI.
+// Point in polygon (ray cast) — for keeping the label inside the bow / out of holes.
+function ptInPoly(poly, x, y) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+// Vertical metal span [loH, hiH] of a bow outline at a given x (null if none).
+function vSpanAt(poly, x) {
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    if ((a[0] <= x) !== (b[0] <= x)) { const h = a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]); if (h < lo) lo = h; if (h > hi) hi = h; }
+  }
+  return hi > lo ? [lo, hi] : null;
+}
+
+// Compute the deboss glyph loops placed on the bow head (+ side / mode / a warn
+// flag), or null when the label is empty. The text goes in the metal between the
+// keyring hole's neck-side edge and the neck, centre-justified, and is SHRUNK to
+// stay inside the real bow silhouette (and out of the holes). If it still can't
+// fit at a legible size, `warn` is set so the UI can flag it.
 function debossLoopsFor() {
   const raw = ($('debossInput')?.value || '').trim().slice(0, 14);
   if (!raw) return null;
@@ -791,20 +811,34 @@ function debossLoopsFor() {
     const bow = bowOutline(state.blank);                    // (x,h) bow outline
     const xs = bow.map(p => p[0]), hs = bow.map(p => p[1]);
     const minX = Math.min(...xs), hMin = Math.min(...hs), hMax = Math.max(...hs);
-    const mh = (hMin + hMax) / 2, hh = hMax - hMin;
     // Keyring hole(s): place text on the NECK side of the hole (its right/+x edge).
     const holes = getBowHoles(state.blank.bow) || [];
     let holeMaxX = minX;
     for (const l of holes) for (const p of l) if (p[0] > holeMaxX) holeMaxX = p[0];
     let x0 = Math.max(minX + 1.2, holeMaxX + 1.0), x1 = -1.2;
     if (x1 - x0 < 4) { x0 = minX + 1.5; x1 = -1.0; }        // clear band too small → whole head
-    const zHalf = hh * (rot % 180 === 90 ? 0.44 : 0.32);    // taller band when text runs vertical
-    const box = { x0, x1, z0: mh - zHalf, z1: mh + zHalf };
-    // Cap the character height so short labels don't balloon (≈ a third of the
-    // blade height, clamped to a sane engraving size).
-    const maxMm = Math.min(4.5, (hMax - hMin) * 0.32);
-    const loops = placeLoopsInBox(raw, box, { fill: 0.92, rot, maxMm });
-    return loops.length ? { loops, side, mode } : null;
+    // Box height from the ACTUAL metal span at the band's centre, inset by a margin
+    // (not a fixed fraction — that overran the narrowing head).
+    const margin = 0.9, span = vSpanAt(bow, (x0 + x1) / 2) || [hMin, hMax];
+    const box = { x0, x1, z0: span[0] + margin, z1: span[1] - margin };
+    const maxMm = Math.min(4.5, (span[1] - span[0]) * 0.55);
+    // Place, then shrink until every glyph point sits inside the bow and outside
+    // the holes — so the label can never spill past the border.
+    const fits = (loops) => loops.every(l => l.every(p =>
+      ptInPoly(bow, p[0], p[1]) && !holes.some(h => ptInPoly(h, p[0], p[1]))));
+    let f = 1, loops = [];
+    for (let it = 0; it < 7; it++) {
+      loops = placeLoopsInBox(raw, box, { fill: 0.9 * f, rot, maxMm: maxMm * f });
+      if (!loops.length || fits(loops)) break;
+      f *= 0.82;
+    }
+    if (!loops.length) return null;
+    // Warn if it only fit by shrinking below a legible size, or still doesn't fit.
+    let hlo = Infinity, hhi = -Infinity;
+    for (const l of loops) for (const p of l) { if (p[1] < hlo) hlo = p[1]; if (p[1] > hhi) hhi = p[1]; }
+    const warn = (!fits(loops) || (rot % 180 === 90 ? (hhi - hlo) : (hhi - hlo)) < 1.4)
+      ? 'Label is large for this bow — it was shrunk to fit. Shorten it or try a different orientation for a bolder engrave.' : '';
+    return { loops, side, mode, warn };
   } catch { return null; }
 }
 
@@ -813,6 +847,7 @@ async function generate() {
   status('Generating…');
   const deb = debossLoopsFor();
   const opts = { wardingId: state.wardingId, debossLoops: deb?.loops || null, debossSide: deb?.side || 'up', debossMode: deb?.mode || 'engrave', debossDepth: 0.5, embossHeight: 0.4 };
+  { const wEl = $('debossWarn'); if (wEl) { wEl.textContent = deb?.warn || ''; wEl.hidden = !deb?.warn; } }
   let m;
   try { m = await buildKeyMeshCSG(state.blank, state.decoded.code, opts); }   // keygen-style CSG union
   catch (e) { m = buildKeyMesh(state.blank, state.decoded.code, opts); }       // native weld fallback
