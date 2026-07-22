@@ -98,6 +98,16 @@
       <p class="hint">Know the code (from calipers or a locksmith)? Type it to skip the photo.</p>
     </div>
 
+    <div class="field deboss">
+      <label>Bow label <span class="hint">(optional)</span></label>
+      <div class="deboss-row">
+        <input type="text" id="debossInput" maxlength="16" placeholder="e.g. FRONT, or your initials">
+        <button class="btn small" id="debossCodeBtn" type="button" title="Use the decoded bitting code">Use bitting code</button>
+      </div>
+      <p class="hint">Engraved into the <b>up-facing</b> side of the bow (print that face up; the
+      blade cuts stay flat on the bed). Leave blank for no label. Regenerate to apply.</p>
+    </div>
+
     <div class="btn-row">
       <button class="btn primary" id="genBtn" disabled>Generate key</button>
       <button class="btn" id="exportBtn" disabled>Export STL</button>

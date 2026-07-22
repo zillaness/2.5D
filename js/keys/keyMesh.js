@@ -546,6 +546,18 @@ export async function buildKeyMeshCSG(blank, code, opts = {}) {
   key = key.subtract(solidXH([topWedge], wt));
   key = key.subtract(solidXH([backWedge], wt));
 
+  // ── DEBOSS: sink a shallow pocket into the UP face (+y) of the bow — a label or
+  // the bitting code, engraved so it prints face-up (the blade cuts stay in the
+  // bed plane). opts.debossLoops = array of (x,h) glyph loops already placed on
+  // the bow (EvenOdd handles letter holes); opts.debossDepth mm (default 0.5).
+  if (opts.debossLoops && opts.debossLoops.length) {
+    const depth = Math.min(opts.debossDepth || 0.5, tb * 0.6);
+    // Extrude the glyphs by `depth` and seat them against the +y face going inward
+    // (z∈[0,depth] → translate −tb/2 → after rotate y∈[tb/2−depth, tb/2]).
+    const stamp = new CrossSection(opts.debossLoops, 'EvenOdd').extrude(depth).translate([0, 0, -tb / 2]).rotate([90, 0, 0]);
+    key = key.subtract(stamp);
+  }
+
   const out = key.getMesh();
   return { positions: out.vertProperties, indices: out.triVerts };
 }

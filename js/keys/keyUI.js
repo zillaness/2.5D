@@ -12,7 +12,8 @@ import { BLANKS, getBlank, wardingFor, IN_TO_MM } from './blanks.js';
 import { cutCentre, rootDepthForCode, codeRange } from './blanks.js';
 import { decode, rootDepthMm, snapDepthMm, spacingMm } from './decode.js';
 import { checkMACS } from './bitting.js';
-import { buildKeyMesh, buildKeyMeshCSG } from './keyMesh.js';
+import { buildKeyMesh, buildKeyMeshCSG, bowOutline } from './keyMesh.js';
+import { placeLoopsInBox } from './textpath.js';
 import { initManifold, b64ToBytes } from './manifold-loader.js';
 import { Viewer3D } from '../viewer3d.js';
 import { toBinarySTL, downloadBlob } from '../exporters.js';
@@ -755,6 +756,7 @@ $('autoBtn').onclick = () => { autoPlace(); redecode(true); };
 // order the cuts are read in (for a key photographed the other way round).
 $('flipBtn').onclick = () => { if (state.back) { state.back.reverse(); decodeFromHandles(); draw(); } };
 $('genBtn').onclick = () => generate();
+{ const b = $('debossCodeBtn'); if (b) b.onclick = () => { if (state.decoded) $('debossInput').value = state.decoded.code.join('-'); }; }
 $('exportBtn').onclick = () => {
   if (!state.mesh) return;
   const name = `${state.blank.id}_${state.decoded.code.join('')}`;
@@ -774,10 +776,29 @@ $('bittingInput').oninput = (e) => {
   showBitting(); $('genBtn').disabled = false; draw();
 };
 
+// Compute the deboss glyph loops (placed on the bow head) for the current label,
+// or null when the label is empty. Fits the text into a box inside the bow head,
+// nudged toward the neck (+x, away from the keyring hole).
+function debossLoopsFor() {
+  const raw = ($('debossInput')?.value || '').trim();
+  if (!raw) return null;
+  try {
+    const bow = bowOutline(state.blank);                    // (x,h) bow outline
+    const xs = bow.map(p => p[0]), hs = bow.map(p => p[1]);
+    const minX = Math.min(...xs), hMin = Math.min(...hs), hMax = Math.max(...hs);
+    // Text box: the head half nearer the neck (x from mid→neck), vertically inset.
+    const midX = (minX + 0) / 2, mh = (hMin + hMax) / 2, hh = (hMax - hMin);
+    const box = { x0: midX + 0.5, x1: -1.2, z0: mh - hh * 0.34, z1: mh + hh * 0.34 };
+    if (box.x1 - box.x0 < 3) { box.x0 = minX + 1.5; box.x1 = -1.0; }   // small heads: use full head
+    return placeLoopsInBox(raw, box, { fill: 0.92 });
+  } catch { return null; }
+}
+
 async function generate() {
   if (!state.decoded) return;
   status('Generating…');
-  const opts = { wardingId: state.wardingId };
+  const debossLoops = debossLoopsFor();
+  const opts = { wardingId: state.wardingId, debossLoops, debossDepth: 0.5 };
   let m;
   try { m = await buildKeyMeshCSG(state.blank, state.decoded.code, opts); }   // keygen-style CSG union
   catch (e) { m = buildKeyMesh(state.blank, state.decoded.code, opts); }       // native weld fallback
