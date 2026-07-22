@@ -126,7 +126,10 @@ function addBlade(mesh, blank, code, weld = false) {
 
   // Clean the source cross-section once (drop rounding-duplicate closing points
   // that would otherwise leave a degenerate triangle in each end cap).
-  const wprofile = dedupe(w.profile);
+  // Mirror the thickness axis: keygen's 2D warding, extruded toward the tip in our
+  // coordinate frame, comes out handed the opposite way from a real key (a
+  // paracentric keyway is handed, so the mirror wouldn't enter). Flip t to match.
+  const wprofile = dedupe(w.profile).map(([t, h]) => [-t, h]);
   // Clip the cross-section top at each station: the lower of the bitting height
   // and the tip bevel. Warding thickness/sides stay full so the tip fits.
   const ringLoops = stations.map(L => {
