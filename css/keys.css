@@ -7,6 +7,13 @@
   height: calc(100vh - 60px);
   box-sizing: border-box;
 }
+/* Before the first Generate the 3D panel is hidden — give the photo full width. */
+.keys-layout.no3d { grid-template-columns: 320px 1fr; }
+.hint.steps { padding-left: 18px; margin: 4px 0 0; }
+.hint.steps li { margin: 3px 0; }
+details.help { margin-top: 8px; }
+details.help summary { cursor: pointer; font-size: 12px; color: #37b6ff; }
+details.help svg { width: 100%; height: auto; margin: 6px 0; border-radius: 6px; border: 1px solid #232b34; }
 .keys-layout .panel { overflow-y: auto; }
 .keys-layout .stage {
   position: relative;

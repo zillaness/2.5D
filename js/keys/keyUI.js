@@ -26,6 +26,7 @@ const state = {
   overrides: {},                 // {position: code}
   decoded: null, mesh: null,
   drag: null, cardQuad: null,
+  back: null, cutPts: null,       // green back-edge line [A,B] + red cut dots (image px)
 };
 
 let viewer = null;
@@ -197,7 +198,7 @@ function reprofile() {
     const cen = centre(px, py); if (cen === null) continue;
     let lo = null, hi = null;
     for (let k = cen - tight; k <= cen + tight; k++) if (on(k)) { if (lo === null) lo = k; hi = k; }
-    if (lo !== null) raw.push({ up, ext: hi - lo });
+    if (lo !== null) raw.push({ up, lo, hi, ext: hi - lo });
   }
   if (raw.length < 5) return;
   const uncutPx = uncutOf(raw);
@@ -205,17 +206,31 @@ function reprofile() {
   state.pxPerMm = pxPerMm;
   $('scaleReadout').textContent = `${pxPerMm.toFixed(2)} px/mm` + (state.manualScale ? '' : ' (auto)');
   state.profile = raw.map(r => ({ u: r.up / pxPerMm, h: r.ext / pxPerMm }));
-  // Anchor each cut at its KNOWN manufacturing position (measured from the
-  // shoulder datum the user set) and snap it to the nearest valley within a small
-  // window. This is robust to perspective without the global mis-registration a
-  // free valley search hits on real photos, where the warding groove, card edge
-  // and tip taper all read as false minima (the "4-9-0-0-0" garbage).
-  state.cutUs = [];
+
+  // Initialise the draggable handles (the user then adjusts):
+  //  · back-edge line = the STRAIGHT side of the blade (smaller spread) → depth 0
+  //  · one cut dot per position, dropped on the milled edge at the nearest valley
+  const his = raw.map(r => r.hi), los = raw.map(r => r.lo);
+  const backIsHi = spread(his) < spread(los);
+  const backOff = median(backIsHi ? his : los);
+  state.back = [
+    { x: o.x + n.x * backOff, y: o.y + n.y * backOff },
+    { x: t.x + n.x * backOff, y: t.y + n.y * backOff },
+  ];
+  const edgeAtPx = (upPx) => {                       // milled-edge offset near up
+    let best = null, bd = Infinity;
+    for (const r of raw) { const dd = Math.abs(r.up - upPx); if (dd < bd) { bd = dd; best = r; } }
+    return best ? (backIsHi ? best.lo : best.hi) : 0;
+  };
+  state.cutPts = [];
   for (let i = 0; i < spec.positions; i++) {
     const u0 = cutCentre(spec, i) * IN_TO_MM;
-    state.cutUs.push(nearestValleyU(state.profile, u0, spacingMm(spec) * 0.45));
+    const uPx = nearestValleyU(state.profile, u0, spacingMm(spec) * 0.45) * pxPerMm;
+    const e = edgeAtPx(uPx);
+    state.cutPts.push({ x: o.x + d.x * uPx + n.x * e, y: o.y + d.y * uPx + n.y * e });
   }
 }
+function spread(a) { const m = a.reduce((s, v) => s + v, 0) / a.length; return Math.sqrt(a.reduce((s, v) => s + (v - m) * (v - m), 0) / a.length); }
 // u of the deepest profile sample within ±win of u0 (falls back to u0 if empty).
 function nearestValleyU(profile, u0, win) {
   let best = null, bh = Infinity;
@@ -226,13 +241,34 @@ function nearestValleyU(profile, u0, win) {
   return best == null ? u0 : best;
 }
 
+// Decode straight from the on-screen handles (the manual tracer): each cut dot's
+// perpendicular distance to the green back line IS its depth; order along the
+// back line gives bow→tip. No dependence on the fragile auto valley search.
+function decodeFromHandles() {
+  const spec = state.blank.spec;
+  if (!state.back || !state.cutPts || !state.pxPerMm) { state.decoded = null; showBitting(); return; }
+  const [A, B] = state.back, dl = { x: B.x - A.x, y: B.y - A.y }, Ll = Math.hypot(dl.x, dl.y) || 1;
+  const du = { x: dl.x / Ll, y: dl.y / Ll }, nb = { x: -du.y, y: du.x };
+  const ordered = state.cutPts.slice().sort((a, b) =>
+    ((a.x - A.x) * du.x + (a.y - A.y) * du.y) - ((b.x - A.x) * du.x + (b.y - A.y) * du.y));
+  const cuts = ordered.map((P, i) => {
+    const depthMm = Math.abs((P.x - A.x) * nb.x + (P.y - A.y) * nb.y) / state.pxPerMm;
+    const snap = snapDepthMm(spec, depthMm);
+    return { i, u: ((P.x - A.x) * du.x + (P.y - A.y) * du.y) / state.pxPerMm, depthMm, code: snap.code, residual: snap.residual, overridden: false, pt: P };
+  });
+  const code = cuts.map(c => c.code);
+  const halfStep = 0.5 * spec.depthStep * IN_TO_MM;
+  state.decoded = {
+    code, cuts, macs: checkMACS(spec, code),
+    ambiguous: cuts.filter(c => c.residual > 0.7 * halfStep).map(c => c.i), fromHandles: true,
+  };
+  showBitting();
+}
+
 function redecode(reprof = false) {
   if (reprof) reprofile();
-  if (!state.profile) { state.decoded = null; showBitting(); draw(); return; }
-  const cutUs = state.cutUs && state.cutUs.length === state.blank.spec.positions ? state.cutUs : undefined;
-  state.decoded = decode(state.blank.spec, state.profile, { cutUs, overrides: state.overrides });
-  showBitting();
-  $('genBtn').disabled = false;
+  decodeFromHandles();
+  $('genBtn').disabled = !state.decoded;
   draw();
 }
 
@@ -263,32 +299,30 @@ function draw() {
   if (!state.shoulder || !state.tip) return;
   const o = state.shoulder, t = state.tip;
   const dx = t.x - o.x, dy = t.y - o.y, L = Math.hypot(dx, dy) || 1;
-  const d = { x: dx / L, y: dy / L }, n = { x: -dy / L, y: dx / L };
-  const co = toCanvas(o), ctp = toCanvas(t);
-  // axis
-  line(co, ctp, '#3a6', 1.5);
-  // shoulder line
-  const sh = state.blank.spec.bladeHeight * IN_TO_MM * (state.pxPerMm || 4) * 1.5 * state.view.s;
+  const n = { x: -dy / L, y: dx / L };
+  const co = toCanvas(o);
+  // shoulder line (blue) — where the cuts start
+  const sh = state.blank.spec.bladeHeight * IN_TO_MM * (state.pxPerMm || 4) * 1.3 * state.view.s;
   line({ x: co.x + n.x * sh, y: co.y + n.y * sh }, { x: co.x - n.x * sh, y: co.y - n.y * sh }, '#37b6ff', 3);
-  dot(ctp, '#ffcc33', 6);            // tip handle
-  dot(co, '#37b6ff', 6);             // shoulder handle
-  // cut markers + depth ticks
-  if (state.decoded && state.pxPerMm) {
-    const spec = state.blank.spec, [lo, hi] = codeRange(spec);
+  dot(co, '#37b6ff', 7); label(co, 'shoulder');
+  // back-edge line (green) — the depth-zero datum
+  if (state.back) {
+    const a = toCanvas(state.back[0]), b = toCanvas(state.back[1]);
+    line(a, b, '#4ec98a', 3);
+    dot(a, '#4ec98a', 7); dot(b, '#4ec98a', 7); label(b, 'back');
+  }
+  // cut dots (red) with a depth line down to the back edge + code label
+  if (state.decoded && state.decoded.fromHandles && state.back) {
+    const [A, B] = state.back, dl = { x: B.x - A.x, y: B.y - A.y }, Ll = Math.hypot(dl.x, dl.y) || 1;
+    const du = { x: dl.x / Ll, y: dl.y / Ll };
     for (const cut of state.decoded.cuts) {
-      const uPx = cut.u * state.pxPerMm;
-      const base = { x: o.x + uPx * d.x, y: o.y + uPx * d.y };
-      // ticks for each depth level (perp offset = rootDepth mm)
-      for (let c = lo; c <= hi; c++) {
-        const off = rootDepthMm(spec, c) * state.pxPerMm;
-        const p = toCanvas({ x: base.x + n.x * off, y: base.y + n.y * off });
-        tick(p, n, 6, c === cut.code ? '#8fd' : '#456');
-      }
-      // measured marker
-      const moff = cut.depthMm * state.pxPerMm;
-      const mp = toCanvas({ x: base.x + n.x * moff, y: base.y + n.y * moff });
-      dot(mp, cut.overridden ? '#ffcc33' : (state.decoded.ambiguous.includes(cut.i) ? '#e5705a' : '#ff5050'), 7);
-      label(mp, String(cut.code));
+      const cp = toCanvas(cut.pt);
+      const tp = (cut.pt.x - A.x) * du.x + (cut.pt.y - A.y) * du.y;   // foot on back line
+      const cf = toCanvas({ x: A.x + du.x * tp, y: A.y + du.y * tp });
+      const col = state.decoded.ambiguous.includes(cut.i) ? '#ffcc33' : '#ff5b5b';
+      line(cf, cp, col, 2);
+      dot(cp, col, 8);
+      label({ x: cp.x - 5, y: cp.y - 11 }, String(cut.code));
     }
   }
 }
@@ -304,36 +338,23 @@ canvas.addEventListener('pointerdown', (e) => {
   if (state.cardQuad) {                    // grab a card corner if one is near
     for (let i = 0; i < 4; i++) if (hit(p, state.cardQuad[i])) { state.drag = { kind: 'card', idx: i }; return; }
   }
+  // cut dots first (they sit on top), then the back-line ends, then shoulder/tip
+  if (state.cutPts) { for (let i = 0; i < state.cutPts.length; i++) if (hit(p, state.cutPts[i])) { state.drag = { kind: 'cut', idx: i }; return; } }
+  if (state.back) { for (let i = 0; i < 2; i++) if (hit(p, state.back[i])) { state.drag = { kind: 'back', idx: i }; return; } }
   if (state.shoulder && hit(p, state.shoulder)) state.drag = { kind: 'shoulder' };
   else if (state.tip && hit(p, state.tip)) state.drag = { kind: 'tip' };
-  else if (state.decoded) {
-    for (const cut of state.decoded.cuts) {
-      const o = state.shoulder, t = state.tip, L = Math.hypot(t.x - o.x, t.y - o.y) || 1;
-      const d = { x: (t.x - o.x) / L, y: (t.y - o.y) / L }, n = { x: -(t.y - o.y) / L, y: (t.x - o.x) / L };
-      const uPx = cut.u * state.pxPerMm, moff = cut.depthMm * state.pxPerMm;
-      const mp = { x: o.x + uPx * d.x + n.x * moff, y: o.y + uPx * d.y + n.y * moff };
-      if (hit(p, mp)) { state.drag = { kind: 'depth', cut, n, base: { x: o.x + uPx * d.x, y: o.y + uPx * d.y } }; break; }
-    }
-  }
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!state.drag) return;
   const p = toImage({ x: e.offsetX, y: e.offsetY });
   if (state.drag.kind === 'card') { state.cardQuad[state.drag.idx] = p; applyCardScale(); draw(); return; }
+  if (state.drag.kind === 'cut') { state.cutPts[state.drag.idx] = p; decodeFromHandles(); draw(); return; }
+  if (state.drag.kind === 'back') { state.back[state.drag.idx] = p; decodeFromHandles(); draw(); return; }
   if (state.drag.kind === 'shoulder') state.shoulder = p;
   else if (state.drag.kind === 'tip') state.tip = p;
-  else if (state.drag.kind === 'depth') {
-    const { cut, n, base } = state.drag;
-    const offPx = (p.x - base.x) * n.x + (p.y - base.y) * n.y;
-    const depthMm = offPx / state.pxPerMm;
-    state.overrides[cut.i] = snapDepthMm(state.blank.spec, depthMm).code;
-  }
-  if (state.drag.kind === 'depth') redecode(); else draw();
+  draw();
 });
-window.addEventListener('pointerup', () => {
-  if (state.drag && state.drag.kind !== 'depth') redecode(true);
-  state.drag = null;
-});
+window.addEventListener('pointerup', () => { state.drag = null; });
 
 // ── scale (align the card's four corners) ─────────────────────────────────────
 // A CR80 card is 85.60 × 53.98 mm. Drag its four corners onto the card in the
@@ -402,6 +423,10 @@ function generate() {
   const m = buildKeyMesh(state.blank, state.decoded.code, { wardingId: state.wardingId });
   const st = meshStats(m.positions);
   state.mesh = { ...m, stats: st };
+  // Reveal the 3D panel now (hidden until the first key is generated so the photo
+  // gets the full width for tracing).
+  const stage = $('stage3d'); if (stage) stage.hidden = false;
+  const layout = document.querySelector('.keys-layout'); if (layout) layout.classList.remove('no3d');
   if (!viewer) viewer = new Viewer3D($('view3d'));
   viewer.setMesh(state.mesh, true);
   $('exportBtn').disabled = false;

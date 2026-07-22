@@ -2,6 +2,9 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v1.9  rebuilt decode as a manual tracer: green BACK-edge line = depth datum,
+//         red dot per cut you drag into each valley (slide both ways); 3D panel
+//         hidden until Generate; in-app "How this works" diagram.
 //   v1.8  fix auto-place tip landing on the wrong side (decode ran off the key);
 //         anchor cuts at known positions + valley-snap (no global mis-register);
 //         rotate / mirror / flip photo controls.
@@ -10,4 +13,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v1.8';
+export const VERSION = 'v1.9';
