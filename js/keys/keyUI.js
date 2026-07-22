@@ -467,6 +467,7 @@ const CARD_SIZES = {
   cr80:  { long: 85.60, short: 53.98 },   // credit / ID card (ISO ID-1)
   cr79:  { long: 83.90, short: 51.00 },   // insert card
   cr100: { long: 98.50, short: 67.00 },   // oversized badge
+  poker: { long: 88.90, short: 63.50 },   // 3.5×2.5 in playing / trading card
   half:  { long: 53.98, short: 42.80 },   // ½ CR80 key tag
   third: { long: 53.98, short: 28.53 },   // ⅓ CR80 key tag
 };
