@@ -93,3 +93,12 @@ const keyFull =
 const keyOut = path.join(root, 'dist', 'funny-looking-rock.html');
 fs.writeFileSync(keyOut, keyFull);
 console.log(`${keyOut}: ${(keyFull.length / 1024).toFixed(0)} KB`);
+
+// Body-only fragment (no <html>/<head>/<body>) for publishing as an artifact.
+const keyInner =
+  `<style>\n${css}\n${read('css/keys.css')}\n</style>\n` +
+  keyBody.trim() + '\n' +
+  `<script>${keyBundle}</script>\n`;
+const keyFrag = path.join(root, 'dist', 'funny-looking-rock.fragment.html');
+fs.writeFileSync(keyFrag, keyInner);
+console.log(`${keyFrag}: ${(keyInner.length / 1024).toFixed(0)} KB`);
