@@ -364,7 +364,12 @@ function draw() {
     for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y);
     ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
     for (const p of c) dot(p, '#37b6ff', 7);
-    label(c[0], 'card');
+    // edge-midpoint handles: drag an edge to slide it onto the card's straight side
+    for (let i = 0; i < 4; i++) {
+      const a = c[i], b = c[(i + 1) % 4], m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      ctx.fillStyle = '#7fc0ff'; ctx.fillRect(m.x - 4, m.y - 4, 8, 8);
+    }
+    label(c[0], 'card · line up the edges');
   }
   if (!state.shoulder || !state.tip) return;
   // Direction along the blade: prefer the (draggable) back edge — it's the
@@ -410,8 +415,12 @@ function label(p, s) { ctx.fillStyle = '#fff'; ctx.font = 'bold 14px monospace';
 function hit(p, target) { const c = toCanvas(target); return Math.hypot(c.x - p.x, c.y - p.y) < 14; }
 canvas.addEventListener('pointerdown', (e) => {
   const p = { x: e.offsetX, y: e.offsetY };
-  if (state.cardQuad) {                    // grab a card corner if one is near
+  if (state.cardQuad) {                    // card corner, then card edge-midpoint
     for (let i = 0; i < 4; i++) if (hit(p, state.cardQuad[i])) { state.drag = { kind: 'card', idx: i }; return; }
+    for (let i = 0; i < 4; i++) {
+      const a = state.cardQuad[i], b = state.cardQuad[(i + 1) % 4];
+      if (hit(p, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 })) { state.drag = { kind: 'cardEdge', idx: i, last: toImage(p) }; return; }
+    }
   }
   // cut dots first (they sit on top), then the back-line ends, then shoulder/tip
   if (state.cutPts) { for (let i = 0; i < state.cutPts.length; i++) if (hit(p, state.cutPts[i])) { state.drag = { kind: 'cut', idx: i }; return; } }
@@ -429,6 +438,12 @@ canvas.addEventListener('pointermove', (e) => {
     draw(); return;
   }
   const p = toImage({ x: e.offsetX, y: e.offsetY });
+  if (state.drag.kind === 'cardEdge') {          // translate the whole edge (both corners)
+    const d = { x: p.x - state.drag.last.x, y: p.y - state.drag.last.y }, i = state.drag.idx, j = (i + 1) % 4;
+    state.cardQuad[i] = { x: state.cardQuad[i].x + d.x, y: state.cardQuad[i].y + d.y };
+    state.cardQuad[j] = { x: state.cardQuad[j].x + d.x, y: state.cardQuad[j].y + d.y };
+    state.drag.last = p; applyCardScale(); draw(); return;
+  }
   if (state.drag.kind === 'card') { state.cardQuad[state.drag.idx] = p; applyCardScale(); draw(); return; }
   if (state.drag.kind === 'cut') { state.cutPts[state.drag.idx] = p; decodeFromHandles(); draw(); return; }
   if (state.drag.kind === 'back') { state.back[state.drag.idx] = p; decodeFromHandles(); draw(); return; }
@@ -460,7 +475,7 @@ $('scaleBtn').onclick = () => {
   const auto = detectCardQuad();
   if (auto) {
     state.cardQuad = auto;
-    status('Card detected — nudge any corner if it’s off, then it’s set.');
+    status('Card detected — line up the box edges with the card’s straight sides (drag an edge or corner).');
   } else {
     const { w, h } = state.sample;
     const cw = w * 0.6, ch = cw * (CARD_SHORT / CARD_LONG);
@@ -501,14 +516,67 @@ function detectCardQuad() {
   const bgIsDark = bDark > bN / 2;
   const card = pts.filter(p => (p.L <= thr) !== bgIsDark);   // card = the non-background tone
   if (card.length < total * 0.12 || card.length > total * 0.95) return null;  // implausible → manual
+  // Rough corners from the extreme points (good enough to label the 4 sides).
   const pick = (f) => card.reduce((a, b) => f(b) < f(a) ? b : a);
   const tl = pick(p => p.x + p.y), br = pick(p => -(p.x + p.y));
   const tr = pick(p => -(p.x - p.y)), bl = pick(p => p.x - p.y);
-  const quad = [tl, tr, br, bl].map(p => ({ x: p.x, y: p.y }));
-  // Sanity: the quad should cover a big, card-shaped chunk of the frame.
+  const rough = [tl, tr, br, bl].map(p => ({ x: p.x, y: p.y }));
   const area = Math.abs((tr.x - tl.x) * (bl.y - tl.y) - (bl.x - tl.x) * (tr.y - tl.y));
   if (area < (w * h) * 0.08) return null;
-  return quad;
+  // Refine: the corners are ROUNDED, so instead of trusting the extreme points,
+  // fit a straight LINE to each of the 4 edges (using the middle of each side,
+  // away from the rounded ends) and intersect adjacent lines for sharp corners.
+  // This also tracks perspective (each edge is its own line).
+  const hull = convexHull(card);
+  const sidePts = [[], [], [], []];
+  for (const p of hull) {
+    let best = 0, bd = Infinity, bt = 0;
+    for (let i = 0; i < 4; i++) {
+      const a = rough[i], b = rough[(i + 1) % 4], dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1;
+      let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / L2; t = Math.max(0, Math.min(1, t));
+      const d = (p.x - (a.x + t * dx)) ** 2 + (p.y - (a.y + t * dy)) ** 2;
+      if (d < bd) { bd = d; best = i; bt = t; }
+    }
+    if (bt > 0.12 && bt < 0.88) sidePts[best].push(p);   // drop the rounded corner zones
+  }
+  const lines = sidePts.map(ps => {
+    if (ps.length < 3) return null;
+    let L = fitLine(ps);
+    // One robust pass: drop points far from the line (the rounded-corner arcs) and
+    // refit, so the line locks onto the straight part of the edge.
+    const dist = (p) => Math.abs((p.x - L.c.x) * (-L.d.y) + (p.y - L.c.y) * L.d.x);
+    const res = ps.map(dist).sort((a, b) => a - b), med = res[res.length >> 1] || 1;
+    const kept = ps.filter(p => dist(p) < Math.max(3, 2 * med));
+    return kept.length >= 3 ? fitLine(kept) : L;
+  });
+  if (lines.some(l => !l)) return rough;                  // not enough edge points → rough corners
+  const refined = [];
+  for (let i = 0; i < 4; i++) refined.push(lineIntersect(lines[(i + 3) % 4], lines[i]) || rough[i]);
+  return refined;
+}
+// Convex hull (Andrew's monotone chain).
+function convexHull(pts) {
+  const p = pts.map(q => ({ x: q.x, y: q.y })).sort((a, b) => a.x - b.x || a.y - b.y);
+  if (p.length < 3) return p;
+  const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lo = []; for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  const up = []; for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+// Total-least-squares line fit → { c: centroid, d: unit direction }.
+function fitLine(ps) {
+  let cx = 0, cy = 0; for (const p of ps) { cx += p.x; cy += p.y; } cx /= ps.length; cy /= ps.length;
+  let sxx = 0, sxy = 0, syy = 0;
+  for (const p of ps) { const dx = p.x - cx, dy = p.y - cy; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
+  const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+  return { c: { x: cx, y: cy }, d: { x: Math.cos(th), y: Math.sin(th) } };
+}
+function lineIntersect(L1, L2) {
+  const det = L1.d.x * (-L2.d.y) - L1.d.y * (-L2.d.x);
+  if (Math.abs(det) < 1e-9) return null;
+  const rx = L2.c.x - L1.c.x, ry = L2.c.y - L1.c.y;
+  const t = (rx * (-L2.d.y) - ry * (-L2.d.x)) / det;
+  return { x: L1.c.x + t * L1.d.x, y: L1.c.y + t * L1.d.y };
 }
 // Solve an n×n linear system by Gaussian elimination with partial pivoting.
 function solveLinear(A, b) {
