@@ -602,13 +602,26 @@ function renderMeshInfo() {
 
 // ---------- wiring: step 1 ----------
 
-const sizeSel = $('paperSize');
-for (const [key, val] of Object.entries(PAPER_SIZES)) {
-  const opt = document.createElement('option');
-  opt.value = key;
-  opt.textContent = val.name;
-  sizeSel.appendChild(opt);
+// Populate a reference <select>, bucketing entries with a `group` into
+// <optgroup> submenus (first-seen order) and leaving ungrouped ones inline.
+function populateRefSelect(sel, table) {
+  const groups = new Map();
+  for (const [key, val] of Object.entries(table)) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = val.name;
+    if (val.group) {
+      let og = groups.get(val.group);
+      if (!og) { og = document.createElement('optgroup'); og.label = val.group; groups.set(val.group, og); sel.appendChild(og); }
+      og.appendChild(opt);
+    } else {
+      sel.appendChild(opt);
+    }
+  }
 }
+
+const sizeSel = $('paperSize');
+populateRefSelect(sizeSel, PAPER_SIZES);
 sizeSel.value = state.paper.size;
 
 sizeSel.addEventListener('change', () => {
@@ -635,11 +648,7 @@ $('customH').addEventListener('change', e => {
 
 // Coin reference controls
 const coinSel = $('coinSize');
-for (const [key, val] of Object.entries(COIN_SIZES)) {
-  const opt = document.createElement('option');
-  opt.value = key; opt.textContent = val.name;
-  coinSel.appendChild(opt);
-}
+populateRefSelect(coinSel, COIN_SIZES);
 coinSel.value = state.coin.size;
 coinSel.addEventListener('change', () => {
   state.coin.size = coinSel.value;
