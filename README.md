@@ -364,10 +364,17 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- *(The arc workflow is complete end-to-end: create fillets → they stay tangent
-  live → export as true arcs/circles → re-import as arcs → **Detect fillets**
-  turns imported curves back into editable arc entities.)* Open threads live in
-  the horizon/tabled lists below.
+- **Emboss / deboss labels** — engrave or raise text (a part number, a name) on
+  a face. The text→loops foundation is in (`js/text.js`: platform font →
+  marching-squares glyph loops, letter counters included). Remaining: the
+  mesh + UI. **Emboss** reuses `buildSolid` — resolve the glyph loops into
+  islands and extrude a raised prism per letter on the chosen face (a clean
+  union). **Deboss** needs material removed, which the union-based pipeline
+  doesn't do, so model it as a two-layer split of the face: the top `depth`
+  slice becomes *outline − glyphs* over a full lower layer, giving a recess the
+  shape of the text. Watch the image-y→model-y flip so text reads upright on the
+  printed face (verify on a rendered STL). Placement + depth + face + mirror
+  (for stamps) in the UI.
 
 ### Horizon
 

@@ -1807,6 +1807,29 @@ const beyond = await page.evaluate(async () => {
   return { off: run(0), on: run(50) };
 });
 
+// Text → loops foundation for emboss/deboss labels.
+const textRes = await page.evaluate(async () => {
+  const { textToLoops, labelLoops } = await import('/js/text.js');
+  const blank = textToLoops('   ');
+  const o = textToLoops('O', { px: 120 });      // has a counter → ≥ 2 loops
+  const ii = textToLoops('II', { px: 120 });    // two bars → no counters
+  const lbl = labelLoops('A1', 50, 30, 10, {}); // placed loops (mm), 10 mm tall
+  // Bounds of the placed label.
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const l of lbl) for (const p of l) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+  return {
+    blankN: blank.loops.length, oN: o.loops.length, iiHasHole: ii.loops.length,
+    lblN: lbl.length, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2,
+  };
+});
+
+console.log('\nText → loops (emboss/deboss foundation)');
+check('blank text yields no loops', textRes.blankN === 0, `${textRes.blankN}`);
+check('"O" produces a counter (outer + hole ≥ 2 loops)', textRes.oN >= 2, `${textRes.oN} loops`);
+check('labelLoops places glyphs at the requested height + centre',
+  textRes.lblN >= 1 && near(textRes.h, 10, 0.5) && near(textRes.cx, 50, 3) && near(textRes.cy, 30, 3),
+  `h ${textRes.h?.toFixed(1)}, centre (${textRes.cx?.toFixed(1)},${textRes.cy?.toFixed(1)})`);
+
 console.log('\nBeyond-the-paper capture');
 check('margin insets the paper inside a larger canvas',
   beyond.on.paperRight < beyond.on.W && beyond.off.paperRight === beyond.off.W,
