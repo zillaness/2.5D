@@ -104,10 +104,16 @@ so this is only needed to unlock keygen-exclusive features later.
 ## Deployment
 
 - **GitHub Pages** serves the bundled apps from the `gh-pages` branch (root):
-  `index.html` = Funny Looking Rock, `2.5d.html` = the 2.5D photo tool. Rebuild
-  (`node build.mjs`) then copy `dist/funny-looking-rock.html` → `gh-pages`
-  `index.html` to update. (Enable once in repo Settings → Pages → Deploy from a
-  branch → `gh-pages` / root.)
+  - `/FunnyLookingRock/` → Funny Looking Rock (the branded URL)
+  - `/` (root `index.html`) → Funny Looking Rock (mirror)
+  - `/2.5d.html` → the 2.5D photo tool
+  Rebuild (`node build.mjs`) then copy `dist/funny-looking-rock.html` onto both
+  `gh-pages` `index.html` and `FunnyLookingRock/index.html` to update. (Enable
+  once in repo Settings → Pages → Deploy from a branch → `gh-pages` / root.)
+  Live path: `https://zillaness.github.io/2.5D/FunnyLookingRock/`.
+- **TODO — dedicated repo later:** give Funny Looking Rock its own
+  `zillaness/FunnyLookingRock` repo so the URL is `.../FunnyLookingRock/` at the
+  top level (no `/2.5D/` prefix). Needs a copy/deploy step from this source repo.
 
 ## TODO — attribution / support links
 
