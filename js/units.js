@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Length parsing/formatting with mm ↔ inch support.
 //
 // parseLength accepts decimals ("12.7", ".5"), fractions ("1/2", "3/8"),

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // SVG → flattened polylines, using the browser's DOMParser.
 //
 // Walks the element tree accumulating transforms, flattens path/line/polyline/

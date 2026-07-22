@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Mask -> polygon conversion and polyline utilities.
 //
 // Boundary extraction walks directed pixel-edge segments (object kept on a

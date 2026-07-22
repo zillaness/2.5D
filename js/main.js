@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // App orchestration: three steps — (1) photo + paper corners, (2) trace +
 // holes, (3) extrusion parameters + export.
 

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Funny Looking Rock -- internal revision number.
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.

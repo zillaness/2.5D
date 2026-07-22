@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Rectangular reference table (mm). Any flat rectangle of known size
 // calibrates perspective the same way — sheets of paper, or an everyday card
 // or bill you always have on hand.

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Screw reference table (metric ISO coarse + SAE/inch) and hole sizing for
 // 3D-printed parts.
 //

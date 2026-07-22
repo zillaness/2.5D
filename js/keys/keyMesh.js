@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Native key mesh generator — the on-device replacement for keygen+OpenSCAD.
 //
 // Builds a printable 3D key from a blank + bitting code, entirely in JS:

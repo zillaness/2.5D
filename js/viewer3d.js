@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // three.js preview of the generated solid. Model data is z-up (mm); the scene
 // rotates it into three.js's y-up world for display.
 

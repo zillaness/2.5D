@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Blank / keyway library — the domain data that turns "photograph an object"
 // into "photograph a KEY". Each entry pairs a manufacturer keyway with its
 // depth-and-spacing spec (how the bitting code maps to physical cut geometry).

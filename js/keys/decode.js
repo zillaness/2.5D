@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // App-side bitting decode — the brain behind the confirm/edit UI.
 //
 // Works in millimetres (what the rectified photo gives, via the card homography).

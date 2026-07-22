@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Object segmentation on the rectified (top-down) paper image.
 //
 // The paper's colour is estimated robustly from the border band of the

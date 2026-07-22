@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Step 2 editor: show the rectified paper, overlay the traced outline and
 // holes, and let the user fix the trace: drag vertices, click an edge to
 // insert a vertex, alt/right-click to delete one, place and adjust circular

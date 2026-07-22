@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Lazy loader for the Manifold CSG engine (WASM). The bow↔blade connection is a
 // real boolean union (keygen's technique) instead of a hand-weld.
 //

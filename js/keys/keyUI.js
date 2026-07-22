@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Funny Looking Rock — key-decode UI. Ties the photo to js/keys/decode.js (read the
 // bitting, with draggable datum + per-cut depth handles) and js/keys/keyMesh.js
 // (build the printable key), previewing in Viewer3D and exporting an STL.

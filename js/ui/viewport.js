@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Shared pan/zoom viewport for the 2D canvas editors.
 //
 // World space = content pixels (photo or rectified image); screen space = CSS

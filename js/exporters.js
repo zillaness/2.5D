@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Binary STL, SVG and DXF exporters.
 
 import { APP_VERSION } from './version.js';

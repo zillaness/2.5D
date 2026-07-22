@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Measurement + geometry-reference utilities.
 //
 // Both the measure tool and the constraint system reference trace geometry

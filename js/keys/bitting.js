@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Bitting decode/encode — turn the photographed blade edge into a snapped
 // bitting code, and (for testing / preview / the mesh cut profile) turn a code
 // back into an edge.

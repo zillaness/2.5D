@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Manufacturer bow silhouettes (the head you grip), in mm, in the blade's
 // (x=length, h=height) plane with the blade back at h=0 and the shoulder near
 // x=0 (bow extends to negative x).

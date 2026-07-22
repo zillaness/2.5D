@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Geometry assembly for vector CAD import.
 //
 // CAD files describe a drawing as loose primitives — line segments, polylines,

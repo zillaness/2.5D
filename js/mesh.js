@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Solid generation: extrude a traced outline (with holes) by a thickness,
 // with optional chamfer/fillet on the bottom and top edges, plus screw-hole
 // features (through / blind / countersunk / counterbored, from either face).

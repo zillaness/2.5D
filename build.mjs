@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Bundle the app into a single self-contained HTML file that works from
 // file:// — just double-click it. No hosting, no build tools needed by the
 // person you send it to.
@@ -50,7 +53,7 @@ const inner =
   `<script>${appBundle}</script>\n`;
 
 const full =
-  `<!DOCTYPE html>\n<html lang="en">\n<head>\n` +
+  `<!DOCTYPE html>\n<!-- \u00a9 2026 Projects and Mods \u2014 GPL-3.0-or-later WITH Commons Clause (non-commercial); source + LICENSE: github.com/zillaness/2.5D -->\n<html lang="en">\n<head>\n` +
   `<meta charset="UTF-8">\n` +
   `<meta name="viewport" content="width=device-width, initial-scale=1.0">\n` +
   `<title>2.5D — photo to printable solid</title>\n` +
@@ -104,7 +107,7 @@ let keyBody = keyHtml
 const keyFavicon = (keyHtml.match(/<link rel="icon"[^>]*>/) || [''])[0];
 
 const keyFull =
-  `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n` +
+  `<!DOCTYPE html>\n<!-- \u00a9 2026 Projects and Mods \u2014 GPL-3.0-or-later WITH Commons Clause (non-commercial); source + LICENSE: github.com/zillaness/2.5D -->\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n` +
   `<meta name="viewport" content="width=device-width, initial-scale=1.0">\n` +
   `<title>Funny Looking Rock — photograph a key → print a spare</title>\n` +
   (keyFavicon ? keyFavicon + '\n' : '') +

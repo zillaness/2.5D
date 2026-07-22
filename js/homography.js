@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Planar homography from 4 point correspondences (DLT) and image rectification.
 //
 // The paper defines a world plane with known physical size. Mapping the four

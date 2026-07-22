@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Automatic paper-corner detection.
 //
 // Strategy: the paper is the dominant bright, low-saturation region. Downscale,

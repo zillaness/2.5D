@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Minimal ASCII DXF (AutoCAD R12+) reader → flattened polylines.
 //
 // DXF is a flat stream of (groupCode, value) pairs. We walk the ENTITIES

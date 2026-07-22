@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Step 1 editor: show the photo, drag the four paper-corner handles.
 // A magnifier loupe appears while dragging for pixel-accurate placement.
 

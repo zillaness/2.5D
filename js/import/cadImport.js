@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Orchestrates vector CAD import: parse (DXF/SVG) → scale to mm → normalize
 // orientation → assemble candidate views for the user to pick from.
 //

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Projects and Mods
+// GPL-3.0-or-later WITH Commons Clause (non-commercial) - see LICENSE.
+
 // Geometric constraints on the trace, solved by sequential projection.
 //
 // Each constraint knows how to nudge its geometry toward satisfaction; the
