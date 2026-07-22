@@ -5,6 +5,10 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v4.2  keygen-accurate keys: each keyway's blade TIP is now its real rounded
+//         asymmetric nose (per-keyway apex + top/back ramp, carved by CSG wedges);
+//         the bow↔blade SHOULDER has a concave fillet; and the bow carries its
+//         REAL keyring hole(s) — Kwikset's three, one for the others.
 //   v4.1  BEST now uses its REAL keygen bow (the SFIC head with the keyring
 //         hole), de-skewed from keygen's flipped tip-datum outline frame.
 //   v4.0  nicer keys: BEST gets its own fuller SFIC-style bow (was the bare
@@ -57,4 +61,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v4.1';
+export const VERSION = 'v4.2';

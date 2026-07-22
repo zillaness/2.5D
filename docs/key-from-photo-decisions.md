@@ -142,11 +142,31 @@ Making the generated key read more "real" (js/keys/keyMesh.js):
   still a single monotonic top span, so the cap stays watertight.
 - Validated watertight on every blank in both the native weld and Manifold CSG
   paths (boundary/non-manifold edges = 0).
-- **Still open:** real keygen-extracted BEST/SFIC silhouette (the extractor
-  defers it — `BOW_CFG` in scripts/extract-warding.mjs; its SFIC outline
-  mis-detects and needs a dedicated orientation pass). The manufacturer
-  Schlage/Kwikset/Master bows are already keygen polygons; BEST is the last
-  parametric one.
+- **DONE — real BEST bow** (v4.1): BOW_CFG.best de-skews keygen's flipped
+  tip-datum frame; all four bows are now real keygen polygons.
+- **DONE — keygen-accurate tips, shoulder fillet, real holes** (v4.2, built by an
+  adversarial workflow, verified per-manufacturer against keygen):
+  - **Tips:** `TIP_SPECS` per keyway (apexFrac + top/back ramp) → the CSG path
+    builds a flat-topped blade (`flatTip`) and carves the rounded ASYMMETRIC nose
+    by subtracting two chamfer wedges (top falls, back rises to the apex). Apex
+    fractions: Schlage .35, Kwikset .37, Master .50, BEST .50 (symmetric noses on
+    Master/BEST, swept on Schlage/Kwikset). Within ±0.015 of keygen.
+  - **Shoulder:** `FILLET_SPECS` + `shoulderFillet()` (true circular arc, minor-arc
+    normalized, straight-chamfer fallback when 2R≤step) shapes the CSG bow-neck
+    overlap so it sweeps into the blade edge(s) instead of a hard step.
+  - **Holes:** `getBowHoles()` from bows.js — CSG uses `CrossSection([outline,
+    ...holes],'EvenOdd')`; the weld path does a multi-hole earcut cap. Kwikset's
+    three holes, one for the others.
+  - Checker: `tools/keycheck.mjs` (Node CSG, no browser) gates watertightness +
+    tip/neck geometry. Watertight on every blank × code, weld + CSG.
+  - **Known limitation:** the tip nose + shoulder fillet live in the CSG path only
+    (the production path — the dist inlines the Manifold wasm, so CSG always
+    loads). The synchronous weld FALLBACK (`buildKeyMesh`, used only if CSG fails
+    to load) keeps a simpler top-bevel tip and a hard shoulder, though it does
+    carry the real holes and stays watertight. Upgrading the weld path to match is
+    low-value (rarely hit) and deferred.
+  - **Minor:** Master's CSG nose runs ~0.73 mm longer than keygen's (tip reserve);
+    cosmetic, deferred.
 
 ## Read-direction safety
 

@@ -22,8 +22,32 @@ import {
   wardingFor, cutCentre, rootDepthForCode, codeRange, IN_TO_MM,
 } from './blanks.js';
 import { toBinarySTL } from '../exporters.js';
-import { getBow } from './bows.js';
+import { getBow, getBowHoles } from './bows.js';
 import { initManifold } from './manifold-loader.js';
+
+// ── keygen-faithful tip / shoulder specs (per bow family) ────────────────────
+// TIP: the nose is a ROUNDED, asymmetric point. apexFrac = apex height / blade
+// height (where the two edges meet); topRamp / botRamp = mm the top / back edge
+// travel in x to reach the apex. Numbers extracted from keygen (see keycheck).
+const TIP_SPECS = {
+  schlage: { apexFrac: 0.351, topRamp: 4.995, botRamp: 2.352 },
+  kwikset: { apexFrac: 0.368, topRamp: 4.297, botRamp: 2.456 },
+  master:  { apexFrac: 0.500, topRamp: 3.243, botRamp: 3.243 },
+  best:    { apexFrac: 0.505, topRamp: 4.233, botRamp: 2.456 },
+};
+const DEFAULT_TIP = { apexFrac: 0.42, topRamp: 4.0, botRamp: 2.4 };
+function tipSpecFor(blank) { return TIP_SPECS[blank.bow] || DEFAULT_TIP; }
+
+// SHOULDER fillet: concave arc(s) blending the bow neck into the blade edge(s).
+// R = fillet radius (mm); edges = which edge(s) carry the fillet.
+const FILLET_SPECS = {
+  schlage: { R: 1.04, edges: 'both' },
+  kwikset: { R: 3.6,  edges: 'both' },
+  master:  { R: 0.86, edges: 'top'  },
+  best:    { R: 3.5,  edges: 'both' },
+};
+const DEFAULT_FILLET = { R: 1.0, edges: 'both' };
+function filletSpecFor(blank) { return FILLET_SPECS[blank.bow] || DEFAULT_FILLET; }
 
 // ── small mesh builder ───────────────────────────────────────────────────────
 class Mesh {
@@ -58,8 +82,14 @@ export function topHeightFn(blank, code) {
 // while cuts stay above the grooves). Returns points ordered as a closed loop.
 function clipProfileAtTop(profile, hTop) {
   const maxH = Math.max(...profile.map(p => p[1]));
-  // indices of the top-corner vertices (at maxH)
-  const isTop = profile.map(p => Math.abs(p[1] - maxH) < 1e-6);
+  if (hTop >= maxH) return profile.slice();              // clip line at/above top: no-op
+  // The top-corner vertices are the ones that rise ABOVE the clip line. Detect
+  // them relative to hTop, not by exact-match to maxH: the two corners of the
+  // top edge can differ by a few ×1e-4 (e.g. master 7.135900 vs 7.135700), and an
+  // |h-maxH|<1e-6 test would flag only one — lowering a single corner and leaving
+  // the other at full height, which blunts the tip. hTop is always kept above the
+  // warding grooves, so the only vertices above it are that single top span.
+  const isTop = profile.map(p => p[1] > hTop + 1e-9);
   const out = [];
   const n = profile.length;
   for (let i = 0; i < n; i++) {
@@ -86,15 +116,22 @@ function area2(loop) {
 }
 
 // ── blade: loft the clipped cross-section along L ────────────────────────────
-function addBlade(mesh, blank, code, weld = false) {
+function addBlade(mesh, blank, code, weld = false, opts = {}) {
   const s = blank.spec;
   const w = wardingFor(blank);
   const hTopAt = topHeightFn(blank, code);
   const lastCut = cutCentre(s, s.positions - 1) * IN_TO_MM;
+  // In flatTip mode (the CSG carve path) the blade runs full-height flat to the
+  // very end and the nose is cut afterwards by two chamfer wedges; reserve enough
+  // full-height length for the longer of the two tip ramps so the wedges have
+  // solid material to carve. Otherwise keep the original weld-path rounded bevel.
+  const flatTip = !!opts.flatTip;
+  const ts = tipSpecFor(blank);
   const tipRamp = 3.5;                       // mm of tapered tip
   const tipFlat = 1.0;                       // mm of full-height blade past last cut
-  const tipL = lastCut + tipFlat + tipRamp;
-  const rampStart = tipL - tipRamp;
+  const tipReserve = flatTip ? Math.max(ts.topRamp, ts.botRamp) + 0.8 : tipRamp;
+  const tipL = lastCut + tipFlat + tipReserve;
+  const rampStart = tipL - tipReserve;
   // Taper the tip by beveling the TOP edge down over the last few mm — NOT by
   // squeezing the whole cross-section toward the centreline (that compresses the
   // warding grooves into a section that won't enter the keyway). The warding
@@ -111,12 +148,14 @@ function addBlade(mesh, blank, code, weld = false) {
   // Round the nose: ease the top-edge bevel along a circular curve (not a straight
   // chamfer) so the tip reads like a factory key's rounded nose. Still a single
   // monotonic top span, so the cap stays watertight.
-  const tipTop = (L) => {
-    if (L <= rampStart) return Infinity;
-    const t = Math.min(1, (L - rampStart) / tipRamp);
-    const ease = Math.sqrt(1 - (1 - t) * (1 - t));         // circular ease-out
-    return uncutH - (uncutH - tipMinH) * ease;
-  };
+  const tipTop = flatTip
+    ? () => Infinity                                        // flat top; wedges carve the nose
+    : (L) => {
+      if (L <= rampStart) return Infinity;
+      const t = Math.min(1, (L - rampStart) / tipRamp);
+      const ease = Math.sqrt(1 - (1 - t) * (1 - t));        // circular ease-out
+      return uncutH - (uncutH - tipMinH) * ease;
+    };
 
   // L breakpoints: cut centres, flat edges and wall feet, plus a fine grid, so
   // the milled V-cuts (and the tip ramp) are captured crisply.
@@ -290,14 +329,16 @@ function paddleBowOutline(w, p) {
 // warded cross-section punched out (the shoulder stop), and the blade's open
 // shoulder ring plugs into that hole so the two share an edge loop.
 function addBowWeld(mesh, blank, blade, opts = {}) {
-  const src = getBow(opts.bowStyle || blank.bow).map(([x, h]) => [x, h]);
-  weldBowOutline(mesh, blank, blade, src);
+  const bowId = opts.bowStyle || blank.bow;
+  const src = getBow(bowId).map(([x, h]) => [x, h]);
+  weldBowOutline(mesh, blank, blade, src, getBowHoles(bowId));
 }
 
 // Weld an open bow outline (points [x,h], neck endpoints first & last) to the
 // blade's open shoulder ring, producing ONE manifold. Shared by the real
-// manufacturer bows and the generic printable bow.
-function weldBowOutline(mesh, blank, blade, src) {
+// manufacturer bows and the generic printable bow. `holeLoops` is an array of
+// (x,h) loops (the real per-keyway keyring holes); null → a procedural circle.
+function weldBowOutline(mesh, blank, blade, src, holeLoops = null) {
   const w = wardingFor(blank);
   const tb = w.thickness;                        // bow same thickness as blade →
                                                  // top/bottom faces coplanar so the
@@ -322,25 +363,36 @@ function weldBowOutline(mesh, blank, blade, src) {
     real[0][1] = Math.min(real[0][1], bladeZmin);
     real[nlast][1] = Math.max(real[nlast][1], bladeZmax);
   }
-  const hole = bowKeyringHole(real, w);
+  // Real per-keyway keyring hole(s) — Kwikset has three. Fall back to the
+  // procedural circle if this bow has no extracted hole data. Orient each hole
+  // OPPOSITE to the outer loop so earcut and the wall normals stay consistent.
+  const realArea = area2(real);
+  const holes = (holeLoops && holeLoops.length ? holeLoops : [bowKeyringHole(real, w)])
+    .map(dedupe)
+    .filter(h => h.length >= 3)
+    .map(h => (area2(h) > 0) === (realArea > 0) ? h.slice().reverse() : h);
   const n = real.length, y0 = -tb / 2, y1 = tb / 2;
   const front = real.map(([x, h]) => mesh.v(x, y1, h));
   const back = real.map(([x, h]) => mesh.v(x, y0, h));
-  const hf = hole.map(([x, h]) => mesh.v(x, y1, h));
-  const hb = hole.map(([x, h]) => mesh.v(x, y0, h));
+  const holeFB = holes.map(h => ({ f: h.map(([x, z]) => mesh.v(x, y1, z)), b: h.map(([x, z]) => mesh.v(x, y0, z)) }));
 
-  // Front/back faces (bow outline with the keyring hole).
-  const capT = earcut(real.concat(hole).flat(), [n], 2);
-  const fv = (k) => k < n ? front[k] : hf[k - n], bv = (k) => k < n ? back[k] : hb[k - n];
+  // Front/back faces (bow outline with all keyring holes punched out).
+  const capPts = real.slice(), starts = [];
+  for (const h of holes) { starts.push(capPts.length); capPts.push(...h); }
+  const fvAll = front.slice(), bvAll = back.slice();
+  for (const hb of holeFB) { fvAll.push(...hb.f); bvAll.push(...hb.b); }
+  const capT = earcut(capPts.flat(), starts, 2);
   for (let i = 0; i < capT.length; i += 3) {
-    mesh.tri(fv(capT[i]), fv(capT[i + 1]), fv(capT[i + 2]));
-    mesh.tri(bv(capT[i]), bv(capT[i + 2]), bv(capT[i + 1]));
+    mesh.tri(fvAll[capT[i]], fvAll[capT[i + 1]], fvAll[capT[i + 2]]);
+    mesh.tri(bvAll[capT[i]], bvAll[capT[i + 2]], bvAll[capT[i + 1]]);
   }
   // Perimeter walls — every edge EXCEPT the neck (last→first, the open x=0 side).
   for (let i = 0; i < n - 1; i++) mesh.quad(front[i], back[i], back[i + 1], front[i + 1]);
-  // Keyring hole walls.
-  const hn = hole.length;
-  for (let i = 0; i < hn; i++) { const j = (i + 1) % hn; mesh.quad(hf[i], hf[j], hb[j], hb[i]); }
+  // Keyring hole walls (one closed loop per hole).
+  for (const hb of holeFB) {
+    const hn = hb.f.length;
+    for (let i = 0; i < hn; i++) { const j = (i + 1) % hn; mesh.quad(hb.f[i], hb.f[j], hb.b[j], hb.b[i]); }
+  }
 
   // Neck weld face at x=0: rectangle R (bow thickness × neck height) minus the
   // blade cross-section W; its W hole shares the blade's shoulder ring.
@@ -364,16 +416,51 @@ function addBow(mesh, blank, blade, opts = {}) {
 
 // ── CSG parts: blade + bow as separate CLOSED solids (for the boolean union) ───
 // The blade capped at both ends is already a closed solid.
-export function bladeMesh(blank, code) {
+export function bladeMesh(blank, code, opts = {}) {
   const mesh = new Mesh();
-  addBlade(mesh, blank, code, false);
+  addBlade(mesh, blank, code, false, opts);
   return { positions: new Float32Array(mesh.pos), indices: new Uint32Array(mesh.idx) };
 }
 
-// Bow outline in (x,h). Its neck reaches `overlap` mm INTO the blade so the
-// boolean union has overlapping material to fuse into one clean manifold.
+// Concave shoulder fillet: build the (x,h) points that carry the bow-neck edge
+// from its neck level (yNeck, at x=0) out to the blade edge level (yEdge) with a
+// circular arc of radius R tangent to the blade edge. `sign` is +1 for the TOP
+// edge (neck sits ABOVE the blade top; arc dips down to it) and -1 for the BACK
+// edge (neck sits BELOW the blade back; arc rises up to it). Returns points from
+// the neck end (x=0) to the tangent point (x=reach, h=yEdge); the caller adds the
+// flat overlap run. Falls back to a straight chamfer if R can't span the step.
+function shoulderFillet(yNeck, yEdge, R, sign, seg = 6) {
+  const step = Math.abs(yNeck - yEdge);                 // shoulder step height
+  if (step < 0.05) return [];                           // flush — no fillet
+  const out = [];
+  if (2 * R > step) {                                   // true circular arc
+    const reach = Math.sqrt(step * (2 * R - step));     // x where arc meets the edge
+    const cx = reach, cy = yEdge + sign * R;            // arc centre (tangent at edge)
+    const aEdge = sign > 0 ? -90 : 90;                  // tangent-point angle (deg)
+    // neck point (0,yNeck) relative to centre; take the MINOR arc to the edge
+    // (bring aNeck within ±180° of aEdge so we sweep the short way, not around
+    // the far side of the circle).
+    let aNeck = Math.atan2(yNeck - cy, 0 - cx) * 180 / Math.PI;
+    while (aNeck - aEdge > 180) aNeck -= 360;
+    while (aEdge - aNeck > 180) aNeck += 360;
+    const n = Math.max(2, Math.round(Math.abs(aEdge - aNeck) / seg));
+    for (let i = 0; i <= n; i++) {
+      const a = (aNeck + (aEdge - aNeck) * i / n) * Math.PI / 180;
+      out.push([cx + R * Math.cos(a), cy + R * Math.sin(a)]);
+    }
+  } else {                                              // straight chamfer fallback
+    const reach = Math.min(R, 2.4);
+    out.push([0, yNeck], [reach, yEdge]);
+  }
+  return out;
+}
+
+// Bow outline in (x,h). Its neck reaches INTO the blade so the boolean union has
+// overlapping material to fuse into one clean manifold; the overlap end is shaped
+// with a concave shoulder fillet (per FILLET_SPECS) so the bow neck sweeps into
+// the blade edge(s) instead of meeting them in a hard step.
 export function bowOutline(blank, opts = {}) {
-  const w = wardingFor(blank), H = w.height, midH = H / 2, overlap = 3;
+  const w = wardingFor(blank), H = w.height, midH = H / 2;
   const bowId = opts.bowStyle || blank.bow;
   const real = bowId ? getBow(bowId) : null;
   let outline;
@@ -382,9 +469,26 @@ export function bowOutline(blank, opts = {}) {
     const pts = [src[0]];
     for (let i = 1; i < src.length; i++) { const q = pts[pts.length - 1]; if (Math.abs(src[i][0] - q[0]) > 1e-3 || Math.abs(src[i][1] - q[1]) > 1e-3) pts.push(src[i]); }
     pts[0][0] = 0; pts[pts.length - 1][0] = 0;          // pin neck ends to x=0
-    outline = pts.concat([[overlap, pts[pts.length - 1][1]], [overlap, pts[0][1]]]);
+    const bMax = pts[0][1], bMin = pts[pts.length - 1][1]; // neck top / bottom h
+    const f = filletSpecFor(blank);
+    const doTop = (f.edges === 'top' || f.edges === 'both');
+    const doBot = (f.edges === 'back' || f.edges === 'both');
+    const botF = doBot ? shoulderFillet(bMin, 0, f.R, -1) : [];
+    const topF = doTop ? shoulderFillet(bMax, H, f.R, +1) : [];
+    // Reach of each fillet (0 if none); overlap must clear the longer one.
+    const reachB = botF.length ? botF[botF.length - 1][0] : 0;
+    const reachT = topF.length ? topF[topF.length - 1][0] : 0;
+    const overlap = Math.max(3, reachB + 0.6, reachT + 0.6);
+    // Extension from neck bottom (pts[last]) around the +x side up to neck top
+    // (pts[0]). Order: bottom fillet → blade-back → right edge → blade-top → top fillet.
+    const ext = [];
+    if (botF.length) for (let i = 1; i < botF.length; i++) ext.push(botF[i]); // (0,bMin)→(reachB,0), skip dup start
+    ext.push([overlap, botF.length ? 0 : bMin]);
+    ext.push([overlap, topF.length ? H : bMax]);
+    if (topF.length) { const r = topF.slice().reverse(); for (let i = 0; i < r.length - 1; i++) ext.push(r[i]); } // (reachT,H)→(0,bMax), skip dup end
+    outline = pts.concat(ext);
   } else {                                             // parametric paddle + waisted neck
-    outline = paddleBowOutline(w, { ...genericBowParams(blank, opts), neckX: overlap });
+    outline = paddleBowOutline(w, { ...genericBowParams(blank, opts), neckX: 3 });
   }
   return area2(outline) < 0 ? outline.reverse() : outline;   // CCW
 }
@@ -407,15 +511,41 @@ export function buildKeyMesh(blank, code, opts = {}) {
 export async function buildKeyMeshCSG(blank, code, opts = {}) {
   const wasm = await initManifold(opts.wasmBinary);
   const { Manifold, Mesh: MMesh, CrossSection } = wasm;
-  const bm = bladeMesh(blank, code);
+  const w = wardingFor(blank);
+  const tb = w.thickness;
+  // Flat-topped blade: the nose is carved afterwards by two chamfer wedges.
+  const bm = bladeMesh(blank, code, { flatTip: true });
   let key = new Manifold(new MMesh({ numProp: 3, vertProperties: bm.positions, triVerts: bm.indices }));
+
+  // Extrude an (x,h) polygon(+holes) into the key frame (x=length, y=thickness,
+  // z=height): extrude along Z by `thick`, centre, rotate Z→height / Y→thickness.
+  const solidXH = (loops, thick) =>
+    new CrossSection(loops, 'EvenOdd').extrude(thick).translate([0, 0, -thick / 2]).rotate([90, 0, 0]);
+
   if (opts.bow !== false) {
-    const tb = wardingFor(blank).thickness;
-    const cs = new CrossSection([bowOutline(blank, opts), bowKeyringHole(bowOutline(blank, opts), wardingFor(blank))], 'EvenOdd');
-    // Extrude along Z by the thickness, centre it, then rotate so Z→height, Y→thickness.
-    const bow = cs.extrude(tb).translate([0, 0, -tb / 2]).rotate([90, 0, 0]);
+    const bowId = opts.bowStyle || blank.bow;
+    const outline = bowOutline(blank, opts);
+    // Real per-keyway keyring hole(s) (Kwikset has three); fall back to the
+    // procedural circle only if this bow has no extracted hole data.
+    const holes = getBowHoles(bowId) || [bowKeyringHole(outline, w)];
+    const bow = solidXH([outline, ...holes], tb);
     key = key.add(bow);
   }
+
+  // ── TIP nose: carve two chamfer wedges so the blade end is a rounded, keygen-
+  // faithful asymmetric point (back edge rises + top edge falls to an apex at
+  // apexFrac of the blade height). tipEndX = the flat blade's max x.
+  const ts = tipSpecFor(blank);
+  const bladeTop = w.height;
+  const apexH = ts.apexFrac * bladeTop;
+  let tipEndX = -Infinity;
+  for (let i = 0; i < bm.positions.length; i += 3) if (bm.positions[i] > tipEndX) tipEndX = bm.positions[i];
+  const wt = tb + 2;                                    // wedge spans full thickness
+  const topWedge = [[tipEndX - ts.topRamp, bladeTop], [tipEndX, apexH], [tipEndX + 2, apexH], [tipEndX + 2, bladeTop + 3], [tipEndX - ts.topRamp, bladeTop + 3]];
+  const backWedge = [[tipEndX - ts.botRamp, 0], [tipEndX, apexH], [tipEndX + 2, apexH], [tipEndX + 2, -3], [tipEndX - ts.botRamp, -3]];
+  key = key.subtract(solidXH([topWedge], wt));
+  key = key.subtract(solidXH([backWedge], wt));
+
   const out = key.getMesh();
   return { positions: out.vertProperties, indices: out.triVerts };
 }
