@@ -385,7 +385,14 @@ function draw() {
   {
     const a = toCanvas(state.back[0]), b = toCanvas(state.back[1]);
     line(a, b, '#4ec98a', 3);
-    dot(a, '#4ec98a', 6); dot(b, '#4ec98a', 6); label(b, 'back edge');
+    dot(a, '#4ec98a', 6); dot(b, '#4ec98a', 6);
+    // arrowhead at back[1] — the TIP end. The bitting is read from the bow end
+    // (back[0]) toward the tip (arrow). If it's pointing the wrong way, Flip.
+    const ang = Math.atan2(b.y - a.y, b.x - a.x), ah = 13;
+    line(b, { x: b.x - ah * Math.cos(ang - 0.5), y: b.y - ah * Math.sin(ang - 0.5) }, '#4ec98a', 3);
+    line(b, { x: b.x - ah * Math.cos(ang + 0.5), y: b.y - ah * Math.sin(ang + 0.5) }, '#4ec98a', 3);
+    label(a, 'back edge');
+    label(b, 'tip →');
   }
   // cut handles: a thin height line (parallel to the blade) at each valley, with
   // a faint drop line to the back edge — so the key stays visible underneath.
@@ -644,6 +651,9 @@ $('rotateBtn').onclick = () => transformImage('rot');
 $('mirrorBtn').onclick = () => transformImage('mirror');
 $('flipVBtn').onclick = () => transformImage('flip');
 $('autoBtn').onclick = () => { autoPlace(); redecode(true); };
+// Flip the reading direction (bow↔tip) — swaps the back-edge ends, reversing the
+// order the cuts are read in (for a key photographed the other way round).
+$('flipBtn').onclick = () => { if (state.back) { state.back.reverse(); decodeFromHandles(); draw(); } };
 $('genBtn').onclick = () => generate();
 $('exportBtn').onclick = () => {
   if (!state.mesh) return;
