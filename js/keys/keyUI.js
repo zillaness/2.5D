@@ -831,6 +831,26 @@ function meshStats(pos) {
 
 initBlanks();
 { const el = $('appVersion'); if (el) el.textContent = VERSION; }
+// Light / dark theme toggle (top-right) — for contrast against the photo. Persists.
+{
+  const tb = $('themeBtn'), KEY = 'flr-theme';
+  const apply = (t) => { document.documentElement.dataset.theme = t; if (tb) tb.textContent = t === 'light' ? '☀ Light' : '☾ Dark'; };
+  let saved = null; try { saved = localStorage.getItem(KEY); } catch { /* private mode */ }
+  apply(saved === 'light' ? 'light' : 'dark');
+  if (tb) tb.onclick = () => { const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; apply(t); try { localStorage.setItem(KEY, t); } catch { /* ignore */ } };
+}
+// Minimize the controls panel — hand the photo the full window width while tracing.
+{
+  const pb = $('panelBtn'), lay = document.querySelector('.keys-layout');
+  if (pb && lay) pb.onclick = () => {
+    const hid = lay.classList.toggle('panel-hidden');
+    pb.textContent = hid ? '⇥ Show panel' : '⇤ Hide panel';
+    if (state.img) fitCanvas();
+    if (viewer && viewer.resize) viewer.resize();
+    window.dispatchEvent(new Event('resize'));
+    draw();
+  };
+}
 // Reference-rectangle size picker
 {
   const sel = $('cardSizeSel');
