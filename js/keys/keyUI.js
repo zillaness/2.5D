@@ -291,15 +291,33 @@ function nearestValleyU(profile, u0, win) {
 // back line gives bow→tip. No dependence on the fragile auto valley search.
 function decodeFromHandles() {
   const spec = state.blank.spec;
-  if (!state.back || !state.cutPts || !state.pxPerMm) { state.decoded = null; showBitting(); return; }
+  if (!state.back || !state.cutPts) { state.decoded = null; showBitting(); return; }
   const [A, B] = state.back, dl = { x: B.x - A.x, y: B.y - A.y }, Ll = Math.hypot(dl.x, dl.y) || 1;
   const du = { x: dl.x / Ll, y: dl.y / Ll }, nb = { x: -du.y, y: du.x };
   const ordered = state.cutPts.slice().sort((a, b) =>
     ((a.x - A.x) * du.x + (a.y - A.y) * du.y) - ((b.x - A.x) * du.x + (b.y - A.y) * du.y));
+  // Scale: use the card if it was set; otherwise self-calibrate from the KNOWN cut
+  // spacing — the pixel positions of the cut dots vs the manufacturer cut centres
+  // (linear-regression slope, so it needs neither the card nor an exact shoulder,
+  // just a roughly square-on photo).
+  let pxPerMm = state.manualScale;
+  let scaleSrc = 'card';
+  if (!pxPerMm) {
+    const xs = ordered.map(P => (P.x - A.x) * du.x + (P.y - A.y) * du.y);
+    const ms = ordered.map((_, i) => cutCentre(spec, i) * IN_TO_MM);
+    const n = xs.length, mx = xs.reduce((s, v) => s + v, 0) / n, mm = ms.reduce((s, v) => s + v, 0) / n;
+    let cov = 0, varm = 0;
+    for (let i = 0; i < n; i++) { cov += (xs[i] - mx) * (ms[i] - mm); varm += (ms[i] - mm) ** 2; }
+    pxPerMm = varm > 0 ? Math.abs(cov / varm) : state.pxPerMm;
+    scaleSrc = 'from cuts';
+  }
+  if (!pxPerMm || pxPerMm <= 0) { state.decoded = null; showBitting(); return; }
+  state.pxPerMm = pxPerMm;
+  const el = $('scaleReadout'); if (el) el.textContent = `${pxPerMm.toFixed(2)} px/mm (${scaleSrc})`;
   const cuts = ordered.map((P, i) => {
-    const depthMm = Math.abs((P.x - A.x) * nb.x + (P.y - A.y) * nb.y) / state.pxPerMm;
+    const depthMm = Math.abs((P.x - A.x) * nb.x + (P.y - A.y) * nb.y) / pxPerMm;
     const snap = snapDepthMm(spec, depthMm);
-    return { i, u: ((P.x - A.x) * du.x + (P.y - A.y) * du.y) / state.pxPerMm, depthMm, code: snap.code, residual: snap.residual, overridden: false, pt: P };
+    return { i, u: ((P.x - A.x) * du.x + (P.y - A.y) * du.y) / pxPerMm, depthMm, code: snap.code, residual: snap.residual, overridden: false, pt: P };
   });
   const code = cuts.map(c => c.code);
   const halfStep = 0.5 * spec.depthStep * IN_TO_MM;

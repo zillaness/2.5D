@@ -40,16 +40,19 @@
         <button class="btn small" id="mirrorBtn" title="Flip left–right">⇄ Mirror</button>
         <button class="btn small" id="flipVBtn" title="Flip top–bottom">⇅ Flip</button>
       </div>
-      <p class="hint">Key flat on a card (85.60 × 53.98 mm), shoulder and cuts visible.
-      Use Rotate/Mirror/Flip to orient the key roughly level, bow to one side.</p>
+      <p class="hint">Shoot <b>square-on</b> (straight above, key flat), shoulder and
+      cuts visible. Use Rotate/Mirror/Flip to orient it roughly level, bow to one side.
+      A card behind the key is optional (see Scale).</p>
     </div>
 
     <div class="field">
-      <label>2 · Scale</label>
-      <button class="btn small" id="scaleBtn">Set scale — detect the card</button>
+      <label>2 · Scale <span class="hint">(optional)</span></label>
       <span id="scaleReadout" class="mono"></span>
-      <p class="hint">Auto-finds the card and drops a box on it; nudge any corner if
-      it's off (85.60 × 53.98 mm). Scale updates live as you drag.</p>
+      <p class="hint">Scale is read automatically from the cut spacing — no card
+      needed for a square-on photo. For an angled shot or an explicit check, put a
+      card (85.60 × 53.98 mm) behind the key and click:</p>
+      <button class="btn small" id="scaleBtn">Set scale — detect the card</button>
+      <p class="hint">Auto-finds the card; nudge any corner if it's off.</p>
     </div>
 
     <div class="field">
