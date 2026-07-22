@@ -9,7 +9,7 @@
 // brightness are returned, so it suggests rather than guesses wildly.
 
 import { morphClean, labelComponents } from './segment.js';
-import { traceBoundaries, simplifyClosed, signedArea } from './contour.js';
+import { traceBoundaries, simplifyClosed, signedArea, chaikinClosed, pointInPolygon } from './contour.js';
 
 // Scanline-fill a polygon (pixel coords) into `mask` with `value`.
 function fillPolygon(pts, w, h, mask, value) {
@@ -116,13 +116,48 @@ export function suggestRegions(canvas, outerPts, holePolys, pxPerMm, opts = {}) 
       // Reject slivers: filled fraction of the bounding box must be decent.
       const bboxA = Math.max(1, (maxX - minX + 1) * (maxY - minY + 1));
       if (size / bboxA < 0.25) continue;
-      const pts = maskToPolygon(comp, w, h, pxPerMm, simplifyMm);
+      let pts = maskToPolygon(comp, w, h, pxPerMm, simplifyMm);
       if (!pts) continue;
+      // Skip a region that basically sits on a hole (e.g. a dark bore reading
+      // as a "recess"): reject if its centroid falls inside a hole polygon.
+      const c = centroid(pts);
+      if ((holePolys || []).some(hp => pointInPolygon(c, hp))) continue;
+      pts = chaikinClosed(pts, 1); // round the blocky mask boundary for editing
       out.push({ pts, kind, areaMm2: size / (pxPerMm * pxPerMm) });
     }
   }
+  // Largest first, then drop candidates that mostly overlap a bigger one (the
+  // bright top and dark shadow of one raised feature, or bright/dark passes
+  // catching the same patch) so each feature is suggested once.
   out.sort((a, b) => b.areaMm2 - a.areaMm2);
-  return out.slice(0, maxRegions);
+  const kept = [];
+  for (const cand of out) {
+    const cb = bbox(cand.pts), ca = Math.max(1, (cb.maxX - cb.minX) * (cb.maxY - cb.minY));
+    let dup = false;
+    for (const k of kept) {
+      const kb = bbox(k.pts);
+      const ix = Math.max(0, Math.min(cb.maxX, kb.maxX) - Math.max(cb.minX, kb.minX));
+      const iy = Math.max(0, Math.min(cb.maxY, kb.maxY) - Math.max(cb.minY, kb.minY));
+      if (ix * iy / ca > 0.55) { dup = true; break; }
+    }
+    if (!dup) kept.push(cand);
+  }
+  return kept.slice(0, maxRegions);
+}
+
+function centroid(pts) {
+  let x = 0, y = 0;
+  for (const p of pts) { x += p.x; y += p.y; }
+  return { x: x / pts.length, y: y / pts.length };
+}
+
+function bbox(pts) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, minY, maxX, maxY };
 }
 
 // Small erosion via morphClean's building block would over-clean; do a direct

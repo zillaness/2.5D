@@ -1755,7 +1755,20 @@ const regionRes = await page.evaluate(async () => {
   const plain = suggestRegions(make(false), outer, [], pxPerMm);
   let cx = 0, cy = 0;
   if (withP[0]) { for (const p of withP[0].pts) { cx += p.x; cy += p.y; } cx /= withP[0].pts.length; cy /= withP[0].pts.length; }
-  return { nPatch: withP.length, nPlain: plain.length, cx, cy, kind: withP[0] && withP[0].kind };
+
+  // Overlap dedup: a bright pad with a dark spot inside it (overlapping bboxes)
+  // should collapse to a single suggestion (the larger, bright, one).
+  const dup = document.createElement('canvas'); dup.width = 200; dup.height = 200;
+  const gd = dup.getContext('2d');
+  gd.fillStyle = '#8a8a8a'; gd.fillRect(0, 0, 200, 200);
+  gd.fillStyle = '#e8e8e8'; gd.fillRect(110, 110, 70, 70);   // bright pad
+  gd.fillStyle = '#404040'; gd.fillRect(130, 130, 24, 24);   // dark spot inside it
+  const deduped = suggestRegions(dup, outer, [], pxPerMm);
+
+  return {
+    nPatch: withP.length, nPlain: plain.length, cx, cy, kind: withP[0] && withP[0].kind,
+    dedupN: deduped.length, dedupKind: deduped[0] && deduped[0].kind,
+  };
 });
 console.log('\nSuggest section regions');
 check('finds the bright pad as a candidate region', regionRes.nPatch >= 1, `${regionRes.nPatch} found`);
@@ -1763,6 +1776,9 @@ check('candidate sits over the pad (~75,75 mm)',
   regionRes.nPatch >= 1 && near(regionRes.cx, 75, 6) && near(regionRes.cy, 75, 6),
   `centroid (${regionRes.cx.toFixed(1)},${regionRes.cy.toFixed(1)})`);
 check('a uniform object suggests nothing', regionRes.nPlain === 0, `${regionRes.nPlain} found`);
+check('bright pad is labelled as a raised candidate', regionRes.kind === 'bright', `kind ${regionRes.kind}`);
+check('overlapping bright/dark patches dedupe to one region',
+  regionRes.dedupN === 1 && regionRes.dedupKind === 'bright', `${regionRes.dedupN} region(s), kind ${regionRes.dedupKind}`);
 
 // Beyond-the-paper capture: an object overhanging the reference is kept (with
 // margin) but cropped without it. Straight-on synthetic scene, so no perspective.

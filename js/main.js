@@ -1145,11 +1145,18 @@ $('suggestRegionsBtn').addEventListener('click', () => {
     return;
   }
   traceEditor.pushUndo();
+  const base = state.regions[0].thickness;
+  let raisedN = 0;
   for (const c of cands) {
+    // Bright patches read as raised (catch light) → default a small boss above
+    // the base; dark ones may be recesses the flat model can't cut, so leave
+    // them at base and flag it in the name for the user to set (or deboss).
+    const raised = c.kind === 'bright';
+    if (raised) raisedN++;
     state.regions.push({
-      name: `Region ${state.regions.length}`,
+      name: `Region ${state.regions.length}${raised ? '' : ' (recess?)'}`,
       pts: c.pts,
-      thickness: state.regions[0].thickness,
+      thickness: raised ? Math.round((base + 2) * 100) / 100 : base,
       zBase: 0,
       top: { mode: 'none', size: 1 },
       bottom: { mode: 'none', size: 1 },
@@ -1160,7 +1167,7 @@ $('suggestRegionsBtn').addEventListener('click', () => {
   traceEditor.setSections(state.regions);
   refreshModelFields();
   traceEditor.draw();
-  toast(`${cands.length} region${cands.length > 1 ? 's' : ''} suggested — tweak the control points, then set each one's thickness / floor offset in step 3. A flat photo can't measure height, so that part's on you.`, 6000);
+  toast(`${cands.length} region${cands.length > 1 ? 's' : ''} suggested (${raisedN} raised) — tweak the control points, then set each one's height / floor offset in step 3. A flat photo can't measure depth, so that part's on you.`, 6500);
 });
 
 // Multi-select selection tools.
