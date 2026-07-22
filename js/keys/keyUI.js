@@ -363,18 +363,59 @@ window.addEventListener('pointerup', () => { state.drag = null; });
 const CARD_LONG = 85.60, CARD_SHORT = 53.98;
 $('scaleBtn').onclick = () => {
   if (!state.img) { status('Load a photo first.'); return; }
-  const { w, h } = state.sample;
-  // Default box in card proportions, centred, so the corners start near the card.
-  const cw = w * 0.6, ch = cw * (CARD_SHORT / CARD_LONG);
-  const x0 = (w - cw) / 2, y0 = (h - ch) / 2;
-  state.cardQuad = [
-    { x: x0, y: y0 }, { x: x0 + cw, y: y0 },
-    { x: x0 + cw, y: y0 + ch }, { x: x0, y: y0 + ch },
-  ];
+  const auto = detectCardQuad();
+  if (auto) {
+    state.cardQuad = auto;
+    status('Card detected — nudge any corner if it’s off, then it’s set.');
+  } else {
+    const { w, h } = state.sample;
+    const cw = w * 0.6, ch = cw * (CARD_SHORT / CARD_LONG);
+    const x0 = (w - cw) / 2, y0 = (h - ch) / 2;
+    state.cardQuad = [{ x: x0, y: y0 }, { x: x0 + cw, y: y0 }, { x: x0 + cw, y: y0 + ch }, { x: x0, y: y0 + ch }];
+    status('Drag the 4 corners onto the card’s corners. Scale updates as you drag.');
+  }
   applyCardScale();
-  status('Drag the 4 corners onto the card’s corners. Scale updates as you drag.');
   draw();
 };
+
+// Auto-find the card: the card is a large rectangle of one tone on a background
+// of another (dark card on lighter wood, or vice-versa). Otsu-threshold the
+// luminance, take the class that is NOT the border (background) tone, and read
+// the convex quad's four extreme corners (works for a rotated/skewed card too).
+function detectCardQuad() {
+  const { data, w, h } = state.sample;
+  const step = Math.max(1, Math.floor(Math.max(w, h) / 320));
+  const pts = [], hist = new Array(256).fill(0);
+  for (let y = 0; y < h; y += step) for (let x = 0; x < w; x += step) {
+    const i = (y * w + x) * 4;
+    const L = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
+    pts.push({ x, y, L }); hist[L]++;
+  }
+  const total = pts.length;
+  // Otsu threshold
+  let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
+  let sumB = 0, wB = 0, maxVar = -1, thr = 127;
+  for (let t = 0; t < 256; t++) {
+    wB += hist[t]; if (!wB) continue; const wF = total - wB; if (!wF) break;
+    sumB += t * hist[t];
+    const v = wB * wF * (sumB / wB - (sum - sumB) / wF) ** 2;
+    if (v > maxVar) { maxVar = v; thr = t; }
+  }
+  // Which tone is the background? Sample the image border.
+  let bDark = 0, bN = 0;
+  for (const p of pts) if (p.x < w * 0.03 || p.x > w * 0.97 || p.y < h * 0.03 || p.y > h * 0.97) { bN++; if (p.L <= thr) bDark++; }
+  const bgIsDark = bDark > bN / 2;
+  const card = pts.filter(p => (p.L <= thr) !== bgIsDark);   // card = the non-background tone
+  if (card.length < total * 0.12 || card.length > total * 0.95) return null;  // implausible → manual
+  const pick = (f) => card.reduce((a, b) => f(b) < f(a) ? b : a);
+  const tl = pick(p => p.x + p.y), br = pick(p => -(p.x + p.y));
+  const tr = pick(p => -(p.x - p.y)), bl = pick(p => p.x - p.y);
+  const quad = [tl, tr, br, bl].map(p => ({ x: p.x, y: p.y }));
+  // Sanity: the quad should cover a big, card-shaped chunk of the frame.
+  const area = Math.abs((tr.x - tl.x) * (bl.y - tl.y) - (bl.x - tl.x) * (tr.y - tl.y));
+  if (area < (w * h) * 0.08) return null;
+  return quad;
+}
 function applyCardScale() {
   const q = state.cardQuad; if (!q) return;
   const d = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
