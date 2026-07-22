@@ -34,6 +34,7 @@ const state = {
   decoded: null, mesh: null,
   drag: null, cardQuad: null,
   back: null, cutPts: null,       // green back-edge line [A,B] + red cut dots (image px)
+  cardH: null,                    // image→mm homography from the card (skew correction)
 };
 
 let viewer = null;
@@ -92,7 +93,7 @@ function transformImage(kind) {
   else if (kind === 'mirror') { c.width = iw; c.height = ih; g.translate(iw, 0); g.scale(-1, 1); }
   else { c.width = iw; c.height = ih; g.translate(0, ih); g.scale(1, -1); } // flip
   g.drawImage(state.img, 0, 0);
-  state.cardQuad = null;
+  state.cardQuad = null; state.cardH = null;
   loadImage(c.toDataURL('image/png'));
 }
 
@@ -292,32 +293,38 @@ function nearestValleyU(profile, u0, win) {
 function decodeFromHandles() {
   const spec = state.blank.spec;
   if (!state.back || !state.cutPts) { state.decoded = null; showBitting(); return; }
-  const [A, B] = state.back, dl = { x: B.x - A.x, y: B.y - A.y }, Ll = Math.hypot(dl.x, dl.y) || 1;
+  // If the card is set, map every handle through the homography into true mm
+  // (perspective skew removed) and measure there — distances are already mm, so
+  // pxPerMm = 1. Otherwise stay in image px and self-calibrate from the cuts.
+  const H = state.cardH;
+  const tf = H ? (p) => applyH(H, p) : (p) => ({ x: p.x, y: p.y });
+  const A = tf(state.back[0]), B = tf(state.back[1]);
+  const dl = { x: B.x - A.x, y: B.y - A.y }, Ll = Math.hypot(dl.x, dl.y) || 1;
   const du = { x: dl.x / Ll, y: dl.y / Ll }, nb = { x: -du.y, y: du.x };
-  const ordered = state.cutPts.slice().sort((a, b) =>
-    ((a.x - A.x) * du.x + (a.y - A.y) * du.y) - ((b.x - A.x) * du.x + (b.y - A.y) * du.y));
-  // Scale: use the card if it was set; otherwise self-calibrate from the KNOWN cut
-  // spacing — the pixel positions of the cut dots vs the manufacturer cut centres
-  // (linear-regression slope, so it needs neither the card nor an exact shoulder,
-  // just a roughly square-on photo).
-  let pxPerMm = state.manualScale;
-  let scaleSrc = 'card';
-  if (!pxPerMm) {
-    const xs = ordered.map(P => (P.x - A.x) * du.x + (P.y - A.y) * du.y);
-    const ms = ordered.map((_, i) => cutCentre(spec, i) * IN_TO_MM);
-    const n = xs.length, mx = xs.reduce((s, v) => s + v, 0) / n, mm = ms.reduce((s, v) => s + v, 0) / n;
-    let cov = 0, varm = 0;
-    for (let i = 0; i < n; i++) { cov += (xs[i] - mx) * (ms[i] - mm); varm += (ms[i] - mm) ** 2; }
-    pxPerMm = varm > 0 ? Math.abs(cov / varm) : state.pxPerMm;
-    scaleSrc = 'from cuts';
+  const along = (P) => (P.x - A.x) * du.x + (P.y - A.y) * du.y;
+  // keep each cut's original image point (for drawing) alongside its mapped point
+  const ordered = state.cutPts.map((orig) => ({ orig, P: tf(orig) })).sort((a, b) => along(a.P) - along(b.P));
+
+  let pxPerMm = 1, scaleSrc = 'card (skew-corrected)';
+  if (!H) {
+    pxPerMm = state.manualScale; scaleSrc = 'card';
+    if (!pxPerMm) {                                    // self-calibrate from the cut spacing
+      const xs = ordered.map(o => along(o.P));
+      const ms = ordered.map((_, i) => cutCentre(spec, i) * IN_TO_MM);
+      const n = xs.length, mx = xs.reduce((s, v) => s + v, 0) / n, mm = ms.reduce((s, v) => s + v, 0) / n;
+      let cov = 0, varm = 0;
+      for (let i = 0; i < n; i++) { cov += (xs[i] - mx) * (ms[i] - mm); varm += (ms[i] - mm) ** 2; }
+      pxPerMm = varm > 0 ? Math.abs(cov / varm) : state.pxPerMm;
+      scaleSrc = 'from cuts';
+    }
   }
   if (!pxPerMm || pxPerMm <= 0) { state.decoded = null; showBitting(); return; }
   state.pxPerMm = pxPerMm;
-  const el = $('scaleReadout'); if (el) el.textContent = `${pxPerMm.toFixed(2)} px/mm (${scaleSrc})`;
-  const cuts = ordered.map((P, i) => {
+  const el = $('scaleReadout'); if (el) el.textContent = H ? `card (skew-corrected)` : `${pxPerMm.toFixed(2)} px/mm (${scaleSrc})`;
+  const cuts = ordered.map(({ orig, P }, i) => {
     const depthMm = Math.abs((P.x - A.x) * nb.x + (P.y - A.y) * nb.y) / pxPerMm;
     const snap = snapDepthMm(spec, depthMm);
-    return { i, u: ((P.x - A.x) * du.x + (P.y - A.y) * du.y) / pxPerMm, depthMm, code: snap.code, residual: snap.residual, overridden: false, pt: P };
+    return { i, u: along(P) / pxPerMm, depthMm, code: snap.code, residual: snap.residual, overridden: false, pt: orig };
   });
   const code = cuts.map(c => c.code);
   const halfStep = 0.5 * spec.depthStep * IN_TO_MM;
@@ -503,16 +510,53 @@ function detectCardQuad() {
   if (area < (w * h) * 0.08) return null;
   return quad;
 }
+// Solve an n×n linear system by Gaussian elimination with partial pivoting.
+function solveLinear(A, b) {
+  const n = b.length;
+  for (let col = 0; col < n; col++) {
+    let piv = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+    [A[col], A[piv]] = [A[piv], A[col]]; [b[col], b[piv]] = [b[piv], b[col]];
+    if (Math.abs(A[col][col]) < 1e-12) return null;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = A[r][col] / A[col][col];
+      for (let c = col; c < n; c++) A[r][c] -= f * A[col][c];
+      b[r] -= f * b[col];
+    }
+  }
+  return b.map((v, i) => v / A[i][i]);
+}
+// Homography h[0..7] mapping image px (src {x,y}) → plane mm (dst [X,Y]), from 4
+// corner correspondences. h33 is fixed to 1.
+function computeHomography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const { x, y } = src[i], [X, Y] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -X * x, -X * y]); b.push(X);
+    A.push([0, 0, 0, x, y, 1, -Y * x, -Y * y]); b.push(Y);
+  }
+  return solveLinear(A, b);
+}
+function applyH(h, p) {
+  const d = h[6] * p.x + h[7] * p.y + 1;
+  return { x: (h[0] * p.x + h[1] * p.y + h[2]) / d, y: (h[3] * p.x + h[4] * p.y + h[5]) / d };
+}
+
 function applyCardScale() {
   const q = state.cardQuad; if (!q) return;
   const d = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
   const hAvg = (d(q[0], q[1]) + d(q[3], q[2])) / 2;   // top & bottom edges
   const vAvg = (d(q[0], q[3]) + d(q[1], q[2])) / 2;   // left & right edges
-  const [lng, srt] = hAvg >= vAvg ? [hAvg, vAvg] : [vAvg, hAvg];
-  const pxPerMm = (lng / CARD_LONG + srt / CARD_SHORT) / 2;
-  if (pxPerMm > 0) {
+  // Map the 4 card corners to a true rectangle in mm — this homography removes
+  // perspective skew; everything measured through it is in real millimetres.
+  const [W, Hh] = hAvg >= vAvg ? [CARD_LONG, CARD_SHORT] : [CARD_SHORT, CARD_LONG];
+  const H = computeHomography(q, [[0, 0], [W, 0], [W, Hh], [0, Hh]]);
+  const pxPerMm = (hAvg / W + vAvg / Hh) / 2;         // just for the readout
+  if (H && pxPerMm > 0) {
+    state.cardH = H;
     state.manualScale = pxPerMm;
-    $('scaleReadout').textContent = `${pxPerMm.toFixed(2)} px/mm (card)`;
+    $('scaleReadout').textContent = `card (skew-corrected) · ~${pxPerMm.toFixed(1)} px/mm`;
     redecode(true);
   }
 }
@@ -520,7 +564,7 @@ function applyCardScale() {
 // ── buttons ──────────────────────────────────────────────────────────────────
 $('fileInput').onchange = (e) => {
   const f = e.target.files[0];
-  if (f) { state.manualScale = null; state.cardQuad = null; loadImage(URL.createObjectURL(f)); }
+  if (f) { state.manualScale = null; state.cardQuad = null; state.cardH = null; loadImage(URL.createObjectURL(f)); }
 };
 $('rotateBtn').onclick = () => transformImage('rot');
 $('mirrorBtn').onclick = () => transformImage('mirror');
@@ -579,5 +623,6 @@ window.keyUI = {
   state, loadImage, redecode, generate,
   setScale: (v) => { state.manualScale = v; },
   setHandles: (sh, tp) => { state.shoulder = sh; state.tip = tp; },
+  setCard: (quad) => { state.cardQuad = quad; applyCardScale(); },
   reprofile,
 };

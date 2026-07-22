@@ -2,6 +2,8 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v2.8  skew correction: the card 4 corners give a homography into true mm, so
+//         off-square photos read correctly (card no longer just a scale number).
 //   v2.7  card is now optional -- scale self-calibrates from the known cut
 //         spacing (square-on photo); card stays as an override.
 //   v2.6  bow<->blade connection is now a real CSG boolean union (Manifold, WASM,
@@ -30,4 +32,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v2.7';
+export const VERSION = 'v2.8';
