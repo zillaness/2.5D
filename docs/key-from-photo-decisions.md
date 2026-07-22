@@ -138,8 +138,11 @@ desirable but low-priority.
 
 ## Read-direction safety
 
-Bitting is directional. **This app numbers bow→tip** (position 1 nearest the
-bow), Schlage-Classic style; **keygen and BEST/SFIC specs number tip→bow.** A
+Bitting is directional, and the convention is **per-keyway, not per-tool.**
+**This app numbers bow→tip** (position 1 nearest the bow). **keygen numbers
+Schlage bow→tip too** — so Schlage codes transfer between us and keygen directly,
+no reversal. **BEST/SFIC is the lone exception:** it's specified **tip→bow**, so
+only BEST codes need reversing when moving to/from keygen or a BEST spec sheet. A
 backwards green back-edge line reverses the whole reading and yields a wrong key
 that still looks plausible, so:
 
@@ -148,8 +151,8 @@ that still looks plausible, so:
   paddle leaves key material past the blade; the tip drops into background).
 - The green line draws a **"tip →" arrow**; a **Flip bow↔tip** button is the
   manual override.
-- The bitting field **warns** to reverse the code before copying into keygen or
-  reading a BEST spec sheet.
+- The bitting field **warns** that direction is per-keyway: Schlage transfers
+  directly to keygen; only BEST codes must be reversed.
 
 ## TODO — shape-based bow auto-detection (classical CV, in scope)
 

@@ -5,9 +5,12 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v3.8  correct the read-direction note: keygen numbers Schlage bow->tip (same
+//         as us, so Schlage codes transfer directly) — BEST/SFIC is the lone
+//         exception at tip->bow, so only BEST codes need reversing.
 //   v3.7  green back-edge line now labels the TIP end with an arrow; a "Flip
-//         bow<->tip" button reverses the reading; warn that this app numbers
-//         bow->tip while keygen / BEST-SFIC specs number tip->bow (reverse first).
+//         bow<->tip" button reverses the reading; warn that reading direction is
+//         per-keyway (this app numbers bow->tip).
 //   v3.2  add playing/trading card (2.5x3.5 in) as a 6th reference-size preset.
 //   v3.1  reference-size picker (CR80/CR79/CR100 + 1/2 & 1/3 CR80 key tags) drives
 //         the scale+skew homography; clarify flat-on-bed print + card-corrects-skew.
@@ -45,4 +48,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v3.7';
+export const VERSION = 'v3.8';
