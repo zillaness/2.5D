@@ -101,11 +101,24 @@
     <div class="field deboss">
       <label>Bow label <span class="hint">(optional)</span></label>
       <div class="deboss-row">
-        <input type="text" id="debossInput" maxlength="16" placeholder="e.g. FRONT, or your initials">
-        <button class="btn small" id="debossCodeBtn" type="button" title="Use the decoded bitting code">Use bitting code</button>
+        <input type="text" id="debossInput" maxlength="14" placeholder="e.g. FRONT, or initials">
+        <button class="btn small" id="debossCodeBtn" type="button" title="Use the decoded bitting code">Bitting code</button>
       </div>
-      <p class="hint">Engraved into the <b>up-facing</b> side of the bow (print that face up; the
-      blade cuts stay flat on the bed). Leave blank for no label. Regenerate to apply.</p>
+      <div class="deboss-row">
+        <select id="debossRotSel" title="Text orientation (regenerate to preview)">
+          <option value="0">Level</option>
+          <option value="90">Rotate 90°</option>
+          <option value="180">Upside down</option>
+          <option value="270">Rotate 270°</option>
+        </select>
+        <select id="debossSideSel" title="Which face to engrave">
+          <option value="up">Up face</option>
+          <option value="down">Down face</option>
+          <option value="both">Both faces</option>
+        </select>
+      </div>
+      <p class="hint">Engraved into the bow, centred and clear of the keyring hole — it shrinks as you
+      type. Print the <b>up face</b> up (blade cuts stay flat on the bed). Regenerate to apply.</p>
     </div>
 
     <div class="btn-row">

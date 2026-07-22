@@ -99,16 +99,23 @@ export function textToLoops(text, opts = {}) {
   return { loops, w: maxx - minx, h: maxy - miny };
 }
 
-// Place text loops (y-DOWN px box w×h) onto the bow's (x,h) plane, fit inside the
+// Place text loops (y-DOWN px box) onto the bow's (x,h) plane, fit inside the
 // target box {x0,x1,z0,z1} (mm) preserving aspect, centred, with a y-flip so text
-// reads upright. Returns (x,h) loops ready for buildKeyMeshCSG opts.debossLoops.
+// reads upright. opts.rot ∈ {0,90,180,270} rotates the label (90/270 run it along
+// the blade axis — tip-up / tip-down). Returns (x,h) loops for opts.debossLoops.
 export function placeLoopsInBox(text, box, opts = {}) {
   const t = textToLoops(text, opts);
   if (!t.loops.length) return [];
+  // Rotate the glyphs in px space, then re-normalise to origin.
+  const rot = (((opts.rot || 0) % 360) + 360) % 360;
+  const rp = ([x, y]) => rot === 90 ? [y, -x] : rot === 180 ? [-x, -y] : rot === 270 ? [-y, x] : [x, y];
+  let loops = t.loops.map(l => l.map(rp));
+  let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+  for (const l of loops) for (const p of l) { if (p[0] < mnx) mnx = p[0]; if (p[0] > mxx) mxx = p[0]; if (p[1] < mny) mny = p[1]; if (p[1] > mxy) mxy = p[1]; }
+  const tw = mxx - mnx, th = mxy - mny;
   const bw = box.x1 - box.x0, bh = box.z1 - box.z0;
-  const sc = Math.min(bw / t.w, bh / t.h) * (opts.fill || 0.9);
-  const drawW = t.w * sc, drawH = t.h * sc;
-  const ox = box.x0 + (bw - drawW) / 2;                 // left of the placed text (mm x)
-  const oz = box.z0 + (bh - drawH) / 2;                 // bottom of the placed text (mm h)
-  return t.loops.map(l => l.map(([px, py]) => [ox + px * sc, oz + (t.h - py) * sc])); // y-flip
+  const sc = Math.min(bw / tw, bh / th) * (opts.fill || 0.9);
+  const ox = box.x0 + (bw - tw * sc) / 2, oz = box.z0 + (bh - th * sc) / 2;
+  // px→mm with a y-flip (canvas y-down → h up).
+  return loops.map(l => l.map(([px, py]) => [ox + (px - mnx) * sc, oz + (th - (py - mny)) * sc]));
 }

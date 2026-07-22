@@ -552,10 +552,19 @@ export async function buildKeyMeshCSG(blank, code, opts = {}) {
   // the bow (EvenOdd handles letter holes); opts.debossDepth mm (default 0.5).
   if (opts.debossLoops && opts.debossLoops.length) {
     const depth = Math.min(opts.debossDepth || 0.5, tb * 0.6);
-    // Extrude the glyphs by `depth` and seat them against the +y face going inward
-    // (z∈[0,depth] → translate −tb/2 → after rotate y∈[tb/2−depth, tb/2]).
-    const stamp = new CrossSection(opts.debossLoops, 'EvenOdd').extrude(depth).translate([0, 0, -tb / 2]).rotate([90, 0, 0]);
-    key = key.subtract(stamp);
+    const side = opts.debossSide || 'up';                // 'up' | 'down' | 'both'
+    const stamp = (loops, zT) => new CrossSection(loops, 'EvenOdd').extrude(depth).translate([0, 0, zT]).rotate([90, 0, 0]);
+    // UP (+y) face: seat the pocket against +tb/2 going inward.
+    if (side === 'up' || side === 'both') key = key.subtract(stamp(opts.debossLoops, -tb / 2));
+    // DOWN (−y) face: mirror x about the label centre so it reads correctly from
+    // the back, and seat the pocket against −tb/2.
+    if (side === 'down' || side === 'both') {
+      let mn = Infinity, mx = -Infinity;
+      for (const l of opts.debossLoops) for (const p of l) { if (p[0] < mn) mn = p[0]; if (p[0] > mx) mx = p[0]; }
+      const c = (mn + mx) / 2;
+      const mir = opts.debossLoops.map(l => l.map(([x, h]) => [2 * c - x, h]));
+      key = key.subtract(stamp(mir, tb / 2 - depth));
+    }
   }
 
   const out = key.getMesh();

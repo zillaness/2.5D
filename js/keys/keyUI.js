@@ -13,6 +13,7 @@ import { cutCentre, rootDepthForCode, codeRange } from './blanks.js';
 import { decode, rootDepthMm, snapDepthMm, spacingMm } from './decode.js';
 import { checkMACS } from './bitting.js';
 import { buildKeyMesh, buildKeyMeshCSG, bowOutline } from './keyMesh.js';
+import { getBowHoles } from './bows.js';
 import { placeLoopsInBox } from './textpath.js';
 import { initManifold, b64ToBytes } from './manifold-loader.js';
 import { Viewer3D } from '../viewer3d.js';
@@ -776,29 +777,38 @@ $('bittingInput').oninput = (e) => {
   showBitting(); $('genBtn').disabled = false; draw();
 };
 
-// Compute the deboss glyph loops (placed on the bow head) for the current label,
-// or null when the label is empty. Fits the text into a box inside the bow head,
-// nudged toward the neck (+x, away from the keyring hole).
+// Compute the deboss glyph loops placed on the bow head (+ which side to engrave),
+// or null when the label is empty. The text is fit into a box between the keyring
+// hole's neck-side edge and the neck, so it stays clear of the hole; it's centre-
+// justified and auto-shrinks as the label grows. Honours the rotation + side UI.
 function debossLoopsFor() {
-  const raw = ($('debossInput')?.value || '').trim();
+  const raw = ($('debossInput')?.value || '').trim().slice(0, 14);
   if (!raw) return null;
   try {
+    const rot = +($('debossRotSel')?.value || 0);
+    const side = $('debossSideSel')?.value || 'up';
     const bow = bowOutline(state.blank);                    // (x,h) bow outline
     const xs = bow.map(p => p[0]), hs = bow.map(p => p[1]);
     const minX = Math.min(...xs), hMin = Math.min(...hs), hMax = Math.max(...hs);
-    // Text box: the head half nearer the neck (x from mid→neck), vertically inset.
-    const midX = (minX + 0) / 2, mh = (hMin + hMax) / 2, hh = (hMax - hMin);
-    const box = { x0: midX + 0.5, x1: -1.2, z0: mh - hh * 0.34, z1: mh + hh * 0.34 };
-    if (box.x1 - box.x0 < 3) { box.x0 = minX + 1.5; box.x1 = -1.0; }   // small heads: use full head
-    return placeLoopsInBox(raw, box, { fill: 0.92 });
+    const mh = (hMin + hMax) / 2, hh = hMax - hMin;
+    // Keyring hole(s): place text on the NECK side of the hole (its right/+x edge).
+    const holes = getBowHoles(state.blank.bow) || [];
+    let holeMaxX = minX;
+    for (const l of holes) for (const p of l) if (p[0] > holeMaxX) holeMaxX = p[0];
+    let x0 = Math.max(minX + 1.2, holeMaxX + 1.0), x1 = -1.2;
+    if (x1 - x0 < 4) { x0 = minX + 1.5; x1 = -1.0; }        // clear band too small → whole head
+    const zHalf = hh * (rot % 180 === 90 ? 0.44 : 0.32);    // taller band when text runs vertical
+    const box = { x0, x1, z0: mh - zHalf, z1: mh + zHalf };
+    const loops = placeLoopsInBox(raw, box, { fill: 0.92, rot });
+    return loops.length ? { loops, side } : null;
   } catch { return null; }
 }
 
 async function generate() {
   if (!state.decoded) return;
   status('Generating…');
-  const debossLoops = debossLoopsFor();
-  const opts = { wardingId: state.wardingId, debossLoops, debossDepth: 0.5 };
+  const deb = debossLoopsFor();
+  const opts = { wardingId: state.wardingId, debossLoops: deb?.loops || null, debossSide: deb?.side || 'up', debossDepth: 0.5 };
   let m;
   try { m = await buildKeyMeshCSG(state.blank, state.decoded.code, opts); }   // keygen-style CSG union
   catch (e) { m = buildKeyMesh(state.blank, state.decoded.code, opts); }       // native weld fallback
