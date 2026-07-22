@@ -1,7 +1,9 @@
-// Funny Looking Rock — internal revision number.
+// Funny Looking Rock -- internal revision number.
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v2.6  bow<->blade connection is now a real CSG boolean union (Manifold, WASM,
+//         bundled) instead of a hand-weld — keygen's technique in the browser.
 //   v2.5  mirror the warding cross-section to match a real key's handedness (a
 //         paracentric keyway is handed; the previous section was flipped).
 //   v2.4  generic bow (BEST) now has a full-height neck so the wide paddle no
@@ -26,4 +28,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v2.5';
+export const VERSION = 'v2.6';

@@ -69,12 +69,30 @@ if (fragIdx !== -1 && process.argv[fragIdx + 1]) {
 }
 
 // ── Funny Looking Rock (the key-decode app) as one self-contained file ───────
+// The Manifold CSG engine (WASM) does the bow↔blade boolean union. Its Emscripten
+// glue references node: builtins on a Node-only branch (stub them for the
+// browser) and derives a script dir from import.meta.url (define a valid URL).
+const stubNode = {
+  name: 'stub-node',
+  setup(b) {
+    b.onResolve({ filter: /^node:/ }, (a) => ({ path: a.path, namespace: 'node-stub' }));
+    b.onLoad({ filter: /.*/, namespace: 'node-stub' },
+      () => ({ contents: 'export default {}; export const createRequire = () => (() => ({}));', loader: 'js' }));
+  },
+};
 const keyBundle = (await esbuild.build({
   entryPoints: [path.join(root, 'js/keys/keyUI.js')],
   bundle: true, minify: true, format: 'iife',
   alias: { three: path.join(root, 'vendor/three.module.min.js') },
+  plugins: [stubNode],
+  define: { 'import.meta.url': JSON.stringify('file:///funny-looking-rock.html') },
   write: false, logLevel: 'silent',
 })).outputFiles[0].text;
+
+// Inline the Manifold wasm as base64 so the app stays a single file that runs
+// from file:// (nothing to fetch). keyUI reads window.__FLR_MANIFOLD_WASM.
+const wasmB64 = fs.readFileSync(path.join(root, 'node_modules/manifold-3d/manifold.wasm')).toString('base64');
+const wasmScript = `<script>window.__FLR_MANIFOLD_WASM=${JSON.stringify(wasmB64)};</script>\n`;
 
 let keyBody = read('keys.html')
   .replace(/^[\s\S]*?<body>/, '')
@@ -88,6 +106,7 @@ const keyFull =
   `<title>Funny Looking Rock — photograph a key → print a spare</title>\n` +
   `<style>\n${css}\n${read('css/keys.css')}\n</style>\n</head>\n<body>\n` +
   keyBody.trim() + '\n' +
+  wasmScript +
   `<script>${keyBundle}</script>\n</body>\n</html>\n`;
 
 const keyOut = path.join(root, 'dist', 'funny-looking-rock.html');
@@ -98,6 +117,7 @@ console.log(`${keyOut}: ${(keyFull.length / 1024).toFixed(0)} KB`);
 const keyInner =
   `<style>\n${css}\n${read('css/keys.css')}\n</style>\n` +
   keyBody.trim() + '\n' +
+  wasmScript +
   `<script>${keyBundle}</script>\n`;
 const keyFrag = path.join(root, 'dist', 'funny-looking-rock.fragment.html');
 fs.writeFileSync(keyFrag, keyInner);

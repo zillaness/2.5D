@@ -17,5 +17,8 @@
   "devDependencies": {
     "esbuild": "^0.25.0",
     "playwright-core": "^1.61.1"
+  },
+  "dependencies": {
+    "manifold-3d": "^3.5.1"
   }
 }

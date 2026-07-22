@@ -75,6 +75,32 @@ This is a PIPELINE PROOF with a sample code; a working key needs the real bittin
 `keyMesh.js` will reimplement this natively in the browser app (extrude the
 warded section, carve bitting, add bow) so no OpenSCAD/keygen dependency ships.
 
+## Mesh assembly — CSG union (Manifold)
+
+The bow↔blade connection is assembled with a real CSG **boolean union** (the
+Manifold engine, WASM, bundled into the single file), the same technique keygen
+uses via OpenSCAD — instead of the earlier hand-weld. Build the blade and bow as
+two overlapping closed solids and `union` them; Manifold produces one clean
+manifold. This is why the connection is robust.
+
+## Conventions vs keygen
+
+- **Bitting order is reversed.** We index the code **bow→tip** (position 1 nearest
+  the bow/shoulder). keygen takes bitting **tip→bow**. So to feed one of our codes
+  into keygen (or check against it), reverse the digits.
+- **Warding handedness is mirrored** relative to keygen's raw 2D polygon (we flip
+  the thickness axis so the printed blade matches a real key — a paracentric
+  keyway is handed).
+
+## Future direction — desktop version
+
+A desktop build (Tauri or Electron wrapping this same web UI) could shell out to
+**real keygen (OpenSCAD + Python)** for generation — either bundling OpenSCAD in
+the installer (offline, big, per-OS builds) or detecting an installed OpenSCAD
+(small app, setup step). Reuses all the photo→decode UI. Kept as a future
+version; the browser app gets keygen-quality connections today via Manifold CSG,
+so this is only needed to unlock keygen-exclusive features later.
+
 ## Next
 
 - Clean up the KW1 flat outline (polygonise bow arcs properly), separate

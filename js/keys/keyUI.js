@@ -9,10 +9,17 @@ import { BLANKS, getBlank, wardingFor, IN_TO_MM } from './blanks.js';
 import { cutCentre, rootDepthForCode, codeRange } from './blanks.js';
 import { decode, rootDepthMm, snapDepthMm, spacingMm } from './decode.js';
 import { checkMACS } from './bitting.js';
-import { buildKeyMesh } from './keyMesh.js';
+import { buildKeyMesh, buildKeyMeshCSG } from './keyMesh.js';
+import { initManifold, b64ToBytes } from './manifold-loader.js';
 import { Viewer3D } from '../viewer3d.js';
 import { toBinarySTL, downloadBlob } from '../exporters.js';
 import { VERSION } from './version.js';
+
+// Warm up the CSG engine as soon as the page loads (the single-file build inlines
+// the wasm as a global). Falls back to the native weld if it can't load.
+if (typeof window !== 'undefined' && window.__FLR_MANIFOLD_WASM) {
+  try { initManifold(b64ToBytes(window.__FLR_MANIFOLD_WASM)); } catch { /* fall back */ }
+}
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('photo');
@@ -521,9 +528,13 @@ $('bittingInput').oninput = (e) => {
   showBitting(); $('genBtn').disabled = false; draw();
 };
 
-function generate() {
+async function generate() {
   if (!state.decoded) return;
-  const m = buildKeyMesh(state.blank, state.decoded.code, { wardingId: state.wardingId });
+  status('Generating…');
+  const opts = { wardingId: state.wardingId };
+  let m;
+  try { m = await buildKeyMeshCSG(state.blank, state.decoded.code, opts); }   // keygen-style CSG union
+  catch (e) { m = buildKeyMesh(state.blank, state.decoded.code, opts); }       // native weld fallback
   const st = meshStats(m.positions);
   state.mesh = { ...m, stats: st };
   // Reveal the 3D panel now (hidden until the first key is generated so the photo

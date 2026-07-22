@@ -20,6 +20,7 @@ import {
 } from './blanks.js';
 import { toBinarySTL } from '../exporters.js';
 import { getBow } from './bows.js';
+import { initManifold } from './manifold-loader.js';
 
 // ── small mesh builder ───────────────────────────────────────────────────────
 class Mesh {
@@ -331,22 +332,73 @@ function addBow(mesh, blank, blade, opts = {}) {
   weldBowOutline(mesh, blank, blade, outline);
 }
 
+// ── CSG parts: blade + bow as separate CLOSED solids (for the boolean union) ───
+// The blade capped at both ends is already a closed solid.
+export function bladeMesh(blank, code) {
+  const mesh = new Mesh();
+  addBlade(mesh, blank, code, false);
+  return { positions: new Float32Array(mesh.pos), indices: new Uint32Array(mesh.idx) };
+}
+
+// Bow outline in (x,h). Its neck reaches `overlap` mm INTO the blade so the
+// boolean union has overlapping material to fuse into one clean manifold.
+export function bowOutline(blank, opts = {}) {
+  const w = wardingFor(blank), H = w.height, midH = H / 2, overlap = 3;
+  const bowId = opts.bowStyle || blank.bow;
+  const real = bowId ? getBow(bowId) : null;
+  let outline;
+  if (real) {
+    const src = real.map(([x, h]) => [x, h]);          // drop consecutive dups
+    const pts = [src[0]];
+    for (let i = 1; i < src.length; i++) { const q = pts[pts.length - 1]; if (Math.abs(src[i][0] - q[0]) > 1e-3 || Math.abs(src[i][1] - q[1]) > 1e-3) pts.push(src[i]); }
+    pts[0][0] = 0; pts[pts.length - 1][0] = 0;          // pin neck ends to x=0
+    outline = pts.concat([[overlap, pts[pts.length - 1][1]], [overlap, pts[0][1]]]);
+  } else {                                             // generic paddle + neck
+    const bowLen = 20, bowH = 22, rEnd = bowH / 2, neck = 5, xc = -neck - (bowLen - rEnd);
+    outline = [[overlap, midH - H / 2], [-neck, midH - H / 2], [-neck, midH - bowH / 2]];
+    for (let deg = -90; deg <= 90; deg += 12) { const r = deg * Math.PI / 180; outline.push([xc - rEnd * Math.cos(r), midH + rEnd * Math.sin(r)]); }
+    outline.push([-neck, midH + bowH / 2], [-neck, midH + H / 2], [overlap, midH + H / 2]);
+  }
+  return area2(outline) < 0 ? outline.reverse() : outline;   // CCW
+}
+
 // ── public API ───────────────────────────────────────────────────────────────
+// Native hand-weld (synchronous fallback when the CSG engine can't load).
 export function buildKeyMesh(blank, code, opts = {}) {
   const mesh = new Mesh();
   const wantBow = opts.bow !== false;
   const bowId = wantBow ? (opts.bowStyle || blank.bow) : null;
   const real = bowId ? getBow(bowId) : null;
-  // Weld whenever there's any bow (real or generic) so the shoulder ring is left
-  // open for the bow to plug into — one manifold, no overlapping shells.
   const blade = addBlade(mesh, blank, code, wantBow);
   if (real) addBowWeld(mesh, blank, blade, opts);
   else if (wantBow) addBow(mesh, blank, blade, opts);
   return { positions: new Float32Array(mesh.pos), indices: new Uint32Array(mesh.idx) };
 }
 
+// CSG assembly: union the blade (lofted triangle mesh) with the bow (Manifold's
+// own robust extrude of the bow outline) into one clean manifold — keygen-style.
+export async function buildKeyMeshCSG(blank, code, opts = {}) {
+  const wasm = await initManifold(opts.wasmBinary);
+  const { Manifold, Mesh: MMesh, CrossSection } = wasm;
+  const bm = bladeMesh(blank, code);
+  let key = new Manifold(new MMesh({ numProp: 3, vertProperties: bm.positions, triVerts: bm.indices }));
+  if (opts.bow !== false) {
+    const tb = wardingFor(blank).thickness;
+    const cs = new CrossSection([bowOutline(blank, opts), bowKeyringHole(bowOutline(blank, opts), wardingFor(blank))], 'EvenOdd');
+    // Extrude along Z by the thickness, centre it, then rotate so Z→height, Y→thickness.
+    const bow = cs.extrude(tb).translate([0, 0, -tb / 2]).rotate([90, 0, 0]);
+    key = key.add(bow);
+  }
+  const out = key.getMesh();
+  return { positions: out.vertProperties, indices: out.triVerts };
+}
+
 export function keyToSTL(blank, code, opts = {}) {
   const { positions, indices } = buildKeyMesh(blank, code, opts);
-  const name = `${blank.id} ${code.join('-')}`;
-  return toBinarySTL(positions, indices, name);
+  return toBinarySTL(positions, indices, `${blank.id} ${code.join('-')}`);
+}
+
+export async function keyToSTLCSG(blank, code, opts = {}) {
+  const { positions, indices } = await buildKeyMeshCSG(blank, code, opts);
+  return toBinarySTL(positions, indices, `${blank.id} ${code.join('-')}`);
 }

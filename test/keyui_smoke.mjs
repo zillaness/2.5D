@@ -68,7 +68,7 @@ const result = await page.evaluate(async () => {
   ui.setHandles({ x: shPx, y: yMid }, { x: 40, y: yMid });   // shoulder→tip (bow→tip)
   ui.redecode(true);
   const dec = ui.state.decoded;
-  ui.generate();
+  await ui.generate();
   return { code: dec && dec.code, tris: ui.state.mesh && ui.state.mesh.indices.length / 3, size: ui.state.mesh && ui.state.mesh.stats };
 });
 
