@@ -1764,6 +1764,46 @@ check('candidate sits over the pad (~75,75 mm)',
   `centroid (${regionRes.cx.toFixed(1)},${regionRes.cy.toFixed(1)})`);
 check('a uniform object suggests nothing', regionRes.nPlain === 0, `${regionRes.nPlain} found`);
 
+// Beyond-the-paper capture: an object overhanging the reference is kept (with
+// margin) but cropped without it. Straight-on synthetic scene, so no perspective.
+const beyond = await page.evaluate(async () => {
+  const { rectify } = await import('/js/homography.js');
+  const { computeDiffMap, segmentObject } = await import('/js/segment.js');
+  // Source: grey table, white 200px paper at [100,100], dark object spanning
+  // x[180,340] (overhangs the paper's right edge at x=300 onto the table).
+  const cv = document.createElement('canvas'); cv.width = 400; cv.height = 400;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#9a9a9a'; g.fillRect(0, 0, 400, 400);
+  g.fillStyle = '#f3f1ea'; g.fillRect(100, 100, 200, 200);       // paper (100mm sq)
+  g.fillStyle = '#2c2c2c'; g.fillRect(180, 150, 160, 80);       // object, overhanging
+  const corners = [{ x: 100, y: 100 }, { x: 300, y: 100 }, { x: 300, y: 300 }, { x: 100, y: 300 }];
+
+  // Fixed threshold: the synthetic diff is cleanly bimodal (bg 0, object 77),
+  // which is degenerate for Otsu (flat between-class variance → t=0).
+  const run = marginMm => {
+    const r = rectify(cv, corners, 100, 100, { marginMm, maxLongSidePx: 400 });
+    const dm = computeDiffMap(r.canvas, marginMm > 0 ? { paperRect: r.paperRect } : {});
+    const mask = segmentObject(dm, { threshold: 40, cleanupRadius: 1, marginPx: 2 });
+    let maxX = -1;
+    if (mask) for (let i = 0; i < mask.length; i++) if (mask[i]) { const x = i % dm.w; if (x > maxX) maxX = x; }
+    return { W: r.canvas.width, ppm: r.pxPerMm, paperW: r.paperRect.w, paperRight: r.paperRect.x + r.paperRect.w, maxX };
+  };
+  return { off: run(0), on: run(50) };
+});
+
+console.log('\nBeyond-the-paper capture');
+check('margin insets the paper inside a larger canvas',
+  beyond.on.paperRight < beyond.on.W && beyond.off.paperRight === beyond.off.W,
+  `on paper-edge ${beyond.on.paperRight}/${beyond.on.W}, off ${beyond.off.paperRight}/${beyond.off.W}`);
+check('scale is self-consistent (paperRect width = 100 mm × pxPerMm)',
+  beyond.on.paperW === Math.round(100 * beyond.on.ppm) && beyond.off.paperW === Math.round(100 * beyond.off.ppm),
+  `on ${beyond.on.paperW}@${beyond.on.ppm}, off ${beyond.off.paperW}@${beyond.off.ppm}`);
+check('with margin, the object is captured past the paper edge, uncropped',
+  beyond.on.maxX > beyond.on.paperRight && beyond.on.maxX < beyond.on.W,
+  `object maxX ${beyond.on.maxX}, paper edge ${beyond.on.paperRight}, canvas ${beyond.on.W}`);
+check('without margin, the object is cropped at the paper edge',
+  beyond.off.maxX >= beyond.off.W - 3, `off maxX ${beyond.off.maxX} ≈ edge ${beyond.off.W}`);
+
 console.log('\nSection clipping (bed vs overhang)');
 check('bed-level section is clipped to the outline (no body past x=40)',
   clip.bedMaxX <= 40.5, `max x ${clip.bedMaxX.toFixed(2)}`);

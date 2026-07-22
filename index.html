@@ -72,6 +72,14 @@
             <option value="landscape">Landscape (long edge on top)</option>
           </select>
         </div>
+        <div class="field">
+          <label for="captureArea">Capture area</label>
+          <select id="captureArea" title="Extend the perspective-corrected area beyond the reference so an object larger than — or beside — it is captured. Keep the object on the same flat surface as the reference.">
+            <option value="0">Reference only (object fits on it)</option>
+            <option value="0.5">Extend — object overhangs a little</option>
+            <option value="1">Extend more — object much larger / beside</option>
+          </select>
+        </div>
         <div class="field-row" id="customSizeRow" hidden>
           <div class="field">
             <label for="customW">Width (mm)</label>

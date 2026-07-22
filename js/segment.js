@@ -5,39 +5,68 @@
 // Thresholding that difference finds the object whether it is darker,
 // lighter-but-tinted, or coloured. Morphological open/close cleans noise.
 
-export function computeDiffMap(canvas, borderPct = 0.04) {
+export function computeDiffMap(canvas, opts = {}) {
+  // opts: { borderPct=0.04, paperRect } — paperRect { x,y,w,h } (px) enables the
+  // "beyond the paper" dual-reference model: a pixel counts as background if it
+  // resembles EITHER the paper (sampled just inside the paper rect) OR the
+  // surrounding surface (sampled just outside it). Without paperRect this is the
+  // classic single-reference border sample, so ordinary paper-only shots are
+  // unchanged.
+  const borderPct = typeof opts === 'number' ? opts : (opts.borderPct || 0.04);
+  const paperRect = typeof opts === 'object' ? opts.paperRect : null;
   const w = canvas.width, h = canvas.height;
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const { data } = ctx.getImageData(0, 0, w, h);
-
-  // Paper colour: per-channel median over a border band (robust to an object
-  // that overhangs one edge and to shadows in a corner).
   const band = Math.max(2, Math.round(Math.min(w, h) * borderPct));
-  const rs = [], gs = [], bs = [];
-  const pushPx = (x, y) => {
-    const p = (y * w + x) * 4;
-    rs.push(data[p]); gs.push(data[p + 1]); bs.push(data[p + 2]);
-  };
-  const step = 2;
-  for (let y = 0; y < h; y += step) {
-    for (let x = 0; x < w; x += step) {
-      if (x < band || x >= w - band || y < band || y >= h - band) pushPx(x, y);
-    }
-  }
-  const median = arr => { arr.sort((a, b) => a - b); return arr[arr.length >> 1] || 255; };
-  const pr = median(rs), pg = median(gs), pb = median(bs);
+  const median = arr => { arr.sort((a, b) => a - b); return arr.length ? arr[arr.length >> 1] : null; };
 
-  // Difference from paper colour, weighted so brightness changes (shadows)
-  // count less than chroma changes.
+  // Robust per-channel median colour over the pixels a predicate selects
+  // (skipping no-data/transparent pixels). null if too few samples.
+  const sampleColor = pred => {
+    const rs = [], gs = [], bs = [];
+    for (let y = 0; y < h; y += 2) {
+      for (let x = 0; x < w; x += 2) {
+        const p = (y * w + x) * 4;
+        if (data[p + 3] < 128) continue; // no-data
+        if (!pred(x, y)) continue;
+        rs.push(data[p]); gs.push(data[p + 1]); bs.push(data[p + 2]);
+      }
+    }
+    return rs.length >= 20 ? [median(rs), median(gs), median(bs)] : null;
+  };
+
+  let paper, bg = null;
+  if (paperRect) {
+    const R = paperRect;
+    const inside = (x, y) => x >= R.x && x < R.x + R.w && y >= R.y && y < R.y + R.h;
+    // Ring just inside the paper edges = paper colour.
+    paper = sampleColor((x, y) => inside(x, y) &&
+      (x < R.x + band || x >= R.x + R.w - band || y < R.y + band || y >= R.y + R.h - band));
+    // Ring just outside the paper edges = the surrounding surface.
+    bg = sampleColor((x, y) => !inside(x, y) &&
+      x >= R.x - band * 3 && x < R.x + R.w + band * 3 &&
+      y >= R.y - band * 3 && y < R.y + R.h + band * 3);
+  } else {
+    paper = sampleColor((x, y) => x < band || x >= w - band || y < band || y >= h - band);
+  }
+  if (!paper) paper = [255, 255, 255];
+
+  // Weighted colour distance (brightness/shadow counts less than chroma).
+  const score = (p, ref) => {
+    const dr = data[p] - ref[0], dg = data[p + 1] - ref[1], db = data[p + 2] - ref[2];
+    const dl = (dr + dg + db) / 3;
+    const dcr = dr - dl, dcg = dg - dl, dcb = db - dl;
+    return Math.abs(dl) * 0.7 + Math.sqrt(dcr * dcr + dcg * dcg + dcb * dcb) * 1.6;
+  };
+
   const diff = new Uint8ClampedArray(w * h);
   for (let i = 0, p = 0; i < w * h; i++, p += 4) {
-    const dr = data[p] - pr, dg = data[p + 1] - pg, db = data[p + 2] - pb;
-    const dl = (dr + dg + db) / 3;                       // luma shift
-    const dcr = dr - dl, dcg = dg - dl, dcb = db - dl;   // chroma shift
-    const chroma = Math.sqrt(dcr * dcr + dcg * dcg + dcb * dcb);
-    diff[i] = Math.min(255, Math.abs(dl) * 0.7 + chroma * 1.6);
+    if (data[p + 3] < 128) { diff[i] = 0; continue; } // no-data → background
+    let d = score(p, paper);
+    if (bg) d = Math.min(d, score(p, bg));            // background if near either
+    diff[i] = Math.min(255, d);
   }
-  return { diff, w, h, paperColor: [pr, pg, pb] };
+  return { diff, w, h, paperColor: paper, bgColor: bg };
 }
 
 export function otsuThreshold(diff) {

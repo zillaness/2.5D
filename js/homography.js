@@ -62,10 +62,18 @@ export function applyHomography(H, x, y) {
 // output pixel is re-distorted before sampling, so lens-bowed edges come out
 // straight. Returns { canvas, pxPerMm }.
 export function rectify(image, corners, paperWmm, paperHmm, opts = {}) {
-  const { maxLongSidePx = 1600, k1 = 0, k2 = 0 } = opts;
-  const pxPerMm = Math.min(maxLongSidePx / Math.max(paperWmm, paperHmm), 8);
-  const outW = Math.round(paperWmm * pxPerMm);
-  const outH = Math.round(paperHmm * pxPerMm);
+  const { maxLongSidePx = 1600, k1 = 0, k2 = 0, marginMm = 0 } = opts;
+  // marginMm > 0 extends the rectified plane beyond the reference on every side,
+  // so an object larger than / beside the paper is captured with full
+  // perspective correction (not just scale). Resolution is set from the TOTAL
+  // extent so the output stays bounded; margin 0 == the classic paper-only crop.
+  const m = Math.max(0, marginMm);
+  const totalW = paperWmm + 2 * m, totalH = paperHmm + 2 * m;
+  const pxPerMm = Math.min(maxLongSidePx / Math.max(totalW, totalH), 8);
+  const paperWpx = Math.round(paperWmm * pxPerMm), paperHpx = Math.round(paperHmm * pxPerMm);
+  const offX = Math.round(m * pxPerMm), offY = Math.round(m * pxPerMm);
+  const outW = paperWpx + 2 * offX;
+  const outH = paperHpx + 2 * offY;
 
   const iw = image.naturalWidth || image.width, ih = image.naturalHeight || image.height;
   const lp = lensParams(iw, ih);
@@ -73,9 +81,11 @@ export function rectify(image, corners, paperWmm, paperHmm, opts = {}) {
   // Straighten the clicked corners so the homography maps to undistorted space.
   const corr = distort ? corners.map(c => undistortPixel(c, k1, k2, lp)) : corners;
 
-  // Map rectified pixels -> (undistorted) source pixels.
+  // Map rectified pixels -> (undistorted) source pixels. The paper corners sit
+  // at the margin offset inside the (possibly larger) output.
   const dstQuad = [
-    { x: 0, y: 0 }, { x: outW, y: 0 }, { x: outW, y: outH }, { x: 0, y: outH },
+    { x: offX, y: offY }, { x: offX + paperWpx, y: offY },
+    { x: offX + paperWpx, y: offY + paperHpx }, { x: offX, y: offY + paperHpx },
   ];
   const H = computeHomography(dstQuad, corr);
   if (!H) return null;
@@ -103,7 +113,9 @@ export function rectify(image, corners, paperWmm, paperHmm, opts = {}) {
       if (distort) { const p = distortPixel({ x: sx, y: sy }, k1, k2, lp); sx = p.x; sy = p.y; }
       const o = (v * outW + u) * 4;
       if (sx < 0 || sy < 0 || sx > sw - 1 || sy > sh - 1) {
-        op[o] = op[o + 1] = op[o + 2] = 0; op[o + 3] = 255;
+        // Outside the photo (only possible in the extended margin): mark as
+        // no-data via alpha 0 so segmentation ignores it.
+        op[o] = op[o + 1] = op[o + 2] = 0; op[o + 3] = 0;
         continue;
       }
       // Bilinear sample
@@ -121,5 +133,8 @@ export function rectify(image, corners, paperWmm, paperHmm, opts = {}) {
     }
   }
   octx.putImageData(outData, 0, 0);
-  return { canvas: outCanvas, pxPerMm };
+  return {
+    canvas: outCanvas, pxPerMm,
+    paperRect: { x: offX, y: offY, w: paperWpx, h: paperHpx },
+  };
 }

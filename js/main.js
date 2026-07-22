@@ -41,6 +41,7 @@ const state = {
   corners: null,          // [{x,y} x4] source-image px, TL TR BR BL
   reference: 'rect', // 'rect' (paper/card, perspective-corrected) | 'coin' (scale only)
   paper: { size: DEFAULT_SIZE, orientation: 'portrait', customW: 210, customH: 297 },
+  captureFrac: 0, // 0 = reference-only crop; >0 extends the rectified area beyond it (× longer paper side)
   coin: { size: DEFAULT_COIN, customD: 24.26 },
   lens: { k1: 0, k2: 0 }, // radial lens-distortion correction (rectangle path)
   rect: null,             // { canvas, pxPerMm }
@@ -284,14 +285,18 @@ function doRectify() {
   if (!state.image) return false;
   if (state.reference === 'coin') return rectifyCoin();
   const { w, h } = currentPaper();
-  const res = rectify(state.image, state.corners, w, h, { k1: state.lens.k1, k2: state.lens.k2 });
+  const marginMm = (state.captureFrac || 0) * Math.max(w, h);
+  const res = rectify(state.image, state.corners, w, h,
+    { k1: state.lens.k1, k2: state.lens.k2, marginMm });
   if (!res) {
     toast('Corner layout is degenerate — adjust the corners.');
     return false;
   }
   state.rect = res;
   state.rectDirty = false;
-  state.diffMap = computeDiffMap(res.canvas);
+  // Beyond-paper: give the segmenter the paper rect so it treats both the paper
+  // and the surrounding surface as background.
+  state.diffMap = computeDiffMap(res.canvas, marginMm > 0 ? { paperRect: res.paperRect } : {});
   if (state.seg.autoThreshold) {
     state.seg.threshold = otsuThreshold(state.diffMap.diff);
     $('threshSlider').value = state.seg.threshold;
@@ -631,6 +636,10 @@ sizeSel.addEventListener('change', () => {
 });
 $('paperOrient').addEventListener('change', e => {
   state.paper.orientation = e.target.value;
+  state.rectDirty = true;
+});
+$('captureArea').addEventListener('change', e => {
+  state.captureFrac = parseFloat(e.target.value) || 0;
   state.rectDirty = true;
 });
 $('customW').addEventListener('change', e => {
@@ -1473,6 +1482,7 @@ function serializeProject(includePhoto) {
     units: state.units,
     reference: state.reference,
     paper: state.paper,
+    captureFrac: state.captureFrac,
     coin: state.coin,
     lens: state.lens,
     corners: state.corners,
@@ -1509,6 +1519,10 @@ function loadProject(p) {
     $('customSizeRow').hidden = state.paper.size !== 'custom';
     $('customW').value = fmtDim(state.paper.customW);
     $('customH').value = fmtDim(state.paper.customH);
+  }
+  if (typeof p.captureFrac === 'number') {
+    state.captureFrac = p.captureFrac;
+    $('captureArea').value = String(p.captureFrac);
   }
   if (p.coin) { state.coin = { ...state.coin, ...p.coin }; $('coinSize').value = state.coin.size; }
   if (p.lens) { state.lens = { k1: p.lens.k1 || 0, k2: p.lens.k2 || 0 }; }

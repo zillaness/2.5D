@@ -79,6 +79,18 @@ A **Rotate photo** control uprights a sideways shot in 90° steps (the corners
 rotate with it). Or skip the photo entirely and **import a vector drawing** —
 see below.
 
+**Capture area — object larger than / beside the reference.** By default the
+rectified image is cropped to the reference rectangle, so the object has to sit
+*on* it. Set **Capture area** to *Extend* and the perspective-corrected plane
+grows beyond the reference, so a small card can calibrate a big object that
+overhangs it — or one placed beside it — with full perspective correction, not
+just scale. Keep the object on the **same flat surface** as the reference and
+all four reference corners **visible**. The segmenter then treats both the paper
+*and* the surrounding surface as background (so it still finds the object), and
+any area outside the photo comes back as a black no-data border. It's less
+forgiving than a reference the object fits on — a bigger sheet is still best
+when you have one — but it beats being limited to the paper's footprint.
+
 ### Import a CAD drawing (DXF / SVG)
 
 Step 1 has an **Import CAD file** button: drop a `.dxf` or `.svg` and its
