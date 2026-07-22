@@ -144,6 +144,7 @@ const BOW_CFG = {  // gen file, outline var, shoulder-datum indices [x-from, y-f
   best: { gen: 'best.gen.scad', var: 'outline_points', ox: 42, oy: 37, tipDatum: true, bladeTop: 8.382 },
 };
 const bows = {};
+const holes = {};                     // real keyring/decorative holes per keyway
 for (const [id, cfg] of Object.entries(BOW_CFG)) {
   const text = fs.readFileSync(path.join(scadDir, cfg.gen), 'utf8');
   const P = parseArrays(text)[cfg.var];
@@ -152,7 +153,9 @@ for (const [id, cfg] of Object.entries(BOW_CFG)) {
   const dx = -P[cfg.ox][0], dy = -P[cfg.oy][1];
   const Q = P.map(([x, y]) => [x + dx, y + dy]);
   const outer = (paths && paths[0]) ? paths[0].map(i => Q[i]) : Q;
-  let B;
+  // Build the SAME coordinate transform used for the bow (datum-shifted → blade
+  // back at h=0, bow at −x), so hole loops land in the bow's frame.
+  let tf;
   if (cfg.tipDatum) {
     // Tip-datum frame (BEST): blade already runs +x from the tip; back = min y over
     // the blade (tip) region; shoulder = first x (tip→bow) whose top exceeds the
@@ -163,14 +166,14 @@ for (const [id, cfg] of Object.entries(BOW_CFG)) {
     const dense = []; for (let i = 0; i < S.length; i++) { const a = S[i], b = S[(i + 1) % S.length]; const L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.round(L / 0.5)); for (let k = 0; k < n; k++) dense.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]); }
     let sh = Math.min(...S.map(p => p[0]));
     for (let x = maxX; x > sh; x -= 0.5) { const near = dense.filter(p => Math.abs(p[0] - x) < 0.6); if (near.length && Math.max(...near.map(p => p[1])) > cfg.bladeTop + 1.5) { sh = x; break; } }
-    B = S.map(([x, h]) => [x - sh, h]);
+    tf = ([x, h]) => [x - sh, h - spine];
   } else {
     const span = (f) => { const ys = outer.filter(f).map(p => p[1]); return ys.length ? Math.max(...ys) - Math.min(...ys) : 1e9; };
     const flip = span(p => p[0] > 0) < span(p => p[0] < 0) ? 1 : -1; // blade to +x
-    const X = outer.map(p => p[0] * flip);
-    const spine = Math.min(...outer.filter((_, i) => X[i] > 1).map(p => p[1]));
-    B = outer.map((p, i) => [X[i], p[1] - spine]);
+    const spine = Math.min(...outer.filter(p => p[0] * flip > 1).map(p => p[1]));
+    tf = ([x, h]) => [x * flip, h - spine];
   }
+  const B = outer.map(tf);
   const on = B.map(p => p[0] < -0.3);
   const runs = []; let cur = [];
   for (let i = 0; i < B.length; i++) { if (on[i]) cur.push(i); else if (cur.length) { runs.push(cur); cur = []; } }
@@ -178,6 +181,9 @@ for (const [id, cfg] of Object.entries(BOW_CFG)) {
   if (on[0] && on[B.length - 1] && runs.length > 1) { runs[0] = runs[runs.length - 1].concat(runs[0]); runs.pop(); }
   const run = runs.sort((a, b) => b.length - a.length)[0];
   bows[id] = run.map(i => [round(B[i][0], 3), round(B[i][1], 3)]);
+  // Hole loops (outline paths after the first) → the same frame. Kwikset has 3.
+  const hl = (paths || []).slice(1).map(loop => loop.map(i => tf(Q[i])).map(([x, h]) => [round(x, 3), round(h, 3)]));
+  if (hl.length) holes[id] = hl;
 }
 const BL = [...LICENSE_HEADER];
 BL.push('// Manufacturer bow silhouettes (the head you grip), in mm, in the blade\'s');
@@ -196,6 +202,19 @@ for (const [id, b] of Object.entries(bows)) {
 BL.push('};');
 BL.push('');
 BL.push('export function getBow(id) { return BOWS[id] || null; }');
+BL.push('');
+BL.push('// Real keyring / decorative bow holes (mm), in the SAME bow frame (x from the');
+BL.push('// shoulder at 0, blade back at h=0). Each keyway maps to an ARRAY of hole loops');
+BL.push('// (Kwikset has three; others one). Extruded through the bow and subtracted, so');
+BL.push('// the printed head has its actual manufacturer hole(s) instead of a placeholder.');
+BL.push('export const BOW_HOLES = {');
+for (const [id, hs] of Object.entries(holes)) {
+  const loops = hs.map(loop => `[${loop.map(([x, h]) => `[${x},${h}]`).join(', ')}]`).join(', ');
+  BL.push(`  ${id}: [${loops}],`);
+}
+BL.push('};');
+BL.push('');
+BL.push('export function getBowHoles(id) { return BOW_HOLES[id] || null; }');
 BL.push('');
 fs.writeFileSync(path.join(root, 'js/keys/bows.js'), BL.join('\n'));
 
