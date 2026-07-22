@@ -23,6 +23,7 @@ details.help svg { width: 100%; height: auto; margin: 6px 0; border-radius: 6px;
 .modal-close { position: absolute; top: 10px; right: 12px; width: 32px; height: 32px; z-index: 1;
   background: #1b232c; color: #cdd6df; border: 1px solid #2a333d; border-radius: 7px; font-size: 15px; cursor: pointer; }
 .modal-close:hover { background: #263039; color: #fff; }
+.app-icon { height: 1.5em; width: auto; vertical-align: -0.4em; margin-right: 7px; }
 .keys-layout .panel { overflow-y: auto; }
 .keys-layout .stage {
   position: relative;

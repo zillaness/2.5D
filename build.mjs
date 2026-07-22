@@ -94,16 +94,20 @@ const keyBundle = (await esbuild.build({
 const wasmB64 = fs.readFileSync(path.join(root, 'node_modules/manifold-3d/manifold.wasm')).toString('base64');
 const wasmScript = `<script>window.__FLR_MANIFOLD_WASM=${JSON.stringify(wasmB64)};</script>\n`;
 
-let keyBody = read('keys.html')
+const keyHtml = read('keys.html');
+let keyBody = keyHtml
   .replace(/^[\s\S]*?<body>/, '')
   .replace(/<\/body>[\s\S]*$/, '')
   .replace(/<script type="importmap">[\s\S]*?<\/script>\s*/g, '')
   .replace(/<script type="module" src="js\/keys\/keyUI\.js"><\/script>\s*/g, '');
+// carry the favicon <link> from keys.html into the built head
+const keyFavicon = (keyHtml.match(/<link rel="icon"[^>]*>/) || [''])[0];
 
 const keyFull =
   `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="UTF-8">\n` +
   `<meta name="viewport" content="width=device-width, initial-scale=1.0">\n` +
   `<title>Funny Looking Rock — photograph a key → print a spare</title>\n` +
+  (keyFavicon ? keyFavicon + '\n' : '') +
   `<style>\n${css}\n${read('css/keys.css')}\n</style>\n</head>\n<body>\n` +
   keyBody.trim() + '\n' +
   wasmScript +
