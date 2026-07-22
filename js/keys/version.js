@@ -2,6 +2,8 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v2.4  generic bow (BEST) now has a full-height neck so the wide paddle no
+//         longer butts into cut #1.
 //   v2.3  tip now bevels only the top edge (warding stays full-size) so the tip
 //         actually fits the keyway, instead of squeezing the whole section.
 //   v2.2  when the key can't be auto-seen, lay the cut lines out at the blank's
@@ -22,4 +24,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v2.3';
+export const VERSION = 'v2.4';

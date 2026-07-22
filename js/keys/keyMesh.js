@@ -308,15 +308,23 @@ function weldBowOutline(mesh, blank, blade, src) {
 // to the blade as one manifold, same as the real bows. The keyring hole is added
 // by weldBowOutline from the outline centroid.
 function addBow(mesh, blank, blade, opts = {}) {
-  const w = wardingFor(blank), midH = w.height / 2;
-  const bowLen = opts.bowLen ?? 22, bowH = opts.bowH ?? 22, rEnd = bowH / 2;
-  const outline = [[0, midH - bowH / 2]];       // neck bottom at x=0
-  const xc = -(bowLen - rEnd);
-  for (let deg = -90; deg <= 90; deg += 12) {
+  const w = wardingFor(blank), H = w.height, midH = H / 2;
+  const bowLen = opts.bowLen ?? 20, bowH = opts.bowH ?? 22, rEnd = bowH / 2;
+  const neck = opts.neck ?? 5;                   // full-height blade neck before the paddle,
+                                                 // so the wide bow doesn't butt into cut #1
+  const xc = -neck - (bowLen - rEnd);            // paddle round-end centre
+  const outline = [
+    [0, midH - H / 2],                           // shoulder bottom (weld end, blade height)
+    [-neck, midH - H / 2],                        // neck bottom
+    [-neck, midH - bowH / 2],                     // flare out to the paddle
+  ];
+  for (let deg = -90; deg <= 90; deg += 12) {     // round the far end, bottom → top
     const r = deg * Math.PI / 180;
     outline.push([xc - rEnd * Math.cos(r), midH + rEnd * Math.sin(r)]);
   }
-  outline.push([0, midH + bowH / 2]);           // neck top at x=0
+  outline.push([-neck, midH + bowH / 2]);         // paddle top
+  outline.push([-neck, midH + H / 2]);            // flare back in to the neck
+  outline.push([0, midH + H / 2]);                // shoulder top (weld end)
   weldBowOutline(mesh, blank, blade, outline);
 }
 
