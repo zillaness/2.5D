@@ -12,6 +12,12 @@ export const PAPER_SIZES = {
   tabloid:{ name: 'US Tabloid (11 × 17 in)',  w: 279.4, h: 431.8 },
   card:   { name: 'Credit/ID card (85.6 × 54 mm)', w: 53.98, h: 85.60 },
   usbill: { name: 'US bill (156 × 66 mm)',    w: 66.3,  h: 156.1 },
+  cabill: { name: 'Canadian bill (152.4 × 69.85 mm)', w: 69.85, h: 152.4 }, // all denominations
+  eur5:   { name: '€5 note (120 × 62 mm)',    w: 62,    h: 120 },
+  eur10:  { name: '€10 note (127 × 67 mm)',   w: 67,    h: 127 },
+  eur20:  { name: '€20 note (133 × 72 mm)',   w: 72,    h: 133 },
+  eur50:  { name: '€50 note (140 × 77 mm)',   w: 77,    h: 140 },
+  eur100: { name: '€100 note (147 × 82 mm)',  w: 82,    h: 147 },
   custom: { name: 'Custom…',                  w: 210,   h: 297 },
 };
 
@@ -24,6 +30,11 @@ export const COIN_SIZES = {
   us_penny:   { name: 'US Penny (⌀19.05 mm)',   d: 19.05 },
   euro_2:     { name: '€2 coin (⌀25.75 mm)',    d: 25.75 },
   euro_1:     { name: '€1 coin (⌀23.25 mm)',    d: 23.25 },
+  ca_toonie:  { name: 'Canadian $2 toonie (⌀28.00 mm)', d: 28.00 },
+  ca_loonie:  { name: 'Canadian $1 loonie (⌀26.50 mm)', d: 26.50 },
+  ca_quarter: { name: 'Canadian 25¢ (⌀23.88 mm)',       d: 23.88 },
+  ca_nickel:  { name: 'Canadian 5¢ (⌀21.20 mm)',        d: 21.20 },
+  ca_dime:    { name: 'Canadian 10¢ (⌀18.03 mm)',       d: 18.03 },
   coin_custom:{ name: 'Custom ⌀…',              d: 24.26 },
 };
 

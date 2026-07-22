@@ -63,12 +63,13 @@ the fully offline option.
 **reference** to set real-world scale:
 
 - **Rectangle** — a sheet of paper (defaults to US Letter), or a
-  **credit/ID card** or **US bill** you always have on hand. Its corners are
-  auto-detected; drag the four handles to fine-tune (a magnifier loupe appears
-  while dragging, the yellow edge marks the top). A rectangle corrects
-  perspective and skew exactly.
-- **Coin** — scale only. Drag a circle over a coin (US quarter, dime, €2, …,
-  or a custom diameter) and its edge handle to the rim. Shoot straight down,
+  **credit/ID card**, **US / Canadian bill**, or **euro note (€5–€100)** you
+  always have on hand. Its corners are auto-detected; drag the four handles to
+  fine-tune (a magnifier loupe appears while dragging, the yellow edge marks the
+  top). A rectangle corrects perspective and skew exactly.
+- **Coin** — scale only. Drag a circle over a coin (US quarter/dime/…, Canadian
+  toonie/loonie/quarter/…, €1/€2, or a custom diameter) and its edge handle to
+  the rim. Shoot straight down,
   since a coin can't correct perspective. Best for small objects where a full
   sheet of paper is overkill.
 
