@@ -250,9 +250,10 @@ function bowKeyringHole(real, w) {
 
 // ── parametric paddle bow (keyways without a keygen silhouette) ──────────────
 // Tuned per family so BEST reads like a BEST bow, not the bare generic paddle.
+// Fallback only — used when a blank has no keygen silhouette in bows.js. (BEST now
+// has a real extracted bow, so it no longer lands here.)
 const GENERIC_BOWS = {
-  generic: { bowLen: 20, bowH: 22,   neck: 5,   flare: 3.0 },
-  best:    { bowLen: 23, bowH: 25.5, neck: 4.5, flare: 3.6 },  // fuller SFIC-style head
+  generic: { bowLen: 20, bowH: 22, neck: 5, flare: 3.0 },
 };
 function genericBowParams(blank, opts = {}) {
   return GENERIC_BOWS[opts.bowStyle || blank.bow] || GENERIC_BOWS.generic;
