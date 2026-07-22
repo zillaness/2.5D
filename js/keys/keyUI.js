@@ -169,6 +169,85 @@ function autoPlace() {
 }
 const median = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
+// ── shape-based bow detection (classical CV, no ML) ──────────────────────────
+// Find the BOW (the head you grip) straight from the silhouette, so orientation
+// sets itself. Two cues, strongest first, both on a downsampled pixel mask:
+//   1. Keyring hole — the bow is the one part of a key with an enclosed hole.
+//      Flood-fill the background inward from the image border; any non-key region
+//      the fill can't reach is enclosed → the ring hole. Whichever end holds it
+//      is unambiguously the bow. (A hole is bow-specific, so this beats "is there
+//      bright stuff past the end", which glare or a finger can fake.)
+//   2. Principal-axis width — if no hole is visible, take the key's long axis from
+//      image moments (no user trace needed) and walk it: the wide blobby end is
+//      the bow, the thin notched end is the blade.
+// Returns the bow centroid in IMAGE px (+ which cue fired), or null if unsure.
+// Everything is pixel arithmetic on state.sample — offline, in the standalone file.
+function detectBow() {
+  const S = state.sample; if (!S) return null;
+  const { w, h } = S;
+  const step = Math.max(1, Math.ceil(Math.max(w, h) / 360));   // work on a ~360px grid
+  const half = step >> 1;
+  const gw = Math.ceil(w / step), gh = Math.ceil(h / step), N = gw * gh;
+  const toImg = (gx, gy) => ({ x: gx * step + half, y: gy * step + half });
+  const mask = new Uint8Array(N);                              // 1 = key material
+  let keyN = 0;
+  for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++)
+    if (bright(gx * step + half, gy * step + half)) { mask[gy * gw + gx] = 1; keyN++; }
+  if (keyN < 20) return null;
+
+  // 1 · keyring hole = background NOT reachable from the border.
+  const bg = new Uint8Array(N), stack = [];
+  for (let gx = 0; gx < gw; gx++) { stack.push(gx, (gh - 1) * gw + gx); }
+  for (let gy = 0; gy < gh; gy++) { stack.push(gy * gw, gy * gw + gw - 1); }
+  while (stack.length) {
+    const i = stack.pop(); if (bg[i] || mask[i]) continue; bg[i] = 1;
+    const x = i % gw, y = (i / gw) | 0;
+    if (x > 0) stack.push(i - 1); if (x < gw - 1) stack.push(i + 1);
+    if (y > 0) stack.push(i - gw); if (y < gh - 1) stack.push(i + gw);
+  }
+  const seen = new Uint8Array(N); let bestHole = null;         // largest enclosed region
+  for (let i0 = 0; i0 < N; i0++) {
+    if (mask[i0] || bg[i0] || seen[i0]) continue;
+    let cx = 0, cy = 0, cnt = 0; const q = [i0]; seen[i0] = 1;
+    while (q.length) {
+      const j = q.pop(), x = j % gw, y = (j / gw) | 0; cx += x; cy += y; cnt++;
+      const nb = [x > 0 ? j - 1 : -1, x < gw - 1 ? j + 1 : -1, y > 0 ? j - gw : -1, y < gh - 1 ? j + gw : -1];
+      for (const k of nb) if (k >= 0 && !mask[k] && !bg[k] && !seen[k]) { seen[k] = 1; q.push(k); }
+    }
+    if (!bestHole || cnt > bestHole.cnt) bestHole = { gx: cx / cnt, gy: cy / cnt, cnt };
+  }
+  if (bestHole && bestHole.cnt >= Math.max(4, keyN * 0.004))   // real ring hole, not a speck/glare gap
+    return { ...toImg(bestHole.gx, bestHole.gy), method: 'hole' };
+
+  // 2 · principal-axis width: the wide end is the bow.
+  let mx = 0, my = 0;
+  for (let i = 0; i < N; i++) if (mask[i]) { mx += i % gw; my += (i / gw) | 0; }
+  mx /= keyN; my /= keyN;
+  let sxx = 0, sxy = 0, syy = 0;
+  for (let i = 0; i < N; i++) if (mask[i]) { const dx = (i % gw) - mx, dy = ((i / gw) | 0) - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
+  const tr = sxx + syy, l1 = tr / 2 + Math.sqrt(Math.max(0, tr * tr / 4 - (sxx * syy - sxy * sxy)));
+  let ax, ay;                                                  // major-axis unit vector
+  if (Math.abs(sxy) > 1e-6) { ax = l1 - syy; ay = sxy; } else { ax = sxx >= syy ? 1 : 0; ay = sxx >= syy ? 0 : 1; }
+  const al = Math.hypot(ax, ay) || 1; ax /= al; ay /= al;
+  const pts = []; let tmin = Infinity, tmax = -Infinity;
+  for (let i = 0; i < N; i++) if (mask[i]) {
+    const dx = (i % gw) - mx, dy = ((i / gw) | 0) - my, t = dx * ax + dy * ay, p = -dx * ay + dy * ax;
+    pts.push({ i, t, p }); if (t < tmin) tmin = t; if (t > tmax) tmax = t;
+  }
+  const span = (tmax - tmin) || 1, BIN = 24;
+  const lo = new Array(BIN).fill(Infinity), hi = new Array(BIN).fill(-Infinity);
+  for (const q of pts) { const b = Math.min(BIN - 1, Math.floor((q.t - tmin) / span * BIN)); if (q.p < lo[b]) lo[b] = q.p; if (q.p > hi[b]) hi[b] = q.p; }
+  const wAt = (b) => (hi[b] > lo[b] ? hi[b] - lo[b] : 0);
+  let wLow = 0, wHigh = 0, K = 4;
+  for (let b = 0; b < K; b++) wLow += wAt(b);
+  for (let b = BIN - K; b < BIN; b++) wHigh += wAt(b);
+  const bowAtLow = wLow > wHigh, cut = bowAtLow ? tmin + 0.2 * span : tmax - 0.2 * span;
+  let bx = 0, by = 0, bn = 0;
+  for (const q of pts) if (bowAtLow ? q.t <= cut : q.t >= cut) { bx += q.i % gw; by += (q.i / gw) | 0; bn++; }
+  if (!bn) return null;
+  return { ...toImg(bx / bn, by / bn), method: 'pca' };
+}
+
 // ── build the blade profile along the current axis ───────────────────────────
 // Scan perpendicular to the shoulder→tip axis; the bright extent at each step is
 // the blade height there. Self-calibrate the mm scale from the uncut blade height
@@ -235,20 +314,25 @@ function reprofile() {
   state.back = [avg(bpts.slice(0, kk)), avg(bpts.slice(-kk))];
   // Orient the back line so back[0] is the BOW end (position 1). A backwards
   // green line silently reverses the whole bitting → a wrong key that still
-  // looks plausible, so anchor the default on real evidence: the bow (the big
-  // paddle) leaves lots of key material just PAST the blade end, while the tip
-  // end drops straight into background. Sample both ends; if the bow is clearly
-  // at back[1], flip. (The Flip button stays as the manual override.)
-  const bowScore = (dir) => {                        // dir +1 past back[1], -1 past back[0]
-    const baseUp = dir > 0 ? L : 0; let hits = 0, tot = 0;
-    for (let s = 5; s <= 45; s += 2) {
-      const p = at(baseUp + dir * s);
-      for (let k = -tight * 1.6; k <= tight * 1.6; k += 2) { tot++; if (bright(p.px + k * n.x, p.py + k * n.y)) hits++; }
-    }
-    return tot ? hits / tot : 0;
-  };
-  const bowAt0 = bowScore(-1), bowAt1 = bowScore(1);
-  if (bowAt1 > bowAt0 + 0.15) state.back.reverse();  // bow is really at the tip end → flip
+  // looks plausible, so anchor the default on real evidence. Primary: shape-based
+  // bow detection (keyring hole, else the silhouette's wide end) — put back[0] at
+  // whichever end is nearest the detected bow. Fallback: sample past each blade
+  // end for key material. (The Flip button stays as the manual override.)
+  const d2 = (p, b) => (p.x - b.x) ** 2 + (p.y - b.y) ** 2;
+  const bow = detectBow();
+  if (bow) {
+    if (d2(state.back[1], bow) < d2(state.back[0], bow)) state.back.reverse();
+  } else {
+    const bowScore = (dir) => {                      // dir +1 past back[1], -1 past back[0]
+      const baseUp = dir > 0 ? L : 0; let hits = 0, tot = 0;
+      for (let s = 5; s <= 45; s += 2) {
+        const p = at(baseUp + dir * s);
+        for (let k = -tight * 1.6; k <= tight * 1.6; k += 2) { tot++; if (bright(p.px + k * n.x, p.py + k * n.y)) hits++; }
+      }
+      return tot ? hits / tot : 0;
+    };
+    if (bowScore(1) > bowScore(-1) + 0.15) state.back.reverse();
+  }
   const edgeAtPx = (upPx) => {                       // milled-edge offset near up
     let best = null, bd = Infinity;
     for (const r of raw) { const dd = Math.abs(r.up - upPx); if (dd < bd) { bd = dd; best = r; } }
@@ -738,5 +822,5 @@ window.keyUI = {
   setScale: (v) => { state.manualScale = v; },
   setHandles: (sh, tp) => { state.shoulder = sh; state.tip = tp; },
   setCard: (quad) => { state.cardQuad = quad; applyCardScale(); },
-  reprofile,
+  reprofile, detectBow,
 };

@@ -154,23 +154,24 @@ that still looks plausible, so:
 - The bitting field **warns** that direction is per-keyway: Schlage transfers
   directly to keygen; only BEST codes must be reversed.
 
-## TODO — shape-based bow auto-detection (classical CV, in scope)
+## Shape-based bow auto-detection (DONE — classical CV, in scope)
 
-Detect the bow directly from the key silhouette so orientation (and ideally the
-whole trace) is set automatically — a stronger version of today's "material past
-the blade end" heuristic. All classical CV on the canvas `ImageData`, no ML, no
-network, stays in the standalone file:
+`detectBow()` (js/keys/keyUI.js) finds the bow directly from the silhouette so
+orientation sets itself, on a downsampled (~360px) pixel mask. All classical CV
+on the canvas `ImageData`, no ML, no network — stays in the standalone file:
 
 - **Primary — keyring-hole detection.** Flood-fill the background inward from the
-  image border; any enclosed non-key region is the ring hole, which only the bow
-  has → that end is unambiguously the bow. Strongest, most bow-specific cue.
-- **Fallback — PCA width profile.** Take the key's principal axis from image
-  moments (no user trace needed), walk it measuring perpendicular width; the wide
-  blobby end is the bow, the thin notched end is the blade.
-- Feed the result into `state.back` orientation (same target as the current
-  auto-orient); keep the "tip →" arrow + Flip as the override for occluded-hole /
-  cluttered-background cases. Could extend to full auto-place (axis + bow end +
-  back line) later.
+  image border; any enclosed non-key region the fill can't reach is the ring
+  hole, which only the bow has → that end is unambiguously the bow. Largest
+  enclosed region wins, gated by a min-area test so specks/glare gaps don't fire.
+- **Fallback — PCA width profile.** Principal axis from image moments (no user
+  trace), walk it measuring perpendicular width; the wide blobby end is the bow.
+- `reprofile()` orients `state.back` so `back[0]` is the end nearest the detected
+  bow; the old "material past the blade end" scan is now just the last-resort
+  fallback. The "tip →" arrow + Flip remain the manual override.
+- Tests: `test/bowdetect_smoke.mjs` (hole + PCA cues), `test/orient_smoke.mjs`
+  (end-to-end flip of a backwards axis).
 - Not ML: neural-net recognition would mean inlining multi-MB weights or a cloud
-  call (breaks offline/private) — unnecessary for a rigid shape with a literal
-  hole in it.
+  call (breaks offline/private) — unnecessary for a rigid shape with a hole in it.
+- **Possible next:** extend to full auto-place (axis + bow end + back line) from
+  `detectBow()` instead of `autoPlace()`'s coarser bbox pass.
