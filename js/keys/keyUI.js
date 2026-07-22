@@ -164,7 +164,7 @@ const median = (a) => { if (!a.length) return 0; const s = [...a].sort((x, y) =>
 // register the cuts to the ACTUAL valleys (robust to perspective drift).
 function reprofile() {
   state.profile = null; state.cutUs = null;
-  if (!state.shoulder || !state.tip || !state.sample) return;
+  if (!state.shoulder || !state.tip || !state.sample) return false;
   const spec = state.blank.spec, o = state.shoulder, t = state.tip;
   const dx = t.x - o.x, dy = t.y - o.y, L = Math.hypot(dx, dy) || 1;
   const d = { x: dx / L, y: dy / L }, n = { x: -dy / L, y: dx / L };
@@ -188,7 +188,7 @@ function reprofile() {
     for (let k = cen - 1, g = 0; k >= -L * 0.4; k--) { if (on(k)) { lo = k; g = 0; } else if (++g > 40) break; }
     rough.push({ up, ext: hi - lo });
   }
-  if (rough.length < 5) return;
+  if (rough.length < 5) return false;
   state.axis = { o, d, n };
   const px0 = (state.manualScale || uncutOf(rough) / (spec.bladeHeight * IN_TO_MM));
   const tight = spec.bladeHeight * IN_TO_MM * px0 * 0.62; // half-height × 1.24
@@ -200,7 +200,7 @@ function reprofile() {
     for (let k = cen - tight; k <= cen + tight; k++) if (on(k)) { if (lo === null) lo = k; hi = k; }
     if (lo !== null) raw.push({ up, lo, hi, ext: hi - lo });
   }
-  if (raw.length < 5) return;
+  if (raw.length < 5) return false;
   const uncutPx = uncutOf(raw);
   const pxPerMm = state.manualScale || uncutPx / (spec.bladeHeight * IN_TO_MM);
   state.pxPerMm = pxPerMm;
@@ -233,6 +233,40 @@ function reprofile() {
     const e = edgeAtPx(uPx);
     state.cutPts.push({ x: o.x + d.x * uPx + n.x * e, y: o.y + d.y * uPx + n.y * e });
   }
+  // If the detected blade is implausibly short (faint/garbage detection), the
+  // cuts would pile up — bail to the spaced fallback instead.
+  const spanPx = cutCentre(spec, spec.positions - 1) * IN_TO_MM * pxPerMm;
+  if (spanPx < 40) return false;
+  return true;
+}
+
+// Fallback layout when the key can't be seen (worn/gray keys don't register as
+// "bright"): lay the handles out at the blank's REAL cut spacing (using the card
+// scale) centred in the card, so the user just nudges each line onto its cut
+// instead of un-stacking a pile of dots.
+function placeDefaultHandles() {
+  const spec = state.blank.spec;
+  const px = state.manualScale || (state.sample ? state.sample.w / 110 : 8);
+  state.pxPerMm = px;
+  let cx, cy;
+  if (state.cardQuad) {
+    const q = state.cardQuad;
+    cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4;
+    cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+  } else { cx = (state.sample ? state.sample.w : 1000) / 2; cy = (state.sample ? state.sample.h : 600) / 2; }
+  const firstU = cutCentre(spec, 0) * IN_TO_MM, lastU = cutCentre(spec, spec.positions - 1) * IN_TO_MM;
+  const shoulderX = cx - ((firstU + lastU) / 2) * px;          // centre the cut span on the card
+  const tipX = shoulderX + (lastU + spacingMm(spec) * 2) * px;
+  state.shoulder = { x: shoulderX, y: cy };
+  state.tip = { x: tipX, y: cy };
+  const backY = cy + spec.bladeHeight * IN_TO_MM * 0.5 * px;    // cuts up, back below
+  state.back = [{ x: shoulderX, y: backY }, { x: tipX, y: backY }];
+  const [lo, hi] = codeRange(spec);
+  const depthPx = rootDepthMm(spec, Math.round((lo + hi) / 2)) * px;
+  state.cutPts = [];
+  for (let i = 0; i < spec.positions; i++)
+    state.cutPts.push({ x: shoulderX + cutCentre(spec, i) * IN_TO_MM * px, y: backY - depthPx });
+  status('Couldn’t auto-see the key — lines laid out at the blank spacing. Set the card scale, then drag each onto its cut.');
 }
 function spread(a) { const m = a.reduce((s, v) => s + v, 0) / a.length; return Math.sqrt(a.reduce((s, v) => s + (v - m) * (v - m), 0) / a.length); }
 // u of the deepest profile sample within ±win of u0 (falls back to u0 if empty).
@@ -270,7 +304,7 @@ function decodeFromHandles() {
 }
 
 function redecode(reprof = false) {
-  if (reprof) reprofile();
+  if (reprof) { if (!reprofile()) placeDefaultHandles(); }
   decodeFromHandles();
   $('genBtn').disabled = !state.decoded;
   draw();
@@ -350,11 +384,18 @@ canvas.addEventListener('pointerdown', (e) => {
   // cut dots first (they sit on top), then the back-line ends, then shoulder/tip
   if (state.cutPts) { for (let i = 0; i < state.cutPts.length; i++) if (hit(p, state.cutPts[i])) { state.drag = { kind: 'cut', idx: i }; return; } }
   if (state.back) { for (let i = 0; i < 2; i++) if (hit(p, state.back[i])) { state.drag = { kind: 'back', idx: i }; return; } }
-  if (state.shoulder && hit(p, state.shoulder)) state.drag = { kind: 'shoulder' };
-  else if (state.tip && hit(p, state.tip)) state.drag = { kind: 'tip' };
+  if (state.shoulder && hit(p, state.shoulder)) { state.drag = { kind: 'shoulder' }; return; }
+  if (state.tip && hit(p, state.tip)) { state.drag = { kind: 'tip' }; return; }
+  // empty space → pan the view
+  if (state.img) state.drag = { kind: 'pan', sx: e.offsetX, sy: e.offsetY, ox: state.view.ox, oy: state.view.oy };
 });
 canvas.addEventListener('pointermove', (e) => {
   if (!state.drag) return;
+  if (state.drag.kind === 'pan') {
+    state.view.ox = state.drag.ox + (e.offsetX - state.drag.sx);
+    state.view.oy = state.drag.oy + (e.offsetY - state.drag.sy);
+    draw(); return;
+  }
   const p = toImage({ x: e.offsetX, y: e.offsetY });
   if (state.drag.kind === 'card') { state.cardQuad[state.drag.idx] = p; applyCardScale(); draw(); return; }
   if (state.drag.kind === 'cut') { state.cutPts[state.drag.idx] = p; decodeFromHandles(); draw(); return; }
@@ -364,6 +405,18 @@ canvas.addEventListener('pointermove', (e) => {
   draw();
 });
 window.addEventListener('pointerup', () => { state.drag = null; });
+// Scroll to zoom, centred on the cursor.
+canvas.addEventListener('wheel', (e) => {
+  if (!state.img) return;
+  e.preventDefault();
+  const f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const ns = Math.max(0.05, Math.min(40, state.view.s * f));
+  const wx = (e.offsetX - state.view.ox) / state.view.s, wy = (e.offsetY - state.view.oy) / state.view.s;
+  state.view.s = ns;
+  state.view.ox = e.offsetX - wx * ns;
+  state.view.oy = e.offsetY - wy * ns;
+  draw();
+}, { passive: false });
 
 // ── scale (align the card's four corners) ─────────────────────────────────────
 // A CR80 card is 85.60 × 53.98 mm. Drag its four corners onto the card in the
