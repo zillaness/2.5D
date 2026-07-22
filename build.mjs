@@ -33,9 +33,14 @@ const clipperMin = (await esbuild.transform(read('vendor/clipper.js'), {
 
 const css = read('css/style.css');
 
+// Carry the favicon / apple-touch-icon links from index.html's <head> into the
+// standalone file's head (the body slice below drops everything above <body>).
+const indexHtml = read('index.html');
+const iconLinks = (indexHtml.match(/<link rel="(?:icon|apple-touch-icon)"[^>]*>/g) || []).join('\n');
+
 // Body markup from index.html, minus the external script/style references
 // that the bundle replaces.
-let body = read('index.html')
+let body = indexHtml
   .replace(/^[\s\S]*?<body>/, '')
   .replace(/<\/body>[\s\S]*$/, '')
   .replace(/<script src="vendor\/clipper\.js"><\/script>\s*/g, '')
@@ -54,6 +59,7 @@ const full =
   `<meta charset="UTF-8">\n` +
   `<meta name="viewport" content="width=device-width, initial-scale=1.0">\n` +
   `<title>2.5D — photo to printable solid</title>\n` +
+  (iconLinks ? iconLinks + '\n' : '') +
   `</head>\n<body>\n${inner}</body>\n</html>\n`;
 
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
