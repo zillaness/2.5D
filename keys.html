@@ -48,9 +48,18 @@
     <div class="field">
       <label>2 · Scale <span class="hint">(optional)</span></label>
       <span id="scaleReadout" class="mono"></span>
-      <p class="hint">Scale is read automatically from the cut spacing — no card
-      needed for a square-on photo. For an angled shot or an explicit check, put a
-      card (85.60 × 53.98 mm) behind the key and click:</p>
+      <p class="hint">Place a <b>standard ID-card-sized</b> rectangle behind the key.
+      Because its real dimensions are known, the four corners let the app correct
+      both <b>scale</b> and <b>perspective skew</b> — so even an off-square photo
+      reads true. (Square-on with no card also works; scale then comes from the
+      cut spacing.)</p>
+      <select id="cardSizeSel">
+        <option value="cr80">CR80 — credit / ID card · 85.60 × 53.98 mm</option>
+        <option value="cr79">CR79 — insert card · 83.90 × 51.00 mm</option>
+        <option value="cr100">CR100 — oversized badge · 98.50 × 67.00 mm</option>
+        <option value="half">½ CR80 key tag · 53.98 × 42.80 mm</option>
+        <option value="third">⅓ CR80 key tag · 53.98 × 28.53 mm</option>
+      </select>
       <button class="btn small" id="scaleBtn">Set scale — detect the card</button>
       <p class="hint">Cards have <b>rounded corners</b>, so don't aim the handles at the
       corners — line up the box's <b>edges</b> with the card's straight sides. The
@@ -83,8 +92,10 @@
       <button class="btn primary" id="genBtn" disabled>Generate key</button>
       <button class="btn" id="exportBtn" disabled>Export STL</button>
     </div>
-    <p class="hint warn">Printed keys are fragile — print on-edge in PETG/nylon/resin,
-    treat as an emergency spare. Copy only keys you're authorized to duplicate.</p>
+    <p class="hint warn">Printed keys are fragile. Print it <b>lying flat on the bed</b>
+    — the key face-down, cuts in the plane of the bed — in PETG, nylon, or resin.
+    Treat it as an emergency spare, not a daily key. Only duplicate keys you're
+    authorized to copy.</p>
     <div id="status" class="status"></div>
   </section>
 

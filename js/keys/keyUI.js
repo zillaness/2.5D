@@ -35,6 +35,7 @@ const state = {
   drag: null, cardQuad: null,
   back: null, cutPts: null,       // green back-edge line [A,B] + red cut dots (image px)
   cardH: null,                    // image→mm homography from the card (skew correction)
+  cardSize: 'cr80',               // which reference rectangle (see CARD_SIZES)
 };
 
 let viewer = null;
@@ -460,7 +461,16 @@ canvas.addEventListener('wheel', (e) => {
 // A CR80 card is 85.60 × 53.98 mm. Drag its four corners onto the card in the
 // photo; the known edge lengths set px/mm. All in-page (no prompt(), which is
 // blocked in the sandboxed artifact iframe).
-const CARD_LONG = 85.60, CARD_SHORT = 53.98;
+// Standard ID-card-family reference rectangles (mm). The known real dimensions
+// are what let the 4 corners correct scale AND perspective skew (homography).
+const CARD_SIZES = {
+  cr80:  { long: 85.60, short: 53.98 },   // credit / ID card (ISO ID-1)
+  cr79:  { long: 83.90, short: 51.00 },   // insert card
+  cr100: { long: 98.50, short: 67.00 },   // oversized badge
+  half:  { long: 53.98, short: 42.80 },   // ½ CR80 key tag
+  third: { long: 53.98, short: 28.53 },   // ⅓ CR80 key tag
+};
+const cardDims = () => CARD_SIZES[state.cardSize || 'cr80'];
 $('scaleBtn').onclick = () => {
   if (!state.img) { status('Load a photo first.'); return; }
   const auto = detectCardQuad();
@@ -468,8 +478,8 @@ $('scaleBtn').onclick = () => {
     state.cardQuad = auto;
     status('Card detected — line up the box edges with the card’s straight sides (drag an edge or corner).');
   } else {
-    const { w, h } = state.sample;
-    const cw = w * 0.6, ch = cw * (CARD_SHORT / CARD_LONG);
+    const { w, h } = state.sample, cd = cardDims();
+    const cw = w * 0.6, ch = cw * (cd.short / cd.long);
     const x0 = (w - cw) / 2, y0 = (h - ch) / 2;
     state.cardQuad = [{ x: x0, y: y0 }, { x: x0 + cw, y: y0 }, { x: x0 + cw, y: y0 + ch }, { x: x0, y: y0 + ch }];
     status('Drag the 4 corners onto the card’s corners. Scale updates as you drag.');
@@ -609,7 +619,8 @@ function applyCardScale() {
   const vAvg = (d(q[0], q[3]) + d(q[1], q[2])) / 2;   // left & right edges
   // Map the 4 card corners to a true rectangle in mm — this homography removes
   // perspective skew; everything measured through it is in real millimetres.
-  const [W, Hh] = hAvg >= vAvg ? [CARD_LONG, CARD_SHORT] : [CARD_SHORT, CARD_LONG];
+  const cd = cardDims();
+  const [W, Hh] = hAvg >= vAvg ? [cd.long, cd.short] : [cd.short, cd.long];
   const H = computeHomography(q, [[0, 0], [W, 0], [W, Hh], [0, Hh]]);
   const pxPerMm = (hAvg / W + vAvg / Hh) / 2;         // just for the readout
   if (H && pxPerMm > 0) {
@@ -675,6 +686,11 @@ function meshStats(pos) {
 
 initBlanks();
 { const el = $('appVersion'); if (el) el.textContent = VERSION; }
+// Reference-rectangle size picker
+{
+  const sel = $('cardSizeSel');
+  if (sel) sel.onchange = () => { state.cardSize = sel.value; if (state.cardQuad) applyCardScale(); };
+}
 // Diagram modal
 {
   const modal = $('diagramModal'), openB = $('diagramBtn'), closeB = $('diagramClose');

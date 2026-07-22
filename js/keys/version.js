@@ -2,6 +2,8 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v3.1  reference-size picker (CR80/CR79/CR100 + 1/2 & 1/3 CR80 key tags) drives
+//         the scale+skew homography; clarify flat-on-bed print + card-corrects-skew.
 //   v3.0  drop the shoulder (no longer a decode datum) — two datums now: back edge
 //         + cut dots; nicer realistic key diagram opens in a modal window.
 //   v2.9  card detect fits lines to the edges (not rounded corners); drag card
@@ -36,4 +38,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v3.0';
+export const VERSION = 'v3.1';
