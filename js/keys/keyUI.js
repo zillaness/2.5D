@@ -12,6 +12,7 @@ import { checkMACS } from './bitting.js';
 import { buildKeyMesh } from './keyMesh.js';
 import { Viewer3D } from '../viewer3d.js';
 import { toBinarySTL, downloadBlob } from '../exporters.js';
+import { VERSION } from './version.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('photo');
@@ -348,6 +349,7 @@ function meshStats(pos) {
 }
 
 initBlanks();
+{ const el = $('appVersion'); if (el) el.textContent = VERSION; }
 window.addEventListener('resize', () => { if (state.img) { fitCanvas(); draw(); } });
 
 // Expose for headless testing.

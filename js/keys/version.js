@@ -1,0 +1,8 @@
+// Funny Looking Rock — internal revision number.
+// Single source of truth: bump this on each meaningful change; the header stamps
+// it on load so you can tell which build you're looking at.
+//
+//   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
+//         thickness so the key prints flat; version badge in the header.
+//   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
+export const VERSION = 'v1.6';
