@@ -127,6 +127,30 @@ repo README. Links:
 
 (Exact URLs TBD — waiting on the channel / Ko-fi / referral URLs.)
 
+## TODO — key shape / mesh quality (not urgent)
+
+Improve the look and shape of the generated key vs. keygen — keygen's blade and
+bow silhouettes read as more "real." Candidates: cleaner bow outlines
+(polygonise arcs, per-manufacturer bows for BEST/SFIC instead of the generic
+one), a proper tip taper/bevel that matches factory keys, and a smoother
+blade-to-bow neck. Reference keygen's OpenSCAD geometry. User flagged this as
+desirable but low-priority.
+
+## Read-direction safety
+
+Bitting is directional. **This app numbers bow→tip** (position 1 nearest the
+bow), Schlage-Classic style; **keygen and BEST/SFIC specs number tip→bow.** A
+backwards green back-edge line reverses the whole reading and yields a wrong key
+that still looks plausible, so:
+
+- `reprofile()` auto-orients `state.back` using image evidence — it samples just
+  past each blade end and puts `back[0]` (position 1) at the **bow** end (the big
+  paddle leaves key material past the blade; the tip drops into background).
+- The green line draws a **"tip →" arrow**; a **Flip bow↔tip** button is the
+  manual override.
+- The bitting field **warns** to reverse the code before copying into keygen or
+  reading a BEST spec sheet.
+
 ## Next
 
 - Clean up the KW1 flat outline (polygonise bow arcs properly), separate

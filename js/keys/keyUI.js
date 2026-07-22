@@ -233,6 +233,22 @@ function reprofile() {
   const avg = (arr) => ({ x: arr.reduce((s, p) => s + p.x, 0) / arr.length, y: arr.reduce((s, p) => s + p.y, 0) / arr.length });
   const kk = Math.max(3, Math.floor(bpts.length * 0.15));
   state.back = [avg(bpts.slice(0, kk)), avg(bpts.slice(-kk))];
+  // Orient the back line so back[0] is the BOW end (position 1). A backwards
+  // green line silently reverses the whole bitting → a wrong key that still
+  // looks plausible, so anchor the default on real evidence: the bow (the big
+  // paddle) leaves lots of key material just PAST the blade end, while the tip
+  // end drops straight into background. Sample both ends; if the bow is clearly
+  // at back[1], flip. (The Flip button stays as the manual override.)
+  const bowScore = (dir) => {                        // dir +1 past back[1], -1 past back[0]
+    const baseUp = dir > 0 ? L : 0; let hits = 0, tot = 0;
+    for (let s = 5; s <= 45; s += 2) {
+      const p = at(baseUp + dir * s);
+      for (let k = -tight * 1.6; k <= tight * 1.6; k += 2) { tot++; if (bright(p.px + k * n.x, p.py + k * n.y)) hits++; }
+    }
+    return tot ? hits / tot : 0;
+  };
+  const bowAt0 = bowScore(-1), bowAt1 = bowScore(1);
+  if (bowAt1 > bowAt0 + 0.15) state.back.reverse();  // bow is really at the tip end → flip
   const edgeAtPx = (upPx) => {                       // milled-edge offset near up
     let best = null, bd = Infinity;
     for (const r of raw) { const dd = Math.abs(r.up - upPx); if (dd < bd) { bd = dd; best = r; } }
