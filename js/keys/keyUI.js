@@ -526,13 +526,23 @@ function drawActiveLoupe() {
   else if (d.kind === 'cut' && state.cutPts) wp = state.cutPts[d.idx];
   else if (d.kind === 'back' && state.back) wp = state.back[d.idx];
   if (!wp) return;
-  const R = 72, ZOOM = 4, sp = toCanvas(wp);
-  let lx = sp.x + 112, ly = sp.y - 112;
-  if (lx + R > canvas.width) lx = sp.x - 112;
-  if (lx - R < 0) lx = sp.x + 112;
-  if (ly - R < 0) ly = sp.y + 112;
-  if (ly + R > canvas.height) ly = sp.y - 112;
-  const srcR = R / (state.view.s * ZOOM);              // image-px radius shown
+  const R = 80, sp = toCanvas(wp);
+  let lx = sp.x + 120, ly = sp.y - 120;
+  if (lx + R > canvas.width) lx = sp.x - 120;
+  if (lx - R < 0) lx = sp.x + 120;
+  if (ly - R < 0) ly = sp.y + 120;
+  if (ly + R > canvas.height) ly = sp.y - 120;
+  // Show enough context to line up EDGES, not a pinhole: for a card handle, size
+  // the view to a chunk of the card (≈70% of its short edge → the corner plus a
+  // good stretch of both straight sides); for a trace handle, a fixed image span.
+  let srcR;
+  if ((d.kind === 'card' || d.kind === 'cardEdge') && state.cardQuad) {
+    const q = state.cardQuad, e = (i, j) => Math.hypot(q[i].x - q[j].x, q[i].y - q[j].y);
+    const shortEdge = Math.min(e(0, 1), e(1, 2), e(2, 3), e(3, 0));
+    srcR = Math.max(45, shortEdge * 0.35);
+  } else {
+    srcR = Math.max(45, Math.min(state.img.naturalWidth, state.img.naturalHeight) * 0.05);
+  }
   ctx.save();
   ctx.beginPath(); ctx.arc(lx, ly, R, 0, Math.PI * 2); ctx.clip();
   ctx.fillStyle = '#000'; ctx.fillRect(lx - R, ly - R, R * 2, R * 2);
