@@ -511,6 +511,37 @@ function draw() {
       label({ x: cp.x + hw - 2, y: cp.y - 4 }, String(cut.code));
     }
   }
+  drawActiveLoupe();
+}
+
+// Magnifier loupe (borrowed from the 2.5D corner editor): while dragging a card
+// corner/edge or a trace handle, show a zoomed circle with a crosshair target so
+// you can place it precisely — and, at 4×, still see the card's straight edges
+// past a rounded corner to line the EDGES up. worldPt is in image px.
+function drawActiveLoupe() {
+  const d = state.drag; if (!d || !state.img) return;
+  let wp = null;
+  if (d.kind === 'card') wp = state.cardQuad[d.idx];
+  else if (d.kind === 'cardEdge') { const a = state.cardQuad[d.idx], b = state.cardQuad[(d.idx + 1) % 4]; wp = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+  else if (d.kind === 'cut' && state.cutPts) wp = state.cutPts[d.idx];
+  else if (d.kind === 'back' && state.back) wp = state.back[d.idx];
+  if (!wp) return;
+  const R = 72, ZOOM = 4, sp = toCanvas(wp);
+  let lx = sp.x + 112, ly = sp.y - 112;
+  if (lx + R > canvas.width) lx = sp.x - 112;
+  if (lx - R < 0) lx = sp.x + 112;
+  if (ly - R < 0) ly = sp.y + 112;
+  if (ly + R > canvas.height) ly = sp.y - 112;
+  const srcR = R / (state.view.s * ZOOM);              // image-px radius shown
+  ctx.save();
+  ctx.beginPath(); ctx.arc(lx, ly, R, 0, Math.PI * 2); ctx.clip();
+  ctx.fillStyle = '#000'; ctx.fillRect(lx - R, ly - R, R * 2, R * 2);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(state.img, wp.x - srcR, wp.y - srcR, srcR * 2, srcR * 2, lx - R, ly - R, R * 2, R * 2);
+  ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(lx - R, ly); ctx.lineTo(lx + R, ly); ctx.moveTo(lx, ly - R); ctx.lineTo(lx, ly + R); ctx.stroke();
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(lx, ly, R, 0, Math.PI * 2); ctx.strokeStyle = '#53a9ff'; ctx.lineWidth = 2; ctx.stroke();
 }
 function line(a, b, col, w) { ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
 function dot(p, col, r) { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 7); ctx.fill(); }
