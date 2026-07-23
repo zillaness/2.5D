@@ -1961,6 +1961,23 @@ for (const btn of document.querySelectorAll('#unitToggle button')) {
   });
 }
 
+// ---------- light / dark theme toggle ----------
+const THEME_KEY = '2p5d.theme';
+function applyTheme(t) {
+  const light = t === 'light';
+  document.documentElement.classList.toggle('light', light);
+  $('themeToggle').textContent = light ? '☀' : '🌙';
+  $('themeToggle').title = light ? 'Switch to dark theme' : 'Switch to light theme (brighter workspace for tracing)';
+}
+let savedTheme = 'dark';
+try { savedTheme = localStorage.getItem(THEME_KEY) || 'dark'; } catch { /* storage blocked */ }
+applyTheme(savedTheme);
+$('themeToggle').addEventListener('click', () => {
+  const t = document.documentElement.classList.contains('light') ? 'dark' : 'light';
+  try { localStorage.setItem(THEME_KEY, t); } catch { /* storage blocked */ }
+  applyTheme(t);
+});
+
 updateStepButtons();
 
 $('appVersion').textContent = `v${APP_VERSION}`;

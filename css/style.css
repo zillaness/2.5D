@@ -15,6 +15,21 @@
   --warn: #ff7d5c;
 }
 
+/* Light theme — a brighter workspace that can read better against a photo.
+   Set on <html> by the header toggle; overrides the variables above. */
+html.light {
+  --bg: #eef1f5;
+  --bg2: #ffffff;
+  --bg3: #e4e9f0;
+  --border: #c6cfda;
+  --text: #1b2430;
+  --muted: #5c6875;
+  --accent: #2563eb;
+  --accent2: #b7791f;
+  --good: #1f9d57;
+  --warn: #d1451b;
+}
+
 html, body {
   height: 100%;
   background: var(--bg);
@@ -224,7 +239,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   text-align: center;
   color: var(--muted);
 }
-.drop-icon { font-size: 34px; margin-bottom: 12px; }
+.drop-icon { font-size: 34px; margin-bottom: 12px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.drop-logo { height: 52px; width: auto; border-radius: 8px; vertical-align: middle; }
 
 .modal-overlay {
   position: fixed;
