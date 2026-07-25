@@ -60,28 +60,39 @@ this repo) gives the **depth & space** for each series — but *not* the blind-c
 
 ## The five keys to support
 
-Owner-confirmed identities (2026-07). **All appear single-sided** — see the
-simplification note below.
+Owner-confirmed identities (2026-07). Four single-sided; **F36 is
+double-sided** — see the sidedness note below.
 
-| Key | Goes to | Blank / system | Series for decode | Still needed |
-|---|---|---|---|---|
-| **T05** | Husky tool chest (Home Depot) | cut on **N54G** blank; T01–T50 series | single-sided wafer — toolbox family (`compx_y000` / `national_ss` nearest) | cut count + one reading |
-| **318** | vertical cabinet | **Cyber Lock CC-CL** mechanical blank, office furniture; blind series CC0001–CC1000 / CL0001–CL1000 | single-sided wafer — office family (`national_ss` nearest) | cut count + one reading |
-| **476** | vertical cabinet | same as 318 (Cyber Lock CC-CL) | as 318 | cut count + one reading |
-| **F36** | Yukon tool bench (Harbor Freight) | HF import wafer; "F" series | single-sided wafer — nearest office/toolbox family | photo of key + cut count |
-| **ES202** | overhead cabinet | unidentified (ES prefix) | TBD | identify maker/blank; photo |
+| Key | Goes to | Blank / system | Sided | Series for decode | Still needed |
+|---|---|---|---|---|---|
+| **T05** | Husky tool chest (Home Depot) | cut on **N54G** blank; T01–T50 series | single | single-sided wafer — toolbox family (`compx_y000` / `national_ss` nearest) | cut count + one reading |
+| **318** | vertical cabinet | **Cyber Lock CC-CL** mechanical blank, office furniture; blind series CC0001–CC1000 / CL0001–CL1000 | single | single-sided wafer — office family (`national_ss` nearest) | cut count + one reading |
+| **476** | vertical cabinet | same as 318 (Cyber Lock CC-CL) | single | as 318 | cut count + one reading |
+| **F36** | Yukon tool bench (Harbor Freight) | HF import wafer; "F" series | **double** | double-sided wafer — nearest office/toolbox family | photo of key + cut count + are the two edges identical? |
+| **ES202** | overhead cabinet | unidentified (ES prefix) | ? | TBD | identify maker/blank; photo |
 
 Note: "Cyber Lock CC-CL" here is an ordinary **mechanical** cut key, not Videx's
 electronic *CyberLock* system (same-sounding name, unrelated) — so it decodes
 like any other wafer key.
 
-### The single-sided simplification
+### Sidedness — four single, one double
 
-Every confirmed key is single-sided, so the **double-bitted mesh work is NOT
-needed** for these — the app's existing single-edge decode + loft path applies
-as-is. Double-bitting drops to a later, general enhancement rather than a
-blocker. Item A for these keys is just: a cabinet-wafer blank + flat section +
-simple bow, then decode each key from a photo.
+The four single-sided keys (T05, 318, 476, ES202-if-single) use the app's
+existing single-edge decode + loft path as-is: Item A for them is just a
+cabinet-wafer blank + flat section + simple bow.
+
+**F36 is double-sided, so it does need double-bitting** — the mesh must mill
+BOTH edges (`js/keys/keyMesh.js` currently mills only the top). Two sub-cases,
+and the F36 photo decides which:
+
+- **Reversible / symmetric** (the common toolbox case): both edges carry the
+  *same* cuts mirrored, so the key works either way up. This is the easy case —
+  decode one edge, mirror the milling function to the other. Small mesh change.
+- **Independent double bitting**: the two edges differ, needing both edges
+  traced and milled separately. Larger change (decode + mesh + UI).
+
+So double-bitting is back on Item A's list, but scoped to F36 and most likely
+the easy symmetric case. It does not block the other four.
 
 ### What's needed to make each printable
 
