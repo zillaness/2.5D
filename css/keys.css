@@ -27,6 +27,12 @@ header { display: flex; align-items: center; gap: 10px; }
 .keys-layout.panel-hidden { grid-template-columns: 1fr 1fr; }
 .keys-layout.panel-hidden.no3d { grid-template-columns: 1fr; }
 .keys-layout.panel-hidden .panel { display: none; }
+/* ── Wizard step nav (reuses .step-btn from style.css). ── */
+#keySteps { display: flex; gap: 5px; margin-bottom: 7px; }
+#keySteps .step-btn { flex: 1; padding: 5px 4px; font-size: 11px; gap: 4px; }
+#keySteps .step-btn .n { width: 16px; height: 16px; font-size: 10px; line-height: 16px; }
+.step-nav { display: flex; gap: 6px; margin-top: 7px; }
+.step-nav .btn { flex: 1; }
 .panel-bottom { display: flex; justify-content: flex-end; margin-top: 5px; }
 .panel-show { position: fixed; left: 10px; top: 70px; z-index: 40; }
 

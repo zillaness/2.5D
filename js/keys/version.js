@@ -5,6 +5,12 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
+//   v5.0  3-step wizard (1 Photo & card · 2 Trace · 3 3D key), borrowed from the
+//         2.5D flow: steps are freely re-selectable and the card is skippable.
+//         Advancing from step 1 with a card set now WARPS THE PHOTO FLAT through
+//         the card homography (bilinear, keeps the photo's own px/mm) — you can
+//         see the skew correction happen, and tracing runs on the straightened,
+//         true-millimetre image. Labelling moved onto the finished key (step 3).
 //   v4.9  magnifier loupe (borrowed from the 2.5D corner editor) while dragging a
 //         card corner/edge or a trace handle — a 4x zoom circle with a crosshair
 //         target for precise placement (and lining up rounded-corner card edges).
@@ -84,4 +90,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v4.9';
+export const VERSION = 'v5.0';

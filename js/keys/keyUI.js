@@ -41,6 +41,9 @@ const state = {
   back: null, cutPts: null,       // green back-edge line [A,B] + red cut dots (image px)
   cardH: null,                    // image→mm homography from the card (skew correction)
   cardSize: 'cr80',               // which reference rectangle (see CARD_SIZES)
+  step: 1,                        // wizard step (1 photo/card · 2 trace · 3 key)
+  cardMM: null,                   // {W,Hh} mm the card was matched to (for rectify)
+  rawImg: null, rawSample: null,  // pre-rectify photo, restored by ← Photo
 };
 
 let viewer = null;
@@ -776,6 +779,7 @@ function applyCardScale() {
   const cd = cardDims();
   const [W, Hh] = hAvg >= vAvg ? [cd.long, cd.short] : [cd.short, cd.long];
   const H = computeHomography(q, [[0, 0], [W, 0], [W, Hh], [0, Hh]]);
+  state.cardMM = { W, Hh };
   const pxPerMm = (hAvg / W + vAvg / Hh) / 2;         // just for the readout
   if (H && pxPerMm > 0) {
     state.cardH = H;
@@ -909,7 +913,6 @@ async function generate() {
   // Reveal the 3D panel now (hidden until the first key is generated so the photo
   // gets the full width for tracing).
   const stage = $('stage3d'); if (stage) stage.hidden = false;
-  const layout = document.querySelector('.keys-layout'); if (layout) layout.classList.remove('no3d');
   if (!viewer) viewer = new Viewer3D($('view3d'));
   viewer.setMesh(state.mesh, true);
   $('exportBtn').disabled = false;
@@ -931,6 +934,109 @@ initBlanks();
   apply(saved === 'light' ? 'light' : 'dark');
   if (tb) tb.onclick = () => { const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; apply(t); try { localStorage.setItem(KEY, t); } catch { /* ignore */ } };
 }
+// ── 3-step wizard (Photo/card → Trace → 3D key), mirroring the 2.5D flow ──────
+// Steps are freely re-selectable, and step 1 is skippable (no card → the scale
+// self-calibrates from the cut spacing).
+async function setStep(n) {
+  // Step 2 is always reachable — it holds the "type a known code" input, so you
+  // can make a key with no photo at all. Only the 3D step needs a decoded code.
+  if (n === 3 && !state.decoded) { status('Trace the cuts — or type a known code — first.'); return; }
+  // Leaving step 1 with a card set → straighten the photo so you trace on a
+  // skew-corrected image (the visible proof the correction happened).
+  if (n === 2 && state.step === 1 && state.cardQuad && state.cardH) await rectifyToCard();
+  // Going back to step 1 → restore the original photo so the card can be re-aimed.
+  if (n === 1 && state.step !== 1 && state.rawImg) restoreRawPhoto();
+  state.step = n;
+  for (let i = 1; i <= 3; i++) {
+    const p = $('kpanel' + i); if (p) p.hidden = i !== n;
+    const b = $('kstep' + i); if (b) b.classList.toggle('active', i === n);
+  }
+  const photoStage = document.querySelector('.stage'), stage3 = $('stage3d');
+  const layout = document.querySelector('.keys-layout');
+  if (photoStage) photoStage.hidden = n === 3;
+  if (stage3) stage3.hidden = n !== 3;
+  if (layout) layout.classList.add('no3d');   // wizard shows ONE stage at a time
+  if (n === 3) { await generate(); }
+  else if (state.img) { fitCanvas(); draw(); }
+  window.dispatchEvent(new Event('resize'));
+}
+
+// Warp the photo flat through the card homography. Afterwards the working image
+// IS millimetre space (S px per mm), so the decode runs its plain identity path
+// (pxPerMm = S, cardH cleared) and every handle lands on a straightened key.
+// Output resolution: keep the photo's own detail (the card's px/mm in the
+// original), clamped so a depth step stays several pixels wide but the canvas
+// doesn't explode. A Schlage depth step is 0.381 mm, so ≥8 px/mm keeps it ≥3 px.
+const RECT_S_MIN = 8, RECT_S_MAX = 18;
+async function rectifyToCard() {
+  try {
+    const q = state.cardQuad, H = state.cardH, mm = state.cardMM;
+    if (!q || !H || !mm || !state.sample) return false;
+    const src = state.sample, iw = src.w, ih = src.h;
+    // mm bounding box of the photo, clamped to a sensible margin around the card
+    const cs = [{ x: 0, y: 0 }, { x: iw, y: 0 }, { x: iw, y: ih }, { x: 0, y: ih }].map(p => applyH(H, p));
+    const pad = Math.max(mm.W, mm.Hh) * 0.8;
+    const mnx = Math.max(Math.min(...cs.map(p => p.x)), -pad), mxx = Math.min(Math.max(...cs.map(p => p.x)), mm.W + pad);
+    const mny = Math.max(Math.min(...cs.map(p => p.y)), -pad), mxy = Math.min(Math.max(...cs.map(p => p.y)), mm.Hh + pad);
+    const wmm = mxx - mnx, hmm = mxy - mny;
+    if (!(wmm > 5 && hmm > 5)) return false;
+    const S = Math.max(RECT_S_MIN, Math.min(RECT_S_MAX, state.manualScale || RECT_S_MIN));
+    const ow = Math.min(2600, Math.round(wmm * S)), oh = Math.min(2600, Math.round(hmm * S));
+    // inverse homography: mm → image px
+    const mmPts = [{ x: 0, y: 0 }, { x: mm.W, y: 0 }, { x: mm.W, y: mm.Hh }, { x: 0, y: mm.Hh }];
+    const Hinv = computeHomography(mmPts, q.map(p => [p.x, p.y]));
+    if (!Hinv) return false;
+    const out = document.createElement('canvas'); out.width = ow; out.height = oh;
+    const octx = out.getContext('2d', { willReadFrequently: true });
+    const od = octx.createImageData(ow, oh), D = od.data, SD = src.data;
+    for (let oy = 0; oy < oh; oy++) {
+      const my = mny + (oy / oh) * hmm;
+      for (let ox = 0; ox < ow; ox++) {
+        const p = applyH(Hinv, { x: mnx + (ox / ow) * wmm, y: my });
+        const o = (oy * ow + ox) * 4;
+        // Bilinear sample — a depth step is only a few px wide, so nearest-
+        // neighbour noise could shift a cut by a whole depth number.
+        const fx = Math.floor(p.x), fy = Math.floor(p.y);
+        if (fx < 0 || fy < 0 || fx >= iw - 1 || fy >= ih - 1) { D[o + 3] = 255; continue; }
+        const tx = p.x - fx, ty = p.y - fy;
+        const i00 = (fy * iw + fx) * 4, i10 = i00 + 4, i01 = i00 + iw * 4, i11 = i01 + 4;
+        const w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty), w01 = (1 - tx) * ty, w11 = tx * ty;
+        for (let k = 0; k < 3; k++) D[o + k] = SD[i00 + k] * w00 + SD[i10 + k] * w10 + SD[i01 + k] * w01 + SD[i11 + k] * w11;
+        D[o + 3] = 255;
+      }
+    }
+    octx.putImageData(od, 0, 0);
+    // keep the original so ← Photo can restore it
+    state.rawImg = state.img; state.rawSample = state.sample;
+    state.rawCardQuad = state.cardQuad; state.rawCardH = state.cardH; state.rawScale = state.manualScale;
+    const img = new Image();
+    await new Promise(res => { img.onload = res; img.onerror = res; img.src = out.toDataURL('image/png'); });
+    state.img = img; state.sample = { data: od.data, w: ow, h: oh };
+    // the image is now mm-space: scale is exact, no homography needed
+    state.cardH = null; state.cardQuad = null;
+    state.manualScale = ow / wmm; state.pxPerMm = state.manualScale;
+    // mm frame of the straightened image: px = (mm - rectOrigin) * pxPerMm
+    state.rectOrigin = { x: mnx, y: mny };
+    const el = $('scaleReadout'); if (el) el.textContent = `straightened · ${state.manualScale.toFixed(2)} px/mm`;
+    state.back = null; state.cutPts = null;
+    fitCanvas(); autoPlace(); redecode(true);
+    status('Photo straightened using the card — trace the cuts.');
+    return true;
+  } catch (e) { status('Could not straighten the photo — tracing the original.'); return false; }
+}
+function restoreRawPhoto() {
+  state.img = state.rawImg; state.sample = state.rawSample;
+  state.cardQuad = state.rawCardQuad; state.cardH = state.rawCardH; state.manualScale = state.rawScale;
+  state.rawImg = null; state.rawSample = null;
+  state.back = null; state.cutPts = null;
+  fitCanvas(); autoPlace(); redecode(true);
+}
+for (let i = 1; i <= 3; i++) { const b = $('kstep' + i); if (b) b.onclick = () => setStep(i); }
+{ const b = $('toTraceBtn'); if (b) b.onclick = () => setStep(2); }
+{ const b = $('toKeyBtn'); if (b) b.onclick = () => setStep(3); }
+{ const b = $('backTo1Btn'); if (b) b.onclick = () => setStep(1); }
+{ const b = $('backTo2Btn'); if (b) b.onclick = () => setStep(2); }
+
 // Minimize the controls panel — hand the photo the full window width while tracing.
 // The Hide button lives ON the panel; a floating tab brings it back.
 {
@@ -969,5 +1075,5 @@ window.keyUI = {
   setScale: (v) => { state.manualScale = v; },
   setHandles: (sh, tp) => { state.shoulder = sh; state.tip = tp; },
   setCard: (quad) => { state.cardQuad = quad; applyCardScale(); },
-  reprofile, detectBow,
+  reprofile, detectBow, setStep, draw,
 };

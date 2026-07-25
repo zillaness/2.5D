@@ -29,6 +29,13 @@
 <main class="keys-layout no3d">
   <button class="btn small panel-show" id="panelShow" type="button" hidden title="Show the controls">⇥ Controls</button>
   <section class="panel" id="controls">
+    <nav id="keySteps">
+      <button class="step-btn active" id="kstep1" type="button" data-step="1"><span class="n">1</span> Photo</button>
+      <button class="step-btn" id="kstep2" type="button" data-step="2"><span class="n">2</span> Trace</button>
+      <button class="step-btn" id="kstep3" type="button" data-step="3"><span class="n">3</span> 3D key</button>
+    </nav>
+
+    <div id="kpanel1">
     <div class="field">
       <label>Key blank</label>
       <select id="blankSel"></select>
@@ -39,7 +46,7 @@
     </div>
 
     <div class="field">
-      <label>1 · Photo</label>
+      <label>Photo</label>
       <input type="file" id="fileInput" accept="image/*">
       <div class="btn-row" id="photoTools" hidden>
         <button class="btn small" id="rotateBtn" title="Rotate 90° clockwise">⟳ Rotate</button>
@@ -53,7 +60,7 @@
     </div>
 
     <div class="field">
-      <label>2 · Scale <span class="hint">(optional)</span></label>
+      <label>Reference card <span class="hint">(optional — corrects scale + skew)</span></label>
       <span id="scaleReadout" class="mono"></span>
       <details class="tip"><summary>Why a card</summary>
       <p class="hint">Place a <b>standard ID-card-sized</b> rectangle behind the key.
@@ -80,8 +87,15 @@
       corners sit where those edges would meet.</p></details>
     </div>
 
+      <div class="btn-row step-nav">
+        <button class="btn primary" id="toTraceBtn" type="button" title="Straighten the photo (if a card is set) and go to tracing">Trace the cuts →</button>
+      </div>
+      <p class="hint">The card is <b>optional</b> — skip straight to Trace and the scale comes from the cut spacing.</p>
+    </div>
+
+    <div id="kpanel2" hidden>
     <div class="field">
-      <label>3 · Trace the cuts</label>
+      <label>Trace the cuts</label>
       <div class="btn-row">
         <button class="btn small" id="autoBtn">Auto-place</button>
         <button class="btn small" id="diagramBtn">📖 Diagram</button>
@@ -112,6 +126,13 @@
       <p class="hint">Know the code? Type it to skip the photo.</p>
     </div>
 
+      <div class="btn-row step-nav">
+        <button class="btn" id="backTo1Btn" type="button">← Photo</button>
+        <button class="btn primary" id="toKeyBtn" type="button">3D key →</button>
+      </div>
+    </div>
+
+    <div id="kpanel3" hidden>
     <div class="field deboss">
       <label>Bow label <span class="hint">(optional)</span></label>
       <div class="deboss-row">
@@ -152,6 +173,11 @@
     <p class="hint">The printed key is a working spare — and a <b>physical backup of the key itself</b>.
     Lose the original and a locksmith or key-cutting kiosk can cut a fresh metal key from your 3D print
     (or just from the <b>bitting code you decoded</b> — write it down). Keep the print or the code safe.</p></details>
+      <div class="btn-row step-nav">
+        <button class="btn" id="backTo2Btn" type="button">← Trace</button>
+      </div>
+    </div>
+
     <div id="status" class="status"></div>
     <div class="panel-bottom">
       <button class="btn small" id="panelBtn" type="button" title="Hide the controls to give the photo the full width">⇤ Hide panel</button>
