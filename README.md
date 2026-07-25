@@ -273,6 +273,13 @@ npm test             # needs a Chromium; set CHROMIUM_PATH if not auto-found
 npm run build        # regenerate dist/2.5d-local.html
 ```
 
+`npm install` is not optional: `node_modules/` is gitignored, so in a fresh
+clone the browser-driven tests fail with `Cannot find module 'playwright-core'`
+before they run a single assertion. See
+[`docs/dev-environment.md`](docs/dev-environment.md) for the full check roster
+(the key-from-photo work has its own tests beyond `npm test`), Chromium
+discovery, and build/deploy steps.
+
 ## Roadmap
 
 ### Shipped
