@@ -266,10 +266,12 @@ stay open.
   trimmed to the part, unioned by your slicer exactly like overlapping sections.
 - **Deboss** — engraved as a two-layer split of the face: the outer `depth`
   slice is built as *outline − glyphs* over a full layer beneath, so the recess
-  is real geometry with no 3D boolean kernel involved and every shell stays
-  watertight by construction. (Recessed screw features on a debossed section are
-  cut as plain bores — the layer split would otherwise distort them; you'll get
-  a warning.)
+  is real geometry with no 3D boolean kernel involved, every shell stays
+  watertight by construction, and the recess depth is exact. Countersinks,
+  counterbores and blind holes on a debossed section **keep their shape** as
+  long as they enter through the other, un-engraved face (and fit); only a
+  recessed feature entering through the debossed face itself is cut as a plain
+  bore, with a warning.
 
 Labels live in the trace overlay (green = emboss, orange = deboss) and are saved
 with the project.

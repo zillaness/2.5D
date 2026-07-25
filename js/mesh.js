@@ -869,35 +869,72 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
     const cutRings = wantBottom => deb
       .filter(L => L.bottom === wantBottom)
       .flatMap(L => L.islands.flatMap(islandRings));
-    // Splitting a section would distort recessed screw features (their geometry
-    // is relative to the layer thickness), so demote them to plain bores there.
-    let holesFor = perRegion[i];
-    if (dTop || dBot) {
-      if (holesFor.some(hh => !hh.asBore && hh.type && hh.type !== 'through')) {
-        warnings.push(`Section "${r.name || i + 1}": countersink/counterbore/blind holes are cut as plain bores where a label is debossed.`);
-      }
-      holesFor = holesFor.map(hh => ({ ...hh, asBore: true }));
-    }
     const none = { mode: 'none', size: 0 };
-    // Let the core layer interpenetrate the engraved slices by a hair instead
-    // of meeting them face-to-face: coincident faces are ambiguous to union,
-    // and the same trick already makes overlapping sections robust. The recess
-    // ends up EPS shallower — far below any print resolution.
-    const EPS = dTop || dBot ? 0.01 : 0;
+    const split = dTop > 0 || dBot > 0;
+    // The engraved slices overrun INTO the core by EPS so no faces are exactly
+    // coincident (ambiguous to union — the same trick that makes overlapping
+    // sections robust). The overlap lives inside the slice, so the recess
+    // floor — which is the core's own face — sits at exactly `depth`.
+    const EPS = split ? 0.01 : 0;
     const layers = [];
-    if (dBot > 0) layers.push({ z: zBase, t: dBot, cuts: cutRings(true), top: none, bottom });
+    if (dBot > 0) layers.push({ z: zBase, t: dBot + EPS, cuts: cutRings(true), top: none, bottom, face: 'bottom' });
     layers.push({
-      z: zBase + Math.max(0, dBot - EPS),
-      t: thickness - Math.max(0, dBot - EPS) - Math.max(0, dTop - EPS),
-      cuts: [], top: dTop > 0 ? none : top, bottom: dBot > 0 ? none : bottom,
+      z: zBase + dBot, t: thickness - dBot - dTop, cuts: [],
+      top: dTop > 0 ? none : top, bottom: dBot > 0 ? none : bottom, face: 'core',
     });
-    if (dTop > 0) layers.push({ z: zBase + thickness - dTop, t: dTop, cuts: cutRings(false), top, bottom: none });
+    if (dTop > 0) layers.push({ z: zBase + thickness - dTop - EPS, t: dTop + EPS, cuts: cutRings(false), top, bottom: none, face: 'top' });
+
+    // Screw holes per layer. A recessed feature (countersink/counterbore/
+    // blind) survives the deboss split when it enters through an UN-engraved
+    // face and fits inside the core layer that owns that face; only a feature
+    // entering through the debossed face itself (or too deep to fit) falls
+    // back to a plain bore. Blind holes are omitted from layers they never
+    // reach instead of being punched through them.
+    const featureDepthOf = c => {
+      if (c.type === 'blind') return c.depth || 0;
+      if (c.type === 'cb') return c.cbDepth || 0;
+      if (c.type === 'cs') {
+        const tanHalf = Math.tan(((c.csAngle || 90) * Math.PI) / 360);
+        return tanHalf > 1e-6 ? Math.max(0, ((c.csDia || 0) - c.d) / 2) / tanHalf : 0;
+      }
+      return 0;
+    };
+    let demotedAny = false;
+    const layerHoles = (lay, li) => {
+      if (!split) return perRegion[i];
+      const isTopmost = li === layers.length - 1, isBottommost = li === 0;
+      const stripRims = v => {
+        if (!isTopmost) v.edgeTop = { mode: 'none', size: 0 };
+        if (!isBottommost) v.edgeBottom = { mode: 'none', size: 0 };
+        return v;
+      };
+      const out = [];
+      for (const h of perRegion[i]) {
+        const side = h.side === 'bottom' ? 'bottom' : 'top';
+        const featured = !h.asBore && h.type && h.type !== 'through';
+        if (!featured) { out.push(stripRims({ ...h })); continue; }
+        // The core owns whichever faces are not engraved.
+        const entryEngraved = side === 'top' ? dTop > 0 : dBot > 0;
+        const coreT = thickness - dBot - dTop;
+        const demote = entryEngraved || featureDepthOf(h) > coreT - 0.05;
+        if (demote) {
+          demotedAny = true;
+          out.push(stripRims({ ...h, asBore: true }));
+          continue;
+        }
+        if (lay.face === 'core') out.push(stripRims({ ...h }));
+        else if (h.type !== 'blind') out.push(stripRims({ ...h, asBore: true }));
+        // blind: lives entirely in the core — skip the engraved slices.
+      }
+      return out;
+    };
 
     let built = 0;
     for (const fp of footprints[i]) {
-      for (const lay of layers) {
+      for (let li = 0; li < layers.length; li++) {
+        const lay = layers[li];
         if (!(lay.t > 1e-6)) continue;
-        const mesh = buildSolid(fp, [...tracedHoles, ...lay.cuts], holesFor, {
+        const mesh = buildSolid(fp, [...tracedHoles, ...lay.cuts], layerHoles(lay, li), {
           thickness: lay.t, zBase: lay.z, top: lay.top, bottom: lay.bottom,
           arcSegments, chordTol, center,
         });
@@ -909,6 +946,9 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
         warnings.push(...mesh.stats.warnings.map(w =>
           regions.length > 1 ? `Section "${r.name || i + 1}": ${w}` : w));
       }
+    }
+    if (demotedAny) {
+      warnings.push(`Section "${r.name || i + 1}": recessed screw features entering through a debossed face are cut as plain bores.`);
     }
     if (!built) {
       if (footprints[i].length) warnings.push(`Section "${r.name || i + 1}" produced no solid — check its outline.`);

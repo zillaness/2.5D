@@ -1915,6 +1915,15 @@ const label = await page.evaluate(async () => {
     debTris: deb.stats.triangles > plain.stats.triangles,
     debBad: badEdges(deb),
     debHi: zRange(deb).hi,
+    // exact recess floor: with depth 0.8 on a 4 mm part the core's top face
+    // (the visible floor) must sit at exactly 3.2 — the EPS overlap lives
+    // inside the engraved slice, not in the depth.
+    floorExact: (() => {
+      for (let i = 2; i < deb.positions.length; i += 3) {
+        if (Math.abs(deb.positions[i] - 3.2) < 1e-6) return true; // float32 storage
+      }
+      return false;
+    })(),
   };
 });
 
@@ -1928,6 +1937,74 @@ check('embossed model is watertight and adds geometry',
 check('deboss keeps the outer height but adds the recess layers',
   near(label.debHi, 4, 1e-6) && label.debTris, `top ${label.debHi}`);
 check('debossed model is watertight', label.debBad === 0, `${label.debBad} bad edges`);
+check('recess depth is exact (floor at 4 − 0.8 = 3.2 mm)', label.floorExact, '');
+
+// Screw features on a debossed section: preserved from the un-engraved face,
+// demoted only when entering through the debossed face; blind holes are not
+// punched through.
+const debScrew = await page.evaluate(async () => {
+  const { buildModel } = await import('/js/mesh.js');
+  const { labelLoops } = await import('/js/text.js');
+  const outer = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+  const none = { mode: 'none', size: 0 };
+  const regions = [{ name: 'Base', pts: null, thickness: 4, zBase: 0, top: none, bottom: none }];
+  const loops = labelLoops('AB', 30, 20, 12, {});
+  const rim = { mode: 'none', size: 0.5 };
+  const holes = [
+    // cs entering the UN-engraved bottom face -> should keep its countersink
+    { cx: 10, cy: 20, d: 5, type: 'cs', side: 'bottom', csAngle: 90, csDia: 9, edgeTop: rim, edgeBottom: rim },
+    // cs entering the debossed top face -> demoted to a plain bore
+    { cx: 50, cy: 20, d: 5, type: 'cs', side: 'top', csAngle: 90, csDia: 9, edgeTop: rim, edgeBottom: rim },
+    // blind from the bottom -> preserved, and must NOT open the top face
+    { cx: 30, cy: 33, d: 4, type: 'blind', side: 'bottom', depth: 2, edgeTop: rim, edgeBottom: rim },
+  ];
+  const m = buildModel(outer, [], holes, regions, { arcSegments: 8,
+    labels: [{ loops, mode: 'deboss', face: 'top', size: 0.8 }] });
+
+  // Ring finder: any vertex at z within tol whose distance to (mx,my) is ~r.
+  const ring = (mx, my, z, r) => {
+    for (let i = 0; i < m.positions.length; i += 3) {
+      if (Math.abs(m.positions[i + 2] - z) > 1e-6) continue;
+      const d = Math.hypot(m.positions[i] - mx, m.positions[i + 1] - my);
+      if (Math.abs(d - r) < 0.2) return true;
+    }
+    return false;
+  };
+  const badEdges = () => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+  // Model coords: outline centre (30,20); model y = 20 - cy.
+  return {
+    csKeptMouth: ring(-20, 0, 0, 4.5),        // cs-from-bottom mouth at z=0, r=4.5
+    csDemotedMouth: ring(20, 0, 4, 4.5),      // cs-from-top mouth must be ABSENT
+    csDemotedBore: ring(20, 0, 4, 2.5),       // ...but its plain bore is there
+    blindFloor: ring(0, -13, 2, 2) || ring(0, -13, 2, 1.6), // floor ring at z=2
+    blindTopOpen: ring(0, -13, 4, 2),         // top face must be closed
+    warned: (m.stats.warnings || []).some(w => /entering through a debossed face/.test(w)),
+    bad: badEdges(),
+  };
+});
+
+console.log('\nDeboss × screw features');
+check('countersink from the un-engraved face keeps its recess',
+  debScrew.csKeptMouth, 'cs mouth ring at z=0');
+check('countersink through the debossed face is demoted to a bore (with warning)',
+  !debScrew.csDemotedMouth && debScrew.csDemotedBore && debScrew.warned, '');
+check('blind hole from the bottom keeps its floor and does not open the top',
+  debScrew.blindFloor && !debScrew.blindTopOpen, '');
+check('deboss + screw model stays watertight', debScrew.bad === 0, `${debScrew.bad} bad edges`);
 
 console.log('\nText → loops (emboss/deboss foundation)');
 check('blank text yields no loops', textRes.blankN === 0, `${textRes.blankN}`);
