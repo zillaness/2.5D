@@ -53,6 +53,36 @@ Three consequences drive the implementation:
    it both models simply (a one-sided groove) and prints flat with its flat face
    on the bed.
 
+## Warding construction, and keeping cloning easy
+
+Warding is a property of the **blank**, not the individual cut key. A top-down
+photo can only read the bitting + outline — it physically can't see the side
+grooves. So the design keeps the two on separate tracks:
+
+- **Bitting — from the photo, per key.** The easy path stays easy: photograph
+  the key, decode the cuts.
+- **Warding — from a library, authored once per blank.** Each keyway's warded
+  section is stored in the repo (same shelf as `schlage:c`). Cloning any key of
+  that blank = photo (bitting) + pick the blank (warding applied automatically).
+  No grooves to draw per clone.
+
+Authoring a keyway's warding (the one-time, per-blank step — this is **Item B**)
+has three arms:
+
+1. **Create / cut** — reuse the key tool's existing **deboss CSG primitive**
+   (`key.subtract(prism)` / `key.add(prism)` of a 2D profile into the +y/−y face
+   at a set depth — today it engraves labels). Feed it a **longitudinal groove**
+   profile instead of glyphs and it cuts a warding channel: choose the groove
+   section, cut **down from the top** or **up from the bottom** face, specify
+   depth. Plus a **blade-thickness** parameter. This is the 2.5D-style "cut a
+   section to a depth" the owner asked to import — and it's almost entirely
+   already present.
+2. **Import** — SVG / DXF / end-on photo trace → section polygon (2.5D importers).
+3. **Look up** — pick a previously-saved section.
+
+The manual cut is NOT a per-clone chore; it is how a *new* keyway enters the
+library. After that, every clone of that blank is photo-and-pick.
+
 ## Blind codes vs cut codes — the honest gap
 
 A stamped number comes in two kinds:
