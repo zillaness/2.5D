@@ -60,27 +60,40 @@ this repo) gives the **depth & space** for each series — but *not* the blind-c
 
 ## The five keys to support
 
-Best-guess series mapping — **each needs confirmation from the physical key**
-(the stamped code alone is ambiguous, and the same number means different cuts
-across makers):
+Owner-confirmed identities (2026-07). **All appear single-sided** — see the
+simplification note below.
 
-| Key | Goes to | Likely series | Confirm by |
-|---|---|---|---|
-| **T05** | Husky tool chest | toolbox wafer — CompX/National family (`compx_y000` / `national_ss`) | maker stamped on lock; is the key double-sided? |
-| **ES202** | overhead cabinet | ESP-style cabinet cam lock — series TBD (ES prefix) | maker on lock face; photo of key |
-| **318** | vertical cabinet | office-furniture wafer — `national_ss` or `illinois_ss` | **lock brand** (National/CompX? HON? Hudson?) |
-| **476** | vertical cabinet | office-furniture wafer — as 318 | **lock brand** |
-| **F36** | Yukon (Harbor Freight) tool bench | HF import wafer — generic; map to nearest series | photo of key + lock |
+| Key | Goes to | Blank / system | Series for decode | Still needed |
+|---|---|---|---|---|
+| **T05** | Husky tool chest (Home Depot) | cut on **N54G** blank; T01–T50 series | single-sided wafer — toolbox family (`compx_y000` / `national_ss` nearest) | cut count + one reading |
+| **318** | vertical cabinet | **Cyber Lock CC-CL** mechanical blank, office furniture; blind series CC0001–CC1000 / CL0001–CL1000 | single-sided wafer — office family (`national_ss` nearest) | cut count + one reading |
+| **476** | vertical cabinet | same as 318 (Cyber Lock CC-CL) | as 318 | cut count + one reading |
+| **F36** | Yukon tool bench (Harbor Freight) | HF import wafer; "F" series | single-sided wafer — nearest office/toolbox family | photo of key + cut count |
+| **ES202** | overhead cabinet | unidentified (ES prefix) | TBD | identify maker/blank; photo |
+
+Note: "Cyber Lock CC-CL" here is an ordinary **mechanical** cut key, not Videx's
+electronic *CyberLock* system (same-sounding name, unrelated) — so it decodes
+like any other wafer key.
+
+### The single-sided simplification
+
+Every confirmed key is single-sided, so the **double-bitted mesh work is NOT
+needed** for these — the app's existing single-edge decode + loft path applies
+as-is. Double-bitting drops to a later, general enhancement rather than a
+blocker. Item A for these keys is just: a cabinet-wafer blank + flat section +
+simple bow, then decode each key from a photo.
 
 ### What's needed to make each printable
 
-- **Lock brand for 318 and 476** — a numeric code is meaningless without it.
-  The maker is usually stamped on the lock face; a photo resolves it.
-- **One reading per key** — because these are blind codes, decode each key once
-  (run it through the app's photo flow, or read the cuts with calipers, or just
-  state the cuts if known). That reading becomes the committed bitting.
-- **Single- vs double-sided** — note whether each key has cuts on one edge or
-  mirrored on both; that selects the mesh's double-bitted mode.
+- **One real reading per key** — because these are blind codes, decode each key
+  once (run it through the app's photo flow, or read the cuts with calipers, or
+  state the cuts if known). That reading becomes the committed bitting, AND its
+  cut count / spacing tells us which committed spec (or a new one) actually fits
+  — so the blank is built against real geometry, not a guessed position count.
+- **Start with one key** — build and prove the cabinet-blank path end-to-end on
+  a single key (per the project handoff's "try the wizard on a real photo"
+  priority), then replicate for the rest.
+- **ES202** — identify the maker/blank before it can be mapped.
 
 None of the owner's key photos or resulting STLs get committed (same rule as the
 residential flow) — only the abstract bitting under its code.
