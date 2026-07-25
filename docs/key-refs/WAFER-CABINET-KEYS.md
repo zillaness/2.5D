@@ -73,7 +73,9 @@ double-sided** — see the sidedness note below.
 
 Owner-confirmed via photos (2026-07): T05 stamped on the Husky key; "Y11 USA"
 stamped on the ES202 key (so ES202 = Y11). 476 not separately provided — same
-Cyber Lock CC-CL style as 318.
+Cyber Lock CC-CL style as 318. Photo mapping of the two unstamped keys: the
+black-plastic-head key (owner label "YB") is the **F36 Yukon**; the key with the
+embossed bow logo is the **318 Cyber Lock**.
 
 Note: "Cyber Lock CC-CL" here is an ordinary **mechanical** cut key, not Videx's
 electronic *CyberLock* system (same-sounding name, unrelated) — so it decodes
@@ -86,17 +88,16 @@ existing single-edge decode + loft path as-is: Item A for them is just a
 cabinet-wafer blank + flat section + simple bow.
 
 **F36 is double-sided, so it does need double-bitting** — the mesh must mill
-BOTH edges (`js/keys/keyMesh.js` currently mills only the top). Two sub-cases,
-and the F36 photo decides which:
+BOTH edges (`js/keys/keyMesh.js` currently mills only the top). Owner-confirmed
+(2026-07): **the F36 is symmetric / reversible** — both edges carry the same
+cuts mirrored, so the key works either way up. That is the easy case: decode one
+edge, mirror the milling function to the other. Small mesh change.
 
-- **Reversible / symmetric** (the common toolbox case): both edges carry the
-  *same* cuts mirrored, so the key works either way up. This is the easy case —
-  decode one edge, mirror the milling function to the other. Small mesh change.
-- **Independent double bitting**: the two edges differ, needing both edges
-  traced and milled separately. Larger change (decode + mesh + UI).
+Independent double bitting (the two edges cut differently) is **explicitly
+deferred** to a future enhancement; none of the five keys need it now.
 
-So double-bitting is back on Item A's list, but scoped to F36 and most likely
-the easy symmetric case. It does not block the other four.
+So double-bitting is scoped to F36 and only the symmetric case. It does not
+block the other four.
 
 ### Double-sided keys have no back-edge datum (the F36 measurement problem)
 
