@@ -1,0 +1,152 @@
+{
+  "_meta": {
+    "title": "Flat single-sided wafer / disc-tumbler depth & space reference",
+    "purpose": "Cabinet, office-furniture and toolbox key specs, in the same shape as js/keys/blanks.js `spec` objects. Reference data (the 'have and not need' set) that Item A (cabinet-key support) draws its verified blanks from.",
+    "units": "inches (convert at the mesh boundary with IN_TO_MM, like blanks.js)",
+    "datum": "Root depth = height of the cut bottom above the blade BACK. Deeper cut -> smaller root depth. Same datum blanks.js uses.",
+    "readDirection": "ALL of these read bow->tip, which matches this app's numbering (bow->tip). No reversal needed, unlike BEST/SFIC.",
+    "source": "Tyler J. Thomas, 'Key Bitting Specifications' (2025), section 7 'Wafer' — docs/key-refs/KeyBittingSpecifications-TylerJThomas.pdf. Printed page in each entry's `srcPage`.",
+    "verified": "Transcribed verbatim from the compendium and double-checked. NOT yet cut-tested. Mark a blank `verified: true` in blanks.js only after a test cut.",
+    "fields": {
+      "increment": "root-depth change per one-unit code step (in) [depthStep]",
+      "includedAngle": "V-cutter included angle (deg) [cutAngle]",
+      "rootCut": "flat width at the bottom of a cut (in) [cutFlat]",
+      "tfc": "shoulder/tip datum -> centre of cut position 1 (in) [firstCut]",
+      "bcc": "centre-to-centre spacing between cuts (in) [spacing]",
+      "positions": "max number of cut positions the series uses",
+      "depths": "ordered [label, rootDepthInches]; label is the manufacturer's depth digit",
+      "category": "office-cabinet | toolbox — what these locks are actually on"
+    },
+    "blindCodeWarning": "These specs give depth & space only. A stamped catalog code (T05, 318, ES202, F36 ...) is a BLIND code, not a cut code — converting it to a bitting needs the manufacturer's code book, which is separate and often restricted. For a key you own, measure it once (app photo or calipers) and record the resulting bitting; see WAFER-CABINET-KEYS.md."
+  },
+
+  "national_ss": {
+    "name": "National Disc Tumbler (Single Sided)",
+    "srcPage": 98,
+    "category": "office-cabinet",
+    "readDirection": "bow-to-tip",
+    "increment": 0.025,
+    "includedAngle": 90,
+    "rootCut": 0.044,
+    "tfc": 0.156,
+    "bcc": 0.093,
+    "positions": 6,
+    "depths": [[1, 0.250], [2, 0.225], [3, 0.200], [4, 0.175]],
+    "spacing": [[1, 0.156], [2, 0.249], [3, 0.342], [4, 0.435], [5, 0.528], [6, 0.621]],
+    "notes": "Very common on US office furniture / file cabinets (CompX National). Some factory codes use different depth numbers; substitute 0=1, 2=2, 4=3, 6=4. HPC C37/P37, ITL 316, Blackhawk Card 192, DSD #052."
+  },
+
+  "compx_y000": {
+    "name": "Snap-On Toolbox (CompX Y000)",
+    "srcPage": 100,
+    "category": "toolbox",
+    "readDirection": "bow-to-tip",
+    "increment": 0.025,
+    "includedAngle": 90,
+    "rootCut": 0.044,
+    "tfc": 0.130,
+    "bcc": 0.095,
+    "positions": 6,
+    "depths": [[1, 0.290], [2, 0.265], [3, 0.240], [4, 0.215]],
+    "spacing": [[1, 0.130], [2, 0.225], [3, 0.320], [4, 0.415], [5, 0.510], [6, 0.605]],
+    "notes": "Toolbox / tool-chest wafer lock. Factory combinations use only depths 2, 3, 4. Cut on CompX D8777 blanks; existing keys can be duplicated on Ilco 1527 indexed on the centre warding grooves. DSD #379."
+  },
+
+  "chicago_dt": {
+    "name": "Chicago Disc Tumbler",
+    "srcPage": 90,
+    "category": "office-cabinet",
+    "readDirection": "bow-to-tip",
+    "increment": 0.015,
+    "includedAngle": 90,
+    "rootCut": 0.035,
+    "tfc": 0.139,
+    "bcc": 0.093,
+    "positions": 6,
+    "depths": [[1, 0.250], [2, 0.235], [3, 0.220], [4, 0.205], [5, 0.190]],
+    "spacing": [[1, 0.139], [2, 0.232], [3, 0.325], [4, 0.418], [5, 0.511], [6, 0.605]],
+    "notes": "Chicago Lock cabinet/cam locks. HPC C5/P5L,P5R, ITL 93, Blackhawk Card 170, DSD #6."
+  },
+
+  "corbin_dt": {
+    "name": "Corbin Disc Tumbler",
+    "srcPage": 91,
+    "category": "office-cabinet",
+    "readDirection": "bow-to-tip",
+    "increment": 0.015,
+    "includedAngle": 90,
+    "rootCut": 0.044,
+    "tfc": 0.156,
+    "bcc": 0.093,
+    "positions": 6,
+    "depths": [[1, 0.250], [2, 0.235], [3, 0.220], [4, 0.205], [5, 0.190]],
+    "spacing": [[1, 0.156], [2, 0.249], [3, 0.342], [4, 0.435], [5, 0.528], [6, 0.621]],
+    "notes": "HPC C11, ITL 281, Blackhawk Card 173, DSD #12."
+  },
+
+  "dexter_dt": {
+    "name": "Dexter Disc Tumbler",
+    "srcPage": 92,
+    "category": "office-cabinet",
+    "readDirection": "bow-to-tip",
+    "increment": 0.015,
+    "includedAngle": 90,
+    "rootCut": 0.044,
+    "tfc": 0.150,
+    "bcc": 0.093,
+    "positions": 5,
+    "depths": [[1, 0.250], [2, 0.235], [3, 0.220], [4, 0.205], [5, 0.190]],
+    "spacing": [[1, 0.150], [2, 0.243], [3, 0.336], [4, 0.429], [5, 0.522]],
+    "notes": "Identical to Briggs & Stratton. HPC C4/P5L, ITL 144, Blackhawk Card 152, DSD #5."
+  },
+
+  "eagle_dt": {
+    "name": "Eagle Disc Tumbler",
+    "srcPage": 93,
+    "category": "office-cabinet",
+    "readDirection": "bow-to-tip",
+    "increment": 0.015,
+    "includedAngle": 90,
+    "rootCut": 0.044,
+    "tfc": 0.155,
+    "bcc": 0.093,
+    "positions": 5,
+    "depths": [[1, 0.240], [2, 0.225], [3, 0.210], [4, 0.195], [5, 0.180]],
+    "spacing": [[1, 0.155], [2, 0.248], [3, 0.341], [4, 0.434], [5, 0.527]],
+    "notes": "Eagle A63A series (0750 keyway) uses the same depths with TFC .090 / BCC .093. ITL 270, Blackhawk Card 176, DSD #27."
+  },
+
+  "illinois_ss": {
+    "name": "Illinois Disc Tumbler (Single Sided)",
+    "srcPage": 97,
+    "category": "office-cabinet",
+    "readDirection": "bow-to-tip",
+    "increment": 0.020,
+    "includedAngle": 90,
+    "rootCut": 0.044,
+    "tfc": 0.137,
+    "tfcNote": "TFC varies; older versions increased it to .150",
+    "bcc": 0.093,
+    "positions": 5,
+    "depths": [[1, 0.248], [2, 0.228], [3, 0.208], [4, 0.188]],
+    "spacing": [[1, 0.137], [2, 0.230], [3, 0.323], [4, 0.416], [5, 0.509]],
+    "notes": "HPC C29/P29L,P29R, ITL 414, Blackhawk Card 187, DSD #44."
+  },
+
+  "hudson_dt": {
+    "name": "Hudson Disc Tumbler",
+    "srcPage": 95,
+    "category": "office-cabinet",
+    "readDirection": "bow-to-tip",
+    "increment": 0.020,
+    "includedAngle": 90,
+    "rootCut": 0.044,
+    "tfc": 0.125,
+    "bcc": 0.097,
+    "positions": 6,
+    "depths": [[1, 0.250], ["W/10", 0.240], [2, 0.230], [3, 0.210], [4, 0.190], [5, 0.170], [6, 0.150], ["X/7", 0.220], [8, 0.190], [9, 0.170]],
+    "depthsNote": "Irregular / master-keyed depth set with half-step (W/10, X/7) designators — NOT a uniform increment. Do not model with a linear depthStep; use the explicit table.",
+    "spacing": [[1, 0.125], [2, 0.222], [3, 0.319], [4, 0.416], [5, 0.513], [6, 0.610]],
+    "notes": "Applies to Hudson EL, GA, GB, GG, HC, HL, HU, LL, MA, MB, MM, W, X series. Hudson also clones other makers' locks using their original depth/spacing. HPC CX32/PX32, ITL 224, Blackhawk Card 181, DSD #40."
+  }
+}
