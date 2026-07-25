@@ -68,8 +68,12 @@ double-sided** — see the sidedness note below.
 | **T05** | Husky tool chest (Home Depot) | cut on **N54G** blank; T01–T50 series | single | single-sided wafer — toolbox family (`compx_y000` / `national_ss` nearest) | cut count + one reading |
 | **318** | vertical cabinet | **Cyber Lock CC-CL** mechanical blank, office furniture; blind series CC0001–CC1000 / CL0001–CL1000 | single | single-sided wafer — office family (`national_ss` nearest) | cut count + one reading |
 | **476** | vertical cabinet | same as 318 (Cyber Lock CC-CL) | single | as 318 | cut count + one reading |
-| **F36** | Yukon tool bench (Harbor Freight) | HF import wafer; "F" series | **double** | double-sided wafer — nearest office/toolbox family | photo of key + cut count + are the two edges identical? |
-| **ES202** | overhead cabinet | unidentified (ES prefix) | ? | TBD | identify maker/blank; photo |
+| **F36** | Yukon tool bench (Harbor Freight) | HF import wafer; "F" series | **double** | double-sided wafer — spec still to source/measure | own depth&space; are the two edges identical? |
+| **ES202** | overhead cabinet | **Y11** blank — brass, stamped "Y11 USA"; common furniture / cam-lock key | single | single-sided wafer — office family | cut count + one reading |
+
+Owner-confirmed via photos (2026-07): T05 stamped on the Husky key; "Y11 USA"
+stamped on the ES202 key (so ES202 = Y11). 476 not separately provided — same
+Cyber Lock CC-CL style as 318.
 
 Note: "Cyber Lock CC-CL" here is an ordinary **mechanical** cut key, not Videx's
 electronic *CyberLock* system (same-sounding name, unrelated) — so it decodes
@@ -93,6 +97,32 @@ and the F36 photo decides which:
 
 So double-bitting is back on Item A's list, but scoped to F36 and most likely
 the easy symmetric case. It does not block the other four.
+
+### Double-sided keys have no back-edge datum (the F36 measurement problem)
+
+The single-sided decode measures tooth height from the blade **BACK** — the one
+straight, uncut edge — as its datum (`js/keys/blanks.js` "Datum: the blade
+back"; `js/keys/decode.js` `profileFromEdges`, `h = |top − back|`). A
+double-sided key has cuts on **both** long edges, so there is no straight back
+edge and that datum does not exist. Decode must switch to a **width /
+centreline** datum:
+
+- Trace **both** cut edges of the rectified silhouette (same rectify + trace as
+  today; the blade axis / shoulder still register normally).
+- Read the uncut full width **W₀** at an uncut station (just past the shoulder).
+- **Symmetric / reversible** (expected for F36): at each position measure the
+  full edge-to-edge width `w(x)`; per-edge cut depth `d(x) = (W₀ − w(x)) / 2`.
+  Snap `d(x)` to the spec's depth ladder exactly as today — only the datum
+  changed (uncut edge instead of back edge). One reading covers both edges; the
+  mesh mills both mirrored.
+- **Independent** (only if the two edges differ): derive the centreline from the
+  two edges' midpoints along the axis, decode each edge from its own uncut-edge
+  line, and mill the two edges separately.
+
+Pipeline impact: rectify, trace, axis, snapping and the spec ladder are all
+reused; the new parts are a `doubleSided` datum mode in decode and both-edge
+milling in `keyMesh.js`. F36's own depth & space still needs sourcing or direct
+measurement — the committed wafer specs are all single-sided.
 
 ### What's needed to make each printable
 
