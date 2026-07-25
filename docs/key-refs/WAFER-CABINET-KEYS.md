@@ -16,7 +16,7 @@ whole plan.
 | Lock | pin tumbler | wafer / disc tumbler |
 | Positions | 5–7 | usually 4–6 |
 | Depths | 7–10 | 4–5 (often only 2–3 used) |
-| Blade section | **paracentric** (must match the keyway) | ~flat; a flat blade enters most wafer locks |
+| Blade section | **paracentric** (must match the keyway) | **warded** (grooved) — a fully flat blade won't reliably enter; simpler grooves than paracentric, but real |
 | How you get the bitting | **measure the cuts** from a photo | usually **look up the stamped code** |
 | Handedness | single-sided | often **double-sided / reversible** (mirror cuts both edges) |
 
@@ -29,10 +29,29 @@ Three consequences drive the implementation:
 2. **Double-bitted / reversible.** Many of these mill *both* edges (mirror
    image), so the key is non-handed. The current mesh only mills the top edge
    (`js/keys/keyMesh.js`), so it needs a double-bitted mode.
-3. **Flat section is fine.** Per `WARDING-TO-GRAB.md`'s flat-key simplification,
-   a flat blade slides past a wafer lock's wards. So these do **not** need a
-   keygen paracentric cross-section — synthesize a flat rectangle from blade
-   width/height/thickness. This decouples cabinet keys from the keygen source.
+3. **They have real warding — a flat blade won't do.** Correcting an earlier
+   assumption: `WARDING-TO-GRAB.md`'s "flat blade enters any wafer lock"
+   simplification does **not** hold for these keys. The owner's T05 and Y11 have
+   a milled groove down the blade; the Cyber Lock and F36 are warded too. A fully
+   flat rectangle won't reliably enter, so each key needs its **actual warded
+   cross-section**.
+
+   Good news on the mesh: this needs **no new mesh code**. The loft already
+   renders grooved sections — the residential `schlage:c…l` profiles *are*
+   complex grooved polygons, and the bitting only mills the top edge, so a
+   cabinet section (a rectangle with a longitudinal groove) flows through the
+   same `clipProfileAtTop` loft. What's needed is the section **polygon** for
+   each key, obtained one of two ways:
+   - **Parametric grooved section** — a rectangle with one or more longitudinal
+     grooves (position / width / depth params). Quick, approximate; fine for a
+     soft printed key and a first proof. Covers the grooved single-siders.
+   - **Traced section** — photograph the key **end-on** and trace its
+     cross-section for an exact profile. This is **Item B** (draw / import / look
+     up keyways), now pulled onto Item A's critical path.
+
+   The Cyber Lock is the easy one: **warded on one side, flat on the other**, so
+   it both models simply (a one-sided groove) and prints flat with its flat face
+   on the bed.
 
 ## Blind codes vs cut codes — the honest gap
 
@@ -83,9 +102,9 @@ like any other wafer key.
 
 ### Sidedness — four single, one double
 
-The four single-sided keys (T05, 318, 476, ES202-if-single) use the app's
-existing single-edge decode + loft path as-is: Item A for them is just a
-cabinet-wafer blank + flat section + simple bow.
+The four single-sided keys (T05, 318, 476, Y11/ES202) use the app's existing
+single-edge decode + loft path as-is: Item A for them is a cabinet-wafer blank +
+its warded section (parametric groove now, traced later) + simple bow.
 
 **F36 is double-sided, so it does need double-bitting** — the mesh must mill
 BOTH edges (`js/keys/keyMesh.js` currently mills only the top). Owner-confirmed
@@ -145,11 +164,14 @@ residential flow) — only the abstract bitting under its code.
 1. **Data** — `wafer-cabinet-specs.json` (done, this commit). Add
    `cabinet-codes.json` (code → bitting) as keys are decoded.
 2. **Model** (`blanks.js`) — cabinet blank entries drawing on the JSON: small
-   `positions`, `doubleBitted` flag, flat synthesized section, code-series hook.
-3. **Section** (`warding.js`) — flat-rectangle synthesizer from width/height/
-   thickness (no keygen polygon).
+   `positions`, `doubleSided` flag, warded section ref, code-series hook.
+3. **Section** — each key's **warded** cross-section (grooved, NOT a flat
+   rectangle): a parametric grooved-rectangle synthesizer first (rectangle +
+   longitudinal groove params), then exact traced sections via Item B. Feeds the
+   existing loft unchanged.
 4. **Bow** (`bows.js`) — a parametric round/D toolbox bow with a keyring hole.
-5. **Mesh** (`keyMesh.js`) — double-bitted lofting (mirror the milled edge).
+5. **Mesh** (`keyMesh.js`) — double-sided (symmetric) milling for F36: mirror the
+   milled edge. Independent edges deferred.
 6. **UI** (`keyUI.js`) — "enter stamped code" entry alongside the photo flow;
    photo verifies.
 7. **Tests** — decode + keymesh + keycheck coverage, matching the existing suite.
