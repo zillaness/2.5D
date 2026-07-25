@@ -95,21 +95,38 @@ export function textToLoops(text, opts = {}) {
 // steps. The px box is y-DOWN; we flip Y so the text reads upright in the trace
 // plane (which is also y-DOWN, image space — so no flip needed there; we keep the
 // glyphs' own orientation). Returns [] for empty/blank text.
+// opts.rot accepts ANY angle in degrees (not just 90° steps): the glyphs are
+// scaled to `heightMm` first, then rotated about the label's own centre, so the
+// cap height stays exact whatever the angle. opts.mirror flips it left-right
+// (for stamps, or so a bottom-face label reads correctly from below).
 export function labelLoops(text, cx, cy, heightMm, opts = {}) {
   const t = textToLoops(text, opts);
   if (!t.loops.length) return [];
-  const rot = (((opts.rot || 0) % 360) + 360) % 360;
-  const rp = ([x, y]) => rot === 90 ? [y, -x] : rot === 180 ? [-x, -y] : rot === 270 ? [-y, x] : [x, y];
-  let loops = t.loops.map(l => l.map(rp));
   let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
-  for (const l of loops) for (const p of l) { if (p[0] < mnx) mnx = p[0]; if (p[0] > mxx) mxx = p[0]; if (p[1] < mny) mny = p[1]; if (p[1] > mxy) mxy = p[1]; }
-  const bw = mxx - mnx, bh = mxy - mny || 1;
-  const sc = heightMm / bh;                 // scale so the cap height == heightMm
+  for (const l of t.loops) for (const p of l) {
+    if (p[0] < mnx) mnx = p[0]; if (p[0] > mxx) mxx = p[0];
+    if (p[1] < mny) mny = p[1]; if (p[1] > mxy) mxy = p[1];
+  }
+  const bw = mxx - mnx, bh = (mxy - mny) || 1;
+  const sc = heightMm / bh;                 // cap height == heightMm
   const wMm = bw * sc;
-  const ox = cx - wMm / 2, oy = cy - heightMm / 2;
   const mirror = opts.mirror ? -1 : 1;
-  return loops.map(l => l.map(([x, y]) => ({
-    x: ox + (mirror < 0 ? (wMm - (x - mnx) * sc) : (x - mnx) * sc),
-    y: oy + (y - mny) * sc,
-  })));
+  const th = ((opts.rot || 0) * Math.PI) / 180;
+  const cos = Math.cos(th), sin = Math.sin(th);
+  return t.loops.map(l => l.map(([px, py]) => {
+    // Centre-relative mm, mirrored on demand, then rotated about the centre.
+    const lx = (mirror < 0 ? (wMm - (px - mnx) * sc) : (px - mnx) * sc) - wMm / 2;
+    const ly = (py - mny) * sc - heightMm / 2;
+    return { x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos };
+  }));
+}
+
+// Bounding box (mm) of a label's placed loops — for hit-testing and overlays.
+export function labelBounds(loops) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const l of loops) for (const p of l) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  return minX > maxX ? null : { minX, minY, maxX, maxY };
 }

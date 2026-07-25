@@ -183,6 +183,7 @@
         <button class="tool-btn" data-tool="region" title="Draw a section with its own thickness/offset — click points, double-click or Enter to close, Esc cancels">▱ Section</button>
         <button class="tool-btn" data-tool="measure" title="Measure from the photo — click points, edges or holes; Esc cancels a half-done pick">📏 Measure</button>
         <button class="tool-btn" data-tool="constrain" title="Pick one or two entities, then apply a geometric constraint">⊾ Constrain</button>
+        <button class="tool-btn" data-tool="label" title="Add raised (emboss) or engraved (deboss) text — click to place, drag to move, drag the handle to rotate">🅰 Label</button>
         <button class="tool-btn" data-tool="pan" title="Drag to pan">✋ Pan</button>
       </div>
       <div id="holeProps" hidden>
@@ -318,6 +319,57 @@
         <div class="btn-row">
           <button id="conSolveBtn" class="btn small" title="Run the solver now">↻ Re-solve</button>
           <button id="conClearBtn" class="btn small">Clear all</button>
+        </div>
+      </div>
+
+      <div id="labelPanel" hidden>
+        <h3>Label</h3>
+        <p class="hint">Click the part to place a label; drag it to move, drag the
+        round handle to rotate (Shift snaps to 15°). Height sets the cap height.</p>
+        <div class="field">
+          <label for="labelText">Text</label>
+          <input type="text" id="labelText" placeholder="e.g. PART-01" maxlength="48">
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="labelMode">Style</label>
+            <select id="labelMode">
+              <option value="emboss">Emboss — raised</option>
+              <option value="deboss">Deboss — engraved</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="labelFace">Face</label>
+            <select id="labelFace">
+              <option value="top">Top</option>
+              <option value="bottom">Bottom</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Height (mm)</label><input type="text" inputmode="decimal" id="labelHeight"></div>
+          <div class="field"><label>Depth (mm)</label><input type="text" inputmode="decimal" id="labelDepth" title="How far the text is raised or engraved"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>X (mm)</label><input type="text" inputmode="decimal" id="labelX"></div>
+          <div class="field"><label>Y (mm)</label><input type="text" inputmode="decimal" id="labelY"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Rotation (°)</label><input type="number" id="labelRot" step="1"></div>
+          <div class="field">
+            <label for="labelFont">Font</label>
+            <select id="labelFont">
+              <option value="bold sans-serif">Sans (bold)</option>
+              <option value="sans-serif">Sans</option>
+              <option value="bold serif">Serif (bold)</option>
+              <option value="bold monospace">Mono (bold)</option>
+            </select>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="labelMirror"> Mirror (stamps / read from below)</label>
+        <p id="labelNote" class="hint"></p>
+        <div class="btn-row">
+          <button id="labelDeleteBtn" class="btn small">Delete label</button>
         </div>
       </div>
 

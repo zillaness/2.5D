@@ -53,6 +53,36 @@ export function buildIslands(outerPts, holePolys) {
   return islands;
 }
 
+// Resolve raw glyph loops (letter outlines + their counters, in any winding —
+// see js/text.js) into solid islands via an even-odd union: a loop inside
+// another becomes a hole, so the middle of "O" stays open. Returned rings carry
+// Clipper's consistent orientation (outer CCW, holes CW), which lets them be
+// handed straight to buildIslands as clip paths without the counters
+// re-filling. Returns [{ outer, holes }] in mm.
+export function glyphIslands(loops) {
+  const ClipperLib = CL();
+  const valid = (loops || []).filter(l => l && l.length >= 3);
+  if (!valid.length) return [];
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPaths(valid.map(toClipperPath), ClipperLib.PolyType.ptSubject, true);
+  const tree = new ClipperLib.PolyTree();
+  clipper.Execute(
+    ClipperLib.ClipType.ctUnion, tree,
+    ClipperLib.PolyFillType.pftEvenOdd, ClipperLib.PolyFillType.pftEvenOdd
+  );
+  const ex = ClipperLib.JS.PolyTreeToExPolygons(tree);
+  const out = [];
+  for (const e of ex) {
+    const outer = fromClipperPath(e.outer);
+    if (Math.abs(signedArea(outer)) < 0.01) continue; // sub-0.01 mm² speck
+    out.push({ outer, holes: e.holes.map(fromClipperPath) });
+  }
+  return out;
+}
+
+// Every ring of a glyph island, for use as cut paths (deboss).
+function islandRings(isl) { return [isl.outer, ...isl.holes]; }
+
 // Intersect a section footprint with the base outline so a section can only
 // re-thickness the object, never add material beyond its silhouette. Returns
 // the overlap as one or more simple polygons (mm) — empty if the section lies
@@ -725,6 +755,9 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
   // opts may be a number (legacy arcSegments) or { arcSegments, chordTol }.
   const arcSegments = typeof opts === 'number' ? opts : (opts && opts.arcSegments) || 8;
   const chordTol = (opts && typeof opts === 'object' && opts.chordTol) || 0.35;
+  // labels: [{ loops, mode:'emboss'|'deboss', face:'top'|'bottom', size }] in
+  // trace mm space — raised lettering or an engraved recess on a face.
+  const rawLabels = (opts && typeof opts === 'object' && opts.labels) || [];
   const warnings = [];
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -778,6 +811,30 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
     }
   }
 
+  // Resolve each label to islands and pick the region it sits on (topmost for a
+  // top-face label, bottommost for a bottom one), mirroring the screw-hole rule.
+  const labels = [];
+  for (const L of rawLabels) {
+    const islands = glyphIslands(L.loops);
+    if (!islands.length) continue;
+    let cx = 0, cy = 0, n = 0;
+    for (const isl of islands) for (const p of isl.outer) { cx += p.x; cy += p.y; n++; }
+    const c = { x: cx / n, y: cy / n };
+    const bottom = L.face === 'bottom';
+    let reg = -1;
+    for (let i = 0; i < regions.length; i++) {
+      if (!footprints[i].some(fp => pointInPoly(c, fp))) continue;
+      if (reg < 0) { reg = i; continue; }
+      const better = bottom
+        ? (regions[i].zBase || 0) < (regions[reg].zBase || 0)
+        : (regions[i].zBase || 0) + regions[i].thickness >
+          (regions[reg].zBase || 0) + regions[reg].thickness;
+      if (better) reg = i;
+    }
+    if (reg < 0) { warnings.push('A label lies outside every section and was skipped.'); continue; }
+    labels.push({ ...L, islands, reg, bottom, size: Math.max(0.05, L.size || 0.6) });
+  }
+
   const parts = [];
   let totalTris = 0, clamped = false;
   let zLo = Infinity, zHi = -Infinity;
@@ -794,18 +851,64 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
       top.size = sT * k; bottom.size = sB * k;
       warnings.push(`Section "${r.name || i + 1}": edge sizes exceeded the thickness — scaled to fit.`);
     }
+    // Deboss = a two-layer split of the face rather than a 3D subtraction: the
+    // outer `depth` slice is built as (footprint − glyphs) over a full layer
+    // beneath, leaving a recess shaped like the text. Each layer is its own
+    // watertight prism, so the pipeline keeps its by-construction guarantee.
+    const deb = labels.filter(L => L.reg === i && L.mode === 'deboss');
+    let dTop = 0, dBot = 0;
+    for (const L of deb) {
+      if (L.bottom) dBot = Math.max(dBot, L.size);
+      else dTop = Math.max(dTop, L.size);
+    }
+    if (dTop + dBot > thickness * 0.8) {
+      const k = (thickness * 0.8) / (dTop + dBot);
+      dTop *= k; dBot *= k;
+      warnings.push(`Section "${r.name || i + 1}": deboss depth exceeded the thickness — reduced.`);
+    }
+    const cutRings = wantBottom => deb
+      .filter(L => L.bottom === wantBottom)
+      .flatMap(L => L.islands.flatMap(islandRings));
+    // Splitting a section would distort recessed screw features (their geometry
+    // is relative to the layer thickness), so demote them to plain bores there.
+    let holesFor = perRegion[i];
+    if (dTop || dBot) {
+      if (holesFor.some(hh => !hh.asBore && hh.type && hh.type !== 'through')) {
+        warnings.push(`Section "${r.name || i + 1}": countersink/counterbore/blind holes are cut as plain bores where a label is debossed.`);
+      }
+      holesFor = holesFor.map(hh => ({ ...hh, asBore: true }));
+    }
+    const none = { mode: 'none', size: 0 };
+    // Let the core layer interpenetrate the engraved slices by a hair instead
+    // of meeting them face-to-face: coincident faces are ambiguous to union,
+    // and the same trick already makes overlapping sections robust. The recess
+    // ends up EPS shallower — far below any print resolution.
+    const EPS = dTop || dBot ? 0.01 : 0;
+    const layers = [];
+    if (dBot > 0) layers.push({ z: zBase, t: dBot, cuts: cutRings(true), top: none, bottom });
+    layers.push({
+      z: zBase + Math.max(0, dBot - EPS),
+      t: thickness - Math.max(0, dBot - EPS) - Math.max(0, dTop - EPS),
+      cuts: [], top: dTop > 0 ? none : top, bottom: dBot > 0 ? none : bottom,
+    });
+    if (dTop > 0) layers.push({ z: zBase + thickness - dTop, t: dTop, cuts: cutRings(false), top, bottom: none });
+
     let built = 0;
     for (const fp of footprints[i]) {
-      const mesh = buildSolid(fp, tracedHoles, perRegion[i], {
-        thickness, zBase, top, bottom, arcSegments, chordTol, center,
-      });
-      if (!mesh) continue;
-      parts.push(mesh);
-      built++;
-      totalTris += mesh.stats.triangles;
-      clamped = clamped || mesh.stats.clamped;
-      warnings.push(...mesh.stats.warnings.map(w =>
-        regions.length > 1 ? `Section "${r.name || i + 1}": ${w}` : w));
+      for (const lay of layers) {
+        if (!(lay.t > 1e-6)) continue;
+        const mesh = buildSolid(fp, [...tracedHoles, ...lay.cuts], holesFor, {
+          thickness: lay.t, zBase: lay.z, top: lay.top, bottom: lay.bottom,
+          arcSegments, chordTol, center,
+        });
+        if (!mesh) continue;
+        parts.push(mesh);
+        built++;
+        totalTris += mesh.stats.triangles;
+        clamped = clamped || mesh.stats.clamped;
+        warnings.push(...mesh.stats.warnings.map(w =>
+          regions.length > 1 ? `Section "${r.name || i + 1}": ${w}` : w));
+      }
     }
     if (!built) {
       if (footprints[i].length) warnings.push(`Section "${r.name || i + 1}" produced no solid — check its outline.`);
@@ -814,6 +917,38 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
     zLo = Math.min(zLo, zBase);
     zHi = Math.max(zHi, zBase + thickness);
   });
+
+  // Emboss = raised lettering: each glyph island is its own prism seated on the
+  // chosen face, clipped to that section so a letter can't hang off the part.
+  // Slicers union it with the body exactly like overlapping sections.
+  for (const L of labels) {
+    if (L.mode !== 'emboss') continue;
+    const r = regions[L.reg];
+    const rz = r.zBase || 0;
+    const z = L.bottom ? rz - L.size : rz + r.thickness;
+    let made = 0, trimmed = false;
+    for (const isl of L.islands) {
+      for (const fp of footprints[L.reg]) {
+        const { polys } = clipToOutline(isl.outer, fp);
+        if (!polys.length) continue;
+        if (polys.length > 1 || Math.abs(Math.abs(signedArea(polys[0])) - Math.abs(signedArea(isl.outer))) > 0.05) trimmed = true;
+        for (const poly of polys) {
+          const mesh = buildSolid(poly, isl.holes, [], {
+            thickness: L.size, zBase: z, top: { mode: 'none', size: 0 },
+            bottom: { mode: 'none', size: 0 }, arcSegments, chordTol, center,
+          });
+          if (!mesh) continue;
+          parts.push(mesh);
+          made++;
+          totalTris += mesh.stats.triangles;
+        }
+      }
+    }
+    if (!made) warnings.push('An embossed label produced no geometry — check its placement.');
+    else if (trimmed) warnings.push('An embossed label overhung the part and was trimmed to it.');
+    zLo = Math.min(zLo, z);
+    zHi = Math.max(zHi, z + L.size);
+  }
   if (!parts.length) return null;
 
   const positions = new Float32Array(parts.reduce((n, p) => n + p.positions.length, 0));

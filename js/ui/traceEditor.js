@@ -10,6 +10,7 @@ import {
   pointSegDist, angleBetweenDeg, dist as ptDist, filletArc, arcPointsN,
 } from '../measure.js';
 import { solveConstraints } from '../constraints.js';
+import { labelLoops, labelBounds } from '../text.js';
 
 const VERT_R = 4.5;
 const HIT_R = 8;
@@ -69,6 +70,11 @@ export class TraceEditor {
     // (a reversible straighten). Each is { loop, lo, len:2, stash:[{x,y}] }.
     this.lines = [];
     this._arcSeq = 0; // stable ids so 'tangent to arc' constraints survive re-indexing
+    // Emboss/deboss labels (shared with app state): { text, x, y, height, rot,
+    // mirror, face, mode, depth, font }. Placed/dragged/rotated in 'label' mode.
+    this.labels = [];
+    this.selLabel = -1;
+    this._labelDrag = null;   // { mode:'move'|'rotate', ... } while dragging
     this._reprojecting = false;
     this._pendingPick = null; // measure mode: first of a two-entity pick
     this._picks = [];         // constrain mode: up to two picked entities
@@ -155,10 +161,11 @@ export class TraceEditor {
     if (this.mode === 'region' && mode !== 'region') this._draftRegion = null;
     if (mode !== 'measure') this._pendingPick = null;
     if (mode !== 'constrain') this._picks = [];
+    if (mode !== 'label') this.selLabel = -1;
     this._hoverSnap = null;
     this.mode = mode;
     this.canvas.style.cursor = mode === 'pan' ? 'grab'
-      : (mode === 'region' || mode === 'measure' || mode === 'constrain')
+      : (mode === 'region' || mode === 'measure' || mode === 'constrain' || mode === 'label')
         ? 'crosshair' : 'default';
     if (this.cb.onPicksChanged) this.cb.onPicksChanged();
     this.draw();
@@ -573,6 +580,136 @@ export class TraceEditor {
     return p ? this._mmToScreen(p) : null;
   }
 
+  // ---- labels (emboss / deboss) ----
+
+  setLabels(labels) {
+    this.labels = labels;
+    if (this.selLabel >= labels.length) this.selLabel = -1;
+    this.draw();
+  }
+
+  // Placed glyph loops (mm) for label i, or [] when it has no renderable text.
+  labelGeometry(i) {
+    const L = this.labels[i];
+    if (!L || !L.text) return [];
+    return labelLoops(L.text, L.x, L.y, L.height, {
+      rot: L.rot || 0, mirror: !!L.mirror, font: L.font,
+    });
+  }
+
+  // Screen position of a label's rotation handle (above its centre, rotated).
+  _labelHandle(i) {
+    const L = this.labels[i];
+    if (!L) return null;
+    const th = ((L.rot || 0) * Math.PI) / 180;
+    const off = L.height * 0.75 + 3;
+    return this._mmToScreen({ x: L.x - Math.sin(th) * off, y: L.y + Math.cos(th) * off });
+  }
+
+  _hitLabel(sp) {
+    for (let i = this.labels.length - 1; i >= 0; i--) {
+      if (i === this.selLabel) {
+        const hnd = this._labelHandle(i);
+        if (hnd && Math.hypot(hnd.x - sp.x, hnd.y - sp.y) <= HIT_R + 2) return { idx: i, part: 'rotate' };
+      }
+      const b = labelBounds(this.labelGeometry(i));
+      if (!b) continue;
+      const mm = this._screenToMm(sp);
+      const pad = 1;
+      if (mm.x >= b.minX - pad && mm.x <= b.maxX + pad && mm.y >= b.minY - pad && mm.y <= b.maxY + pad) {
+        return { idx: i, part: 'move' };
+      }
+    }
+    return null;
+  }
+
+  _labelDown(e, sp) {
+    const hit = this._hitLabel(sp);
+    const mm = this._screenToMm(sp);
+    if (hit) {
+      this.selLabel = hit.idx;
+      const L = this.labels[hit.idx];
+      this.pushUndo();
+      this._labelDrag = hit.part === 'rotate'
+        ? { mode: 'rotate', idx: hit.idx, rot0: L.rot || 0,
+            a0: Math.atan2(mm.y - L.y, mm.x - L.x) }
+        : { mode: 'move', idx: hit.idx, dx: L.x - mm.x, dy: L.y - mm.y };
+      this.dragging = true;
+      if (this.cb.onLabelsChanged) this.cb.onLabelsChanged();
+      this.draw();
+      return;
+    }
+    // Empty space: ask the app to add a label here.
+    if (this.cb.onLabelPlace) {
+      this.pushUndo();
+      this.cb.onLabelPlace(mm);
+      this.selLabel = this.labels.length - 1;
+      if (this.cb.onLabelsChanged) this.cb.onLabelsChanged();
+      this.draw();
+    }
+  }
+
+  deleteSelectedLabel() {
+    if (this.selLabel < 0 || this.selLabel >= this.labels.length) return false;
+    this.pushUndo();
+    this.labels.splice(this.selLabel, 1);
+    this.selLabel = -1;
+    if (this.cb.onLabelsChanged) this.cb.onLabelsChanged();
+    this._changed();
+    return true;
+  }
+
+  _drawLabels(ctx) {
+    if (!this.labels.length) return;
+    for (let i = 0; i < this.labels.length; i++) {
+      const L = this.labels[i];
+      const loops = this.labelGeometry(i);
+      const sel = i === this.selLabel;
+      const col = L.mode === 'deboss' ? '#ff9f6b' : '#7ee0a8';
+      if (loops.length) {
+        ctx.beginPath();
+        for (const loop of loops) {
+          const p0 = this._mmToScreen(loop[0]);
+          ctx.moveTo(p0.x, p0.y);
+          for (let k = 1; k < loop.length; k++) {
+            const p = this._mmToScreen(loop[k]);
+            ctx.lineTo(p.x, p.y);
+          }
+          ctx.closePath();
+        }
+        ctx.fillStyle = L.mode === 'deboss' ? 'rgba(255,159,107,0.30)' : 'rgba(126,224,168,0.35)';
+        ctx.fill('evenodd');
+        ctx.strokeStyle = sel ? '#ffd257' : col;
+        ctx.lineWidth = sel ? 1.8 : 1.2;
+        ctx.stroke();
+      }
+      if (!sel) continue;
+      // Selection box + rotation handle.
+      const b = labelBounds(loops);
+      if (b) {
+        const c1 = this._mmToScreen({ x: b.minX, y: b.minY });
+        const c2 = this._mmToScreen({ x: b.maxX, y: b.maxY });
+        ctx.strokeStyle = '#ffd257';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(Math.min(c1.x, c2.x), Math.min(c1.y, c2.y), Math.abs(c2.x - c1.x), Math.abs(c2.y - c1.y));
+        ctx.setLineDash([]);
+      }
+      const hnd = this._labelHandle(i);
+      const ctr = this._mmToScreen({ x: L.x, y: L.y });
+      if (hnd) {
+        ctx.beginPath();
+        ctx.moveTo(ctr.x, ctr.y); ctx.lineTo(hnd.x, hnd.y);
+        ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(hnd.x, hnd.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffd257'; ctx.fill();
+        ctx.strokeStyle = '#0c1015'; ctx.lineWidth = 1.5; ctx.stroke();
+      }
+    }
+  }
+
   // ---- measure mode ----
 
   _sameRef(a, b) {
@@ -810,6 +947,12 @@ export class TraceEditor {
       return;
     }
 
+    if (this.mode === 'label') {
+      if (e.button !== 0) { this.panning = true; return; }
+      this._labelDown(e, sp);
+      return;
+    }
+
     if (this.mode === 'addhole' && e.button === 0) {
       const mm = this._screenToMm(sp);
       this.pushUndo();
@@ -977,6 +1120,23 @@ export class TraceEditor {
       this.draw();
       return;
     }
+    // Label move / rotate
+    if (this.dragging && this._labelDrag) {
+      const d = this._labelDrag;
+      const L = this.labels[d.idx];
+      if (L) {
+        const mm = this._screenToMm(sp);
+        if (d.mode === 'move') { L.x = mm.x + d.dx; L.y = mm.y + d.dy; }
+        else {
+          let deg = d.rot0 + (Math.atan2(mm.y - L.y, mm.x - L.x) - d.a0) * 180 / Math.PI;
+          if (e.shiftKey) deg = Math.round(deg / 15) * 15; // Shift snaps to 15°
+          L.rot = Math.round(deg * 10) / 10;
+        }
+        if (this.cb.onLabelsChanged) this.cb.onLabelsChanged();
+      }
+      this._changed(true);
+      return;
+    }
     // Marquee selection
     if (this.dragging && this._marquee) {
       this._marquee.x1 = sp.x; this._marquee.y1 = sp.y;
@@ -1085,6 +1245,7 @@ export class TraceEditor {
       }
       this._changed();
     }
+    if (this._labelDrag) { this._labelDrag = null; this._changed(); }
     this.dragging = false;
     this.panning = false;
     this.lastPos = null;
@@ -1880,6 +2041,7 @@ export class TraceEditor {
     // Live fillet arcs + managed straight lines, then measurement/constraint overlays.
     this._drawArcs(ctx);
     this._drawLines(ctx);
+    this._drawLabels(ctx);
     this._drawMeasurements(ctx);
     this._drawConstraints(ctx);
 

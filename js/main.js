@@ -42,6 +42,7 @@ const state = {
   reference: 'rect', // 'rect' (paper/card, perspective-corrected) | 'coin' (scale only)
   paper: { size: DEFAULT_SIZE, orientation: 'portrait', customW: 210, customH: 297 },
   captureFrac: 0, // 0 = reference-only crop; >0 extends the rectified area beyond it (× longer paper side)
+  labels: [],     // emboss/deboss text on a face
   coin: { size: DEFAULT_COIN, customD: 24.26 },
   lens: { k1: 0, k2: 0 }, // radial lens-distortion correction (rectangle path)
   rect: null,             // { canvas, pxPerMm }
@@ -114,10 +115,28 @@ const traceEditor = new TraceEditor($('traceCanvas'), {
     if (state.step === 3) rebuildMesh();
   },
   formatLen: mm => fmtDimL(mm),
+  onLabelPlace: (mm) => {
+    // New labels inherit the last one's styling, so a row of tags is one setup.
+    const prev = state.labels[state.labels.length - 1];
+    state.labels.push({
+      text: prev ? prev.text : 'TEXT',
+      x: mm.x, y: mm.y,
+      height: prev ? prev.height : 6,
+      depth: prev ? prev.depth : 0.6,
+      rot: prev ? prev.rot : 0,
+      mirror: prev ? !!prev.mirror : false,
+      face: prev ? prev.face : 'top',
+      mode: prev ? prev.mode : 'emboss',
+      font: prev ? prev.font : 'bold sans-serif',
+    });
+    traceEditor.setLabels(state.labels);
+  },
+  onLabelsChanged: () => { syncLabelPanel(); rebuildMesh(); },
   onAnnosChanged: () => { refreshMeasurePanel(); refreshConstraintList(); },
   onPicksChanged: () => refreshConstrainButtons(),
 });
 traceEditor.setSections(state.regions);
+traceEditor.setLabels(state.labels);
 let viewer = null; // created lazily on step 3
 
 // ---------- helpers ----------
@@ -559,6 +578,18 @@ function applyScrewSelection() {
 // ---------- step 3: mesh ----------
 
 let meshTimer = null;
+// Labels as the mesh wants them: placed glyph loops + how to cut/raise them.
+function labelsForMesh() {
+  return state.labels
+    .map((L, i) => ({
+      loops: traceEditor.labelGeometry(i),
+      mode: L.mode || 'emboss',
+      face: L.face || 'top',
+      size: L.depth,
+    }))
+    .filter(L => L.loops.length);
+}
+
 function rebuildMesh(fit = false) {
   clearTimeout(meshTimer);
   meshTimer = setTimeout(() => {
@@ -570,6 +601,7 @@ function rebuildMesh(fit = false) {
     try {
       mesh = buildModel(outer, holes, circles, state.regions, {
         arcSegments: state.model.arcSegments, chordTol: q.chordTol,
+        labels: labelsForMesh(),
       });
     } catch (err) {
       console.error('buildModel failed', err);
@@ -800,10 +832,83 @@ for (const btn of document.querySelectorAll('.tool-btn')) {
     syncHolePanel();
     $('measurePanel').hidden = btn.dataset.tool !== 'measure';
     $('constrainPanel').hidden = btn.dataset.tool !== 'constrain';
+    $('labelPanel').hidden = btn.dataset.tool !== 'label';
     if (btn.dataset.tool === 'measure') refreshMeasurePanel();
     if (btn.dataset.tool === 'constrain') { refreshConstrainButtons(); refreshConstraintList(); }
+    if (btn.dataset.tool === 'label') syncLabelPanel();
   });
 }
+
+// ---------- label (emboss / deboss) panel ----------
+
+function activeLabel() {
+  const i = traceEditor.selLabel;
+  return i >= 0 && i < state.labels.length ? state.labels[i] : null;
+}
+
+function syncLabelPanel() {
+  if ($('labelPanel').hidden) return;
+  const L = activeLabel();
+  const on = !!L;
+  for (const id of ['labelText', 'labelMode', 'labelFace', 'labelHeight', 'labelDepth',
+    'labelX', 'labelY', 'labelRot', 'labelFont', 'labelMirror', 'labelDeleteBtn']) {
+    $(id).disabled = !on;
+  }
+  if (!on) {
+    $('labelNote').textContent = state.labels.length
+      ? 'Click a label to select it, or click empty space to add one.'
+      : 'Click the part to place a label.';
+    return;
+  }
+  $('labelText').value = L.text || '';
+  $('labelMode').value = L.mode || 'emboss';
+  $('labelFace').value = L.face || 'top';
+  $('labelHeight').value = fmtDim(L.height);
+  $('labelDepth').value = fmtDim(L.depth);
+  $('labelX').value = fmtDim(L.x);
+  $('labelY').value = fmtDim(L.y);
+  $('labelRot').value = Math.round((L.rot || 0) * 10) / 10;
+  $('labelFont').value = L.font || 'bold sans-serif';
+  $('labelMirror').checked = !!L.mirror;
+  $('labelNote').textContent = L.mode === 'deboss'
+    ? `Engraved ${fmtDimL(L.depth)} into the ${L.face} face.`
+    : `Raised ${fmtDimL(L.depth)} above the ${L.face} face.`;
+}
+
+// Edit the selected label, redraw, and rebuild the 3D preview.
+function updateLabel(props) {
+  const L = activeLabel();
+  if (!L) return;
+  Object.assign(L, props);
+  traceEditor.draw();
+  syncLabelPanel();
+  rebuildMesh();
+}
+
+$('labelText').addEventListener('input', e => updateLabel({ text: e.target.value }));
+$('labelMode').addEventListener('change', e => updateLabel({ mode: e.target.value }));
+$('labelFace').addEventListener('change', e => {
+  // A bottom-face label reads correctly from below only when mirrored, so
+  // flip the default with the face (still overridable).
+  updateLabel({ face: e.target.value, mirror: e.target.value === 'bottom' });
+});
+$('labelFont').addEventListener('change', e => updateLabel({ font: e.target.value }));
+$('labelMirror').addEventListener('change', e => updateLabel({ mirror: e.target.checked }));
+$('labelRot').addEventListener('change', e => {
+  const v = parseFloat(e.target.value);
+  if (isFinite(v)) updateLabel({ rot: v });
+});
+for (const [id, key, min] of [['labelHeight', 'height', 0.5], ['labelDepth', 'depth', 0.05],
+  ['labelX', 'x', -1e6], ['labelY', 'y', -1e6]]) {
+  $(id).addEventListener('change', e => {
+    const mm = parseDim(e.target.value);
+    if (mm !== null && isFinite(mm) && mm >= min) updateLabel({ [key]: mm });
+    else syncLabelPanel();
+  });
+}
+$('labelDeleteBtn').addEventListener('click', () => {
+  if (traceEditor.deleteSelectedLabel()) { syncLabelPanel(); rebuildMesh(); }
+});
 
 // ---------- measure + constrain panels ----------
 
@@ -1490,6 +1595,7 @@ function serializeProject(includePhoto) {
     reference: state.reference,
     paper: state.paper,
     captureFrac: state.captureFrac,
+    labels: state.labels,
     coin: state.coin,
     lens: state.lens,
     corners: state.corners,
@@ -1526,6 +1632,11 @@ function loadProject(p) {
     $('customSizeRow').hidden = state.paper.size !== 'custom';
     $('customW').value = fmtDim(state.paper.customW);
     $('customH').value = fmtDim(state.paper.customH);
+  }
+  if (Array.isArray(p.labels)) {
+    state.labels.length = 0;
+    for (const L of p.labels) state.labels.push(structuredClone(L));
+    traceEditor.setLabels(state.labels);
   }
   if (typeof p.captureFrac === 'number') {
     state.captureFrac = p.captureFrac;

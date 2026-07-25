@@ -1823,6 +1823,112 @@ const textRes = await page.evaluate(async () => {
   };
 });
 
+// Label UI pipeline: place via the editor, rotate, and round-trip a project.
+const labelUI = await page.evaluate(async () => {
+  const app = window.__app;
+  const ed = app.traceEditor;
+  const c = document.createElement('canvas'); c.width = 400; c.height = 300;
+  ed.setRectified(c, 4);
+  ed.setTrace([{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }], []);
+  ed.setCircles([]);
+  app.state.labels.length = 0;
+  ed.setLabels(app.state.labels);
+
+  ed.setMode('label');
+  ed._labelDown({}, ed._mmToScreen({ x: 30, y: 20 }));   // place via the canvas
+  const placed = app.state.labels.length;
+  const L = app.state.labels[0];
+  L.text = 'AB'; L.height = 10;
+  const geomN = ed.labelGeometry(0).length;
+
+  const hit = ed._hitLabel(ed._mmToScreen({ x: 30, y: 20 }));
+  L.rot = 45;                                            // any-angle rotation
+  const rotGeom = ed.labelGeometry(0);
+  let minY = 1e9, maxY = -1e9;
+  for (const l of rotGeom) for (const p of l) { minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+  const rotWidensY = (maxY - minY) > 10.5;
+
+  // Project round-trip through the real save path (the modal's textarea).
+  document.getElementById('projectBtn').click();
+  const json = JSON.parse(document.getElementById('projText').value || '{}');
+  document.getElementById('projCloseBtn').click();
+
+  return {
+    placed, geomN, hitPart: hit && hit.part, rotWidensY,
+    serialised: Array.isArray(json.labels) ? json.labels.length : -1,
+    selIdx: ed.selLabel,
+  };
+});
+
+console.log('\nLabel UI pipeline');
+check('clicking the part places a label and selects it',
+  labelUI.placed === 1 && labelUI.selIdx === 0, `${labelUI.placed} placed, sel ${labelUI.selIdx}`);
+check('placed label produces glyph geometry', labelUI.geomN >= 2, `${labelUI.geomN} loops`);
+check('label is hit-testable for dragging', labelUI.hitPart === 'move', `part ${labelUI.hitPart}`);
+check('any-angle (45°) rotation changes the placed geometry', labelUI.rotWidensY, 'y extent widened');
+check('labels serialise with the project', labelUI.serialised === 1, `${labelUI.serialised}`);
+
+// Emboss / deboss mesh: raised lettering and an engraved recess.
+const label = await page.evaluate(async () => {
+  const { buildModel, glyphIslands } = await import('/js/mesh.js');
+  const { labelLoops } = await import('/js/text.js');
+  const outer = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+  const none = { mode: 'none', size: 0 };
+  const regions = [{ name: 'Base', pts: null, thickness: 4, zBase: 0, top: none, bottom: none }];
+  const loops = labelLoops('AB', 30, 20, 12, {});
+  const isl = glyphIslands(loops);
+
+  const zRange = m => {
+    let lo = 1e9, hi = -1e9;
+    for (let i = 2; i < m.positions.length; i += 3) { lo = Math.min(lo, m.positions[i]); hi = Math.max(hi, m.positions[i]); }
+    return { lo, hi };
+  };
+  const badEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3];
+        const key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+
+  const plain = buildModel(outer, [], [], regions, { arcSegments: 6 });
+  const emb = buildModel(outer, [], [], regions, { arcSegments: 6,
+    labels: [{ loops, mode: 'emboss', face: 'top', size: 1 }] });
+  const deb = buildModel(outer, [], [], regions, { arcSegments: 6,
+    labels: [{ loops, mode: 'deboss', face: 'top', size: 0.8 }] });
+
+  return {
+    nIslands: isl.length,
+    islandHasCounter: isl.some(s => s.holes.length > 0),   // "A" has a counter
+    plainHi: zRange(plain).hi, embHi: zRange(emb).hi,
+    embTris: emb.stats.triangles > plain.stats.triangles,
+    embBad: badEdges(emb),
+    debTris: deb.stats.triangles > plain.stats.triangles,
+    debBad: badEdges(deb),
+    debHi: zRange(deb).hi,
+  };
+});
+
+console.log("\nEmboss / deboss mesh");
+check('glyph loops resolve to islands with counters kept open',
+  label.nIslands === 2 && label.islandHasCounter, `${label.nIslands} islands, counter ${label.islandHasCounter}`);
+check('emboss raises geometry above the face (4 → 5 mm)',
+  near(label.plainHi, 4, 1e-6) && near(label.embHi, 5, 1e-6), `${label.plainHi} → ${label.embHi}`);
+check('embossed model is watertight and adds geometry',
+  label.embBad === 0 && label.embTris, `${label.embBad} bad edges`);
+check('deboss keeps the outer height but adds the recess layers',
+  near(label.debHi, 4, 1e-6) && label.debTris, `top ${label.debHi}`);
+check('debossed model is watertight', label.debBad === 0, `${label.debBad} bad edges`);
+
 console.log('\nText → loops (emboss/deboss foundation)');
 check('blank text yields no loops', textRes.blankN === 0, `${textRes.blankN}`);
 check('"O" produces a counter (outer + hole ≥ 2 loops)', textRes.oN >= 2, `${textRes.oN} loops`);

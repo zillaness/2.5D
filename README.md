@@ -253,6 +253,27 @@ countersink/counterbore/blind feature automatically lands on the true entry
 face — the topmost section for "from top" holes, the bottommost for "from
 bottom".
 
+**Labels — emboss & deboss (🅰 Label).** Put a part number, a name or a mark on
+a face. Click the part to place a label, **drag it anywhere**, and drag its round
+handle to rotate to **any angle** (Shift snaps to 15°). Set the **cap height**,
+the **depth** (how far it stands proud or sinks in), the face (**top or bottom**),
+a font, and **Mirror** for stamps — bottom-face labels mirror by default so they
+read correctly when you flip the part over. Text comes from the platform's own
+fonts, so nothing is bundled and letter counters (the middle of *O*, *A*, *8*)
+stay open.
+
+- **Emboss** — each letter becomes its own raised prism seated on the face and
+  trimmed to the part, unioned by your slicer exactly like overlapping sections.
+- **Deboss** — engraved as a two-layer split of the face: the outer `depth`
+  slice is built as *outline − glyphs* over a full layer beneath, so the recess
+  is real geometry with no 3D boolean kernel involved and every shell stays
+  watertight by construction. (Recessed screw features on a debossed section are
+  cut as plain bores — the layer split would otherwise distort them; you'll get
+  a warning.)
+
+Labels live in the trace overlay (green = emboss, orange = deboss) and are saved
+with the project.
+
 **Suggest regions.** In step 2, **▨ Suggest regions** scans the photo for
 visually-distinct areas inside the object — a boss catching the light, a
 shadowed pocket, a differently-coloured pad — and drops each in as an **editable
@@ -364,6 +385,10 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
+- *(Labels shipped — see “Labels — emboss & deboss”.)* Open threads live in the
+  horizon / tabled lists below.
+
+<!-- superseded:
 - **Emboss / deboss labels** — engrave or raise text (a part number, a name) on
   a face. The text→loops foundation is in (`js/text.js`: platform font →
   marching-squares glyph loops, letter counters included). Remaining: the
@@ -375,6 +400,8 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
   shape of the text. Watch the image-y→model-y flip so text reads upright on the
   printed face (verify on a rendered STL). Placement + depth + face + mirror
   (for stamps) in the UI.
+
+-->
 
 ### Horizon
 
