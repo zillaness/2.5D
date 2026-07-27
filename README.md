@@ -264,14 +264,16 @@ stay open.
 
 - **Emboss** — each letter becomes its own raised prism seated on the face and
   trimmed to the part, unioned by your slicer exactly like overlapping sections.
-- **Deboss** — engraved as a two-layer split of the face: the outer `depth`
-  slice is built as *outline − glyphs* over a full layer beneath, so the recess
-  is real geometry with no 3D boolean kernel involved, every shell stays
-  watertight by construction, and the recess depth is exact. Countersinks,
-  counterbores and blind holes on a debossed section **keep their shape** as
-  long as they enter through the other, un-engraved face (and fit); only a
-  recessed feature entering through the debossed face itself is cut as a plain
-  bore, with a warning.
+- **Deboss** — carved as glyph-shaped blind recesses in a **single watertight
+  shell**: vertical glyph walls, an exact-depth floor, letter counters left
+  standing — the same construction as a blind screw hole, generalized to
+  arbitrary outlines, still with no 3D boolean kernel involved. Each label
+  gets its **own exact depth** (mixed depths on one face are fine).
+  Countersinks, counterbores and blind holes now **keep their shape on the
+  debossed face too**, as long as they sit clear of the lettering; a feature
+  that overlaps a glyph (or a glyph crowding an edge chamfer/fillet) falls
+  back to the previous two-layer split, demoting only that overlapping
+  feature to a plain bore, with a warning.
 
 Labels live in the trace overlay (green = emboss, orange = deboss) and are saved
 with the project.

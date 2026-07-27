@@ -46,9 +46,20 @@ export function buildIslands(outerPts, holePolys) {
   const ex = ClipperLib.JS.PolyTreeToExPolygons(tree);
   const islands = [];
   for (const e of ex) {
-    const outer = fromClipperPath(e.outer);
+    // Clean each ring: a near-tangent union (e.g. a demoted screw bore
+    // grazing a glyph cut) can leave a zero-width out-and-back spur, which
+    // would emit doubled wall faces. 1.2 integer units ≈ 0.0012 mm — far
+    // below print resolution, so real geometry is untouched.
+    const outerC = ClipperLib.Clipper.CleanPolygon(e.outer, 1.2);
+    if (outerC.length < 3) continue;
+    const outer = fromClipperPath(outerC);
     if (Math.abs(signedArea(outer)) < 1) continue; // < 1 mm² — noise
-    islands.push({ outer, holes: e.holes.map(fromClipperPath) });
+    const holes = [];
+    for (const h of e.holes) {
+      const hc = ClipperLib.Clipper.CleanPolygon(h, 1.2);
+      if (hc.length >= 3) holes.push(fromClipperPath(hc));
+    }
+    islands.push({ outer, holes });
   }
   return islands;
 }
@@ -200,6 +211,50 @@ function offsetIsland(island, inset) {
     holes = ordered;
   }
   return { outer, holes };
+}
+
+// Inflate a single ring outward by `delta` mm (round joins). Clipper paths out.
+function inflateRingPaths(ring, delta) {
+  const ClipperLib = CL();
+  const co = new ClipperLib.ClipperOffset(2, 0.05 * SCALE);
+  co.AddPath(toClipperPath(ring), ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
+  const out = new ClipperLib.Paths();
+  co.Execute(out, delta * SCALE);
+  return out;
+}
+
+// Does the island region (outer + holes, from buildIslands) fully contain
+// `paths` (Clipper paths)? Exact via a Clipper difference.
+function regionContainsPaths(island, paths) {
+  const ClipperLib = CL();
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPaths(paths, ClipperLib.PolyType.ptSubject, true);
+  clipper.AddPaths([toClipperPath(island.outer), ...island.holes.map(toClipperPath)],
+    ClipperLib.PolyType.ptClip, true);
+  const sol = new ClipperLib.Paths();
+  clipper.Execute(
+    ClipperLib.ClipType.ctDifference, sol,
+    ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero
+  );
+  let area = 0;
+  for (const p of sol) area += Math.abs(ClipperLib.Clipper.Area(p));
+  return area < 0.05 * SCALE * SCALE; // < 0.05 mm² escape = contained
+}
+
+// Do two rings overlap (one inflated by `pad` mm)? Exact via intersection.
+function ringsOverlap(ringA, ringB, pad) {
+  const ClipperLib = CL();
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPaths(inflateRingPaths(ringA, pad), ClipperLib.PolyType.ptSubject, true);
+  clipper.AddPath(toClipperPath(ringB), ClipperLib.PolyType.ptClip, true);
+  const sol = new ClipperLib.Paths();
+  clipper.Execute(
+    ClipperLib.ClipType.ctIntersection, sol,
+    ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero
+  );
+  let area = 0;
+  for (const p of sol) area += Math.abs(ClipperLib.Clipper.Area(p));
+  return area > 0.01 * SCALE * SCALE;
 }
 
 // Normalize ring winding: CCW (positive signed area) if ccw=true.
@@ -590,6 +645,18 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
     ...c,
     x: c.cx - cx0, y: cy0 - c.cy,
   }));
+  // Deboss recesses: glyph-shaped blind cuts in this prism's top/bottom face,
+  // carved into the single shell (exact depth, no layer split). The caller
+  // (canSingleShell) has already verified every glyph sits clear of the
+  // outline, traced holes, screw features and other labels.
+  const recesses = (params.recesses || []).map(R => ({
+    depth: R.depth,
+    top: R.face !== 'bottom',
+    islands: R.islands.map(isl => ({
+      outer: tx(isl.outer),
+      holes: isl.holes.map(tx),
+    })),
+  }));
 
   const sT = params.top.mode === 'none' ? 0 : Math.min(params.top.size, t);
   const sB = params.bottom.mode === 'none' ? 0 : Math.min(params.bottom.size, t);
@@ -643,8 +710,13 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
     }
   }
 
+  // +0.02 mm: if a demoted bore exactly grazes another cut (e.g. a glyph
+  // ring), tangency at Clipper's integer grid would leave two hole rings
+  // sharing a zero-width segment — doubled wall faces. A real overlap makes
+  // the union merge them into one clean ring; 0.02 mm on a clearance bore
+  // is dimensionally irrelevant.
   const demotedPolys = [...demoted].map(c =>
-    circleRing(c, Math.max(c.d, c.type === 'cb' ? c.cbDia || 0 : 0) / 2, 48));
+    circleRing(c, Math.max(c.d, c.type === 'cb' ? c.cbDia || 0 : 0) / 2 + 0.02, 48));
   live = live.filter(c => !demoted.has(c));
 
   const islands = demoted.size
@@ -659,6 +731,18 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
       pointInPoly(c, is.outer) && !is.holes.some(h => pointInPoly(c, h)));
     if (idx >= 0) perIsland[idx].push(c);
     else warnings.push('A screw hole vanished from the shape and was skipped.');
+  }
+
+  // Assign recesses to islands by glyph centroid.
+  const perIslandRec = islands.map(() => []);
+  for (const R of recesses) {
+    let cx = 0, cy = 0, n = 0;
+    for (const isl of R.islands) for (const p of isl.outer) { cx += p.x; cy += p.y; n++; }
+    const c = { x: cx / n, y: cy / n };
+    const idx = islands.findIndex(is =>
+      pointInPoly(c, is.outer) && !is.holes.some(h => pointInPoly(c, h)));
+    if (idx >= 0) perIslandRec[idx].push(R);
+    else warnings.push('A deboss label vanished from the shape and was skipped.');
   }
 
   const profile = buildProfile(t, params.bottom, params.top, params.arcSegments || 8);
@@ -706,7 +790,25 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
       for (const d of c.feat.disks) emitDisk(mb, c, d.z, d.r, d.up, N);
     }
 
-    // Caps (screw-hole openings become extra earcut holes).
+    // Deboss recesses: vertical glyph walls, an exact-depth floor (with
+    // letter counters left standing), and counter caps flush with the face.
+    const recHere = perIslandRec[islandIdx];
+    for (const R of recHere) {
+      const z0 = R.top ? t - R.depth : 0;
+      const z1 = R.top ? t : R.depth;
+      for (const isl of R.islands) {
+        const outerR = ensureWinding(isl.outer, false);      // hole-like wall
+        zipRings(mb, outerR, z0, outerR, z1);
+        for (const h of isl.holes) {                          // counter pillar
+          const cR = ensureWinding(h, true);
+          zipRings(mb, cR, z0, cR, z1);
+        }
+        addCap(mb, [isl.outer, ...isl.holes], R.top ? t - R.depth : R.depth, R.top);
+        for (const h of isl.holes) addCap(mb, [h], R.top ? t : 0, R.top);
+      }
+    }
+
+    // Caps (screw-hole openings and recess outers become extra earcut holes).
     const bot = slices[0], top = slices[slices.length - 1];
     const botCircle = holesHere
       .filter(c => c.feat.rBottom !== null)
@@ -714,8 +816,11 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
     const topCircle = holesHere
       .filter(c => c.feat.rTop !== null)
       .map(c => circleRing(c, c.feat.rTop, c.ringN));
-    addCap(mb, [bot.outer, ...bot.holes, ...botCircle], bot.z, false);
-    addCap(mb, [top.outer, ...top.holes, ...topCircle], top.z, true);
+    const recRings = wantTop => recHere
+      .filter(R => R.top === wantTop)
+      .flatMap(R => R.islands.map(isl => isl.outer));
+    addCap(mb, [bot.outer, ...bot.holes, ...botCircle, ...recRings(false)], bot.z, false);
+    addCap(mb, [top.outer, ...top.holes, ...topCircle, ...recRings(true)], top.z, true);
   });
 
   const positions = new Float32Array(mb.positions);
@@ -739,6 +844,59 @@ export function buildSolid(outline, tracedHoles, screwHoles, params) {
       warnings,
     },
   };
+}
+
+// Can this footprint's deboss labels be carved into a single shell?
+// Requirements (all in trace space; distances are mirror-invariant):
+//   - the footprint resolves to ONE island;
+//   - every glyph, inflated by the edge-treatment inset + 0.3 mm, stays
+//     inside the island (clear of the outline and traced holes) — exact,
+//     via Clipper;
+//   - no screw hole conflicts with a glyph: a hole that opens on the glyph's
+//     face must stay clear of it laterally; a blind hole from the far face
+//     may overlap in plan only if the depth budget leaves a 0.3 mm web;
+//   - glyphs from different labels don't overlap each other.
+// Anything else falls back to the two-layer split (the proven robust path).
+function canSingleShell(fp, tracedHoles, screws, labels, t, edgeInset) {
+  const isl = buildIslands(fp, tracedHoles || []);
+  if (isl.length !== 1) return false;
+  const margin = edgeInset + 0.3;
+
+  const glyphs = [];
+  for (const L of labels) {
+    for (const g of L.islands) {
+      glyphs.push({ outer: g.outer, holes: g.holes, top: !L.bottom, depth: L.size, L });
+    }
+  }
+  for (const g of glyphs) {
+    if (!regionContainsPaths(isl[0], inflateRingPaths(g.outer, margin))) return false;
+  }
+  for (let a = 0; a < glyphs.length; a++) {
+    for (let b = a + 1; b < glyphs.length; b++) {
+      if (glyphs[a].L === glyphs[b].L) continue; // same label: already unioned
+      if (glyphs[a].top !== glyphs[b].top) continue; // opposite faces coexist
+      if (ringsOverlap(glyphs[a].outer, glyphs[b].outer, 0.2)) return false;
+    }
+  }
+  for (const c of screws || []) {
+    const rim = Math.max(
+      (c.edgeTop && c.edgeTop.size) || 0, (c.edgeBottom && c.edgeBottom.size) || 0);
+    const R = Math.max(
+      c.d || 0,
+      c.type === 'cs' ? c.csDia || 0 : 0,
+      c.type === 'cb' ? c.cbDia || 0 : 0) / 2 + rim + 0.3;
+    const pt = { x: c.cx, y: c.cy };
+    for (const g of glyphs) {
+      const overlap = distToRings(pt, [g.outer, ...g.holes]) < R ||
+        (pointInPoly(pt, g.outer) && !g.holes.some(h => pointInPoly(pt, h)));
+      if (!overlap) continue;
+      const blind = c.type === 'blind' && !c.asBore;
+      const sideTop = c.side !== 'bottom';
+      if (!blind || sideTop === g.top) return false; // opens on the glyph's face
+      if ((c.depth || 0) + g.depth > t - 0.3) return false; // web too thin
+    }
+  }
+  return true;
 }
 
 // Build the whole model from sections ("regions"), each an independent
@@ -856,33 +1014,53 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
     // beneath, leaving a recess shaped like the text. Each layer is its own
     // watertight prism, so the pipeline keeps its by-construction guarantee.
     const deb = labels.filter(L => L.reg === i && L.mode === 'deboss');
-    let dTop = 0, dBot = 0;
+    let dTop = 0, dBot = 0, kDeb = 1;
     for (const L of deb) {
       if (L.bottom) dBot = Math.max(dBot, L.size);
       else dTop = Math.max(dTop, L.size);
     }
     if (dTop + dBot > thickness * 0.8) {
-      const k = (thickness * 0.8) / (dTop + dBot);
-      dTop *= k; dBot *= k;
+      kDeb = (thickness * 0.8) / (dTop + dBot);
+      dTop *= kDeb; dBot *= kDeb;
       warnings.push(`Section "${r.name || i + 1}": deboss depth exceeded the thickness — reduced.`);
     }
-    const cutRings = wantBottom => deb
+    const debScaled = deb.map(L => ({ ...L, size: L.size * kDeb }));
+    const none = { mode: 'none', size: 0 };
+    // Single-shell fast path: when every glyph sits clear of the edge
+    // treatments, screw features and other labels, the recesses are carved
+    // straight into one watertight prism — exact per-label depth, and screw
+    // features keep the full thickness (a countersink on a debossed face
+    // survives). Otherwise fall back to the proven two-layer split.
+    const hasDeb = dTop > 0 || dBot > 0;
+    const sTeff = top.mode === 'none' ? 0 : top.size;
+    const sBeff = bottom.mode === 'none' ? 0 : bottom.size;
+    const single = hasDeb && footprints[i].every(fp =>
+      canSingleShell(fp, tracedHoles, perRegion[i], debScaled, thickness, Math.max(sTeff, sBeff)));
+    const split = hasDeb && !single;
+    const cutRings = wantBottom => debScaled
       .filter(L => L.bottom === wantBottom)
       .flatMap(L => L.islands.flatMap(islandRings));
-    const none = { mode: 'none', size: 0 };
-    const split = dTop > 0 || dBot > 0;
     // The engraved slices overrun INTO the core by EPS so no faces are exactly
     // coincident (ambiguous to union — the same trick that makes overlapping
     // sections robust). The overlap lives inside the slice, so the recess
     // floor — which is the core's own face — sits at exactly `depth`.
     const EPS = split ? 0.01 : 0;
     const layers = [];
-    if (dBot > 0) layers.push({ z: zBase, t: dBot + EPS, cuts: cutRings(true), top: none, bottom, face: 'bottom' });
-    layers.push({
-      z: zBase + dBot, t: thickness - dBot - dTop, cuts: [],
-      top: dTop > 0 ? none : top, bottom: dBot > 0 ? none : bottom, face: 'core',
-    });
-    if (dTop > 0) layers.push({ z: zBase + thickness - dTop - EPS, t: dTop + EPS, cuts: cutRings(false), top, bottom: none, face: 'top' });
+    if (split) {
+      if (dBot > 0) layers.push({ z: zBase, t: dBot + EPS, cuts: cutRings(true), top: none, bottom, face: 'bottom' });
+      layers.push({
+        z: zBase + dBot, t: thickness - dBot - dTop, cuts: [],
+        top: dTop > 0 ? none : top, bottom: dBot > 0 ? none : bottom, face: 'core',
+      });
+      if (dTop > 0) layers.push({ z: zBase + thickness - dTop - EPS, t: dTop + EPS, cuts: cutRings(false), top, bottom: none, face: 'top' });
+    } else {
+      layers.push({
+        z: zBase, t: thickness, cuts: [], top, bottom, face: 'core',
+        recesses: single
+          ? debScaled.map(L => ({ islands: L.islands, depth: L.size, face: L.bottom ? 'bottom' : 'top' }))
+          : undefined,
+      });
+    }
 
     // Screw holes per layer. A recessed feature (countersink/counterbore/
     // blind) survives the deboss split when it enters through an UN-engraved
@@ -936,7 +1114,7 @@ export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
         if (!(lay.t > 1e-6)) continue;
         const mesh = buildSolid(fp, [...tracedHoles, ...lay.cuts], layerHoles(lay, li), {
           thickness: lay.t, zBase: lay.z, top: lay.top, bottom: lay.bottom,
-          arcSegments, chordTol, center,
+          arcSegments, chordTol, center, recesses: lay.recesses,
         });
         if (!mesh) continue;
         parts.push(mesh);
