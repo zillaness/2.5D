@@ -2661,22 +2661,33 @@ for (const btn of document.querySelectorAll('#unitToggle button')) {
   });
 }
 
-// ---------- light / dark theme toggle ----------
+// ---------- theme: dark (default) → light → auto (follow system) ----------
 const THEME_KEY = '2p5d.theme';
-function applyTheme(t) {
-  const light = t === 'light';
+const sysLight = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+let themeMode = 'dark'; // first visit defaults to dark, not the system
+try {
+  const saved = localStorage.getItem(THEME_KEY);
+  if (saved === 'light' || saved === 'auto' || saved === 'dark') themeMode = saved;
+} catch { /* storage blocked */ }
+function applyTheme() {
+  const light = themeMode === 'light' || (themeMode === 'auto' && sysLight && sysLight.matches);
   document.documentElement.classList.toggle('light', light);
-  $('themeToggle').textContent = light ? '☀' : '🌙';
-  $('themeToggle').title = light ? 'Switch to dark theme' : 'Switch to light theme (brighter workspace for tracing)';
+  $('themeToggle').textContent = { dark: '🌙', light: '☀', auto: '🌗' }[themeMode];
+  $('themeToggle').title = {
+    dark: 'Theme: dark — click for light',
+    light: 'Theme: light — click for auto (follow system)',
+    auto: `Theme: auto (following system, currently ${light ? 'light' : 'dark'}) — click for dark`,
+  }[themeMode];
 }
-let savedTheme = 'dark';
-try { savedTheme = localStorage.getItem(THEME_KEY) || 'dark'; } catch { /* storage blocked */ }
-applyTheme(savedTheme);
+applyTheme();
 $('themeToggle').addEventListener('click', () => {
-  const t = document.documentElement.classList.contains('light') ? 'dark' : 'light';
-  try { localStorage.setItem(THEME_KEY, t); } catch { /* storage blocked */ }
-  applyTheme(t);
+  themeMode = { dark: 'light', light: 'auto', auto: 'dark' }[themeMode];
+  try { localStorage.setItem(THEME_KEY, themeMode); } catch { /* storage blocked */ }
+  applyTheme();
 });
+if (sysLight && sysLight.addEventListener) {
+  sysLight.addEventListener('change', () => { if (themeMode === 'auto') applyTheme(); });
+}
 
 updateStepButtons();
 

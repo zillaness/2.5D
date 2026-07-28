@@ -2687,6 +2687,41 @@ check('edge pick + H constraint levels the edge via the solver',
   ui.nCons === 1 && ui.levelled < 1e-3,
   `picks ${ui.picks}, Δy ${ui.levelled}`);
 
+// ---------- theme: dark → light → auto (follow system) ----------
+console.log('\nTheme cycle');
+const themeCycle = await page.evaluate(() => {
+  const btn = document.getElementById('themeToggle');
+  const light = () => document.documentElement.classList.contains('light');
+  const s0 = { icon: btn.textContent, light: light() };          // default: dark
+  btn.click();
+  const s1 = { icon: btn.textContent, light: light() };          // light
+  btn.click();
+  const s2 = { icon: btn.textContent, light: light() };          // auto
+  let saved = null;
+  try { saved = localStorage.getItem('2p5d.theme'); } catch { /* blocked */ }
+  return { s0, s1, s2, saved };
+});
+check('cycle: dark (default) → light → auto, choice persisted',
+  themeCycle.s0.icon === '🌙' && !themeCycle.s0.light &&
+  themeCycle.s1.icon === '☀' && themeCycle.s1.light &&
+  themeCycle.s2.icon === '🌗' && themeCycle.saved === 'auto',
+  `${themeCycle.s0.icon}→${themeCycle.s1.icon}→${themeCycle.s2.icon}, saved ${themeCycle.saved}`);
+await page.emulateMedia({ colorScheme: 'light' });
+await new Promise(r => setTimeout(r, 150));
+const autoLight = await page.evaluate(() => ({
+  cls: document.documentElement.classList.contains('light'),
+  mq: window.matchMedia('(prefers-color-scheme: light)').matches,
+}));
+await page.emulateMedia({ colorScheme: 'dark' });
+await new Promise(r => setTimeout(r, 150));
+const autoDark = await page.evaluate(() => ({
+  cls: document.documentElement.classList.contains('light'),
+  mq: window.matchMedia('(prefers-color-scheme: light)').matches,
+}));
+check('auto mode follows live system changes', autoLight.cls && !autoDark.cls,
+  `light cls/mq ${autoLight.cls}/${autoLight.mq}, dark cls/mq ${autoDark.cls}/${autoDark.mq}`);
+await page.evaluate(() => document.getElementById('themeToggle').click()); // back to dark
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 
