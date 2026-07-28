@@ -310,6 +310,84 @@ function lipMesh(w, h, zTop) {
   return { positions: new Float32Array(mb.positions), indices: new Uint32Array(mb.indices) };
 }
 
+// Assemble an N×M×u bin around ready-made pocket recesses (model coords,
+// centred on the origin). Shared by the single-tool and layout paths.
+function assembleGridBin({ N, M, H, lip, magnets, recesses, warnings }) {
+  const W = N * GF.grid - GF.gap, H2 = M * GF.grid - GF.gap;
+  const binLoop = roundedRect(0, 0, W, H2, GF.binR);
+  const none = { mode: 'none', size: 0 };
+  const body = buildSolid(binLoop, [], [], {
+    thickness: H - GF.baseH, zBase: GF.baseH, top: none, bottom: none,
+    center: { cx: 0, cy: 0 }, recesses,
+  });
+  if (!body) return null;
+  warnings.push(...(body.stats.warnings || []));
+  const parts = [body];
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < M; j++) {
+      const cx = (i + 0.5) * GF.grid - (N * GF.grid) / 2;
+      const cy = (j + 0.5) * GF.grid - (M * GF.grid) / 2;
+      parts.push(padMesh(cx, cy, magnets));
+    }
+  }
+  if (lip) parts.push(lipMesh(W, H2, H));
+  const merged = mergeParts(parts);
+  const zTopAll = lip ? H + GF.lip.h1 + GF.lip.h2 + GF.lip.h3 : H;
+  const maxDepth = Math.max(...recesses.map(r => r.depth));
+  return {
+    ...merged,
+    stats: {
+      triangles: merged.indices.length / 3,
+      sizeX: W, sizeY: H2, sizeZ: zTopAll,
+      slab: { w: W, h: H2, thickness: zTopAll, pocketDepth: maxDepth },
+      cells: { n: N, m: M, u: H / GF.unitH },
+      warnings,
+    },
+  };
+}
+
+// Multi-tool Gridfinity bin: the layout's pockets carved into an N×M bin
+// (the foam-with-gridfinity-base hybrid). cfg: { n, m, unitsH, lip,
+// magnets }; items/opts as in buildLayoutInsert. The container loop for the
+// editor is the bin footprint at origin margin 5 (layout space).
+export function gridContainerLoop(n, m) {
+  const W = n * GF.grid - GF.gap, H2 = m * GF.grid - GF.gap;
+  return roundedRect(5 + W / 2, 5 + H2 / 2, W, H2, GF.binR);
+}
+export function buildLayoutGridBin(cfg, items, opts = {}) {
+  const { clearance = 0.5 } = opts;
+  const { n = 3, m = 2, unitsH = null, lip = true, magnets = false } = cfg;
+  if (!items || !items.length) return { reason: 'empty' };
+  const warnings = [];
+  const loop = gridContainerLoop(n, m);
+  const minWall = lip ? GF.wallLip : GF.wall;
+  const pockets = layoutPockets(items, clearance);
+  const { collisions, escaped } = layoutConflicts(loop, pockets, minWall);
+  if (collisions.size || escaped.size) {
+    return { reason: collisions.size ? 'collision' : 'escaped', collisions, escaped };
+  }
+  const depths = items.map(it => Math.max(0.3, it.depth || it.thickness || 5));
+  const u = unitsH || Math.max(2, Math.ceil((GF.baseH + 1 + Math.max(...depths)) / GF.unitH));
+  const H = u * GF.unitH;
+  const budget = H - GF.baseH - 1;
+  const recesses = pockets.map((p, i) => {
+    let d = depths[i];
+    if (d > budget) {
+      d = budget;
+      warnings.push(`"${items[i].name || `Tool ${i + 1}`}" pocket reduced to ${d.toFixed(1)} mm to clear the base (${u}u bin).`);
+    }
+    return { islands: [{ outer: p.pocket, holes: p.pillars }], depth: d, face: 'top' };
+  });
+  // Layout space → model space: centre on the bin footprint.
+  const bb = bboxOf(loop);
+  const cx = (bb.minX + bb.maxX) / 2, cy = (bb.minY + bb.maxY) / 2;
+  const centred = pts => pts.map(p => ({ x: p.x - cx, y: p.y - cy }));
+  for (const r of recesses) {
+    r.islands = r.islands.map(isl => ({ outer: centred(isl.outer), holes: isl.holes.map(centred) }));
+  }
+  return assembleGridBin({ N: n, M: m, H, lip, magnets, recesses, warnings });
+}
+
 // Gridfinity bin with the tool pocketed into the top. trace as in
 // buildFoamInsert; opts: { clearance, depth, unitsH (null = auto), lip,
 // magnets, pillars }. Returns { positions, indices, stats, cells } or null.
@@ -372,41 +450,11 @@ export function buildGridfinityBin(trace, opts = {}) {
   // Model coords: bin centred on the origin. Pocket recentred to match, and
   // handed to buildSolid in trace-space convention (y down) — the bin is
   // symmetric so only the pocket needs the flip-consistency care.
-  const pocketC = centred(pocket);
-  const pillarsC = pillarLoops.map(centred);
-  const binLoop = roundedRect(0, 0, W, H2, GF.binR);
-  const none = { mode: 'none', size: 0 };
-  const body = buildSolid(binLoop, [], [], {
-    thickness: H - GF.baseH, zBase: GF.baseH, top: none, bottom: none,
-    center: { cx: 0, cy: 0 },
-    recesses: [{ islands: [{ outer: pocketC, holes: pillarsC }], depth: d, face: 'top' }],
-  });
-  if (!body) return null;
-  warnings.push(...(body.stats.warnings || []));
-
-  const parts = [body];
-  // Base pads per cell (model coords; y sign is symmetric so no flip issues).
-  for (let i = 0; i < N; i++) {
-    for (let j = 0; j < M; j++) {
-      const cx = (i + 0.5) * GF.grid - (N * GF.grid) / 2;
-      const cy = (j + 0.5) * GF.grid - (M * GF.grid) / 2;
-      parts.push(padMesh(cx, cy, magnets));
-    }
-  }
-  if (lip) parts.push(lipMesh(W, H2, H));
-
-  const merged = mergeParts(parts);
-  const zTopAll = lip ? H + GF.lip.h1 + GF.lip.h2 + GF.lip.h3 : H;
-  return {
-    ...merged,
-    stats: {
-      triangles: merged.indices.length / 3,
-      sizeX: W, sizeY: H2, sizeZ: zTopAll,
-      slab: { w: W, h: H2, thickness: zTopAll, pocketDepth: d },
-      cells: { n: N, m: M, u },
-      warnings,
-    },
-  };
+  const recesses = [{
+    islands: [{ outer: centred(pocket), holes: pillarLoops.map(centred) }],
+    depth: d, face: 'top',
+  }];
+  return assembleGridBin({ N, M, H, lip, magnets, recesses, warnings });
 }
 
 // ---------- Gridfinity baseplate (custom outline) ----------

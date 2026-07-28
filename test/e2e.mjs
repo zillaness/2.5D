@@ -2435,6 +2435,48 @@ const plate = await page.evaluate(async () => {
   };
 });
 
+// Multi-tool Gridfinity bin (layout pockets in a bin body — the hybrid).
+const gridLayout = await page.evaluate(async () => {
+  const { buildLayoutGridBin } = await import('/js/holders.js');
+  const badEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+  const toolOutline = [{ x: 5, y: 5 }, { x: 35, y: 5 }, { x: 35, y: 20 }, { x: 5, y: 20 }]; // 30×15
+  const mk = (x, y, depth) =>
+    ({ name: 't', outer: toolOutline, holes: [], circles: [], x, y, rot: 0, depth, thickness: 5 });
+  // 3×1 bin (125.5 × 41.5): two tools side by side.
+  const res = buildLayoutGridBin({ n: 3, m: 1, lip: true, magnets: false },
+    [mk(35, 25, 4), mk(90, 25, 6)], { clearance: 0.5 });
+  const clash = buildLayoutGridBin({ n: 3, m: 1, lip: true, magnets: false },
+    [mk(35, 25, 4), mk(45, 25, 6)], { clearance: 0.5 });
+  return {
+    ok: !!res && !res.reason,
+    bad: res && res.positions ? badEdges(res) : -1,
+    sizeX: res?.stats?.sizeX || 0, sizeY: res?.stats?.sizeY || 0,
+    u: res?.stats?.cells?.u || 0,
+    clashReason: clash ? clash.reason : 'none',
+  };
+});
+check('multi-tool Gridfinity bin builds watertight (two depths)',
+  gridLayout.ok && gridLayout.bad === 0, `${gridLayout.bad} bad edges`);
+check('bin footprint = 3×1 cells (125.5 × 41.5), auto 2u',
+  near(gridLayout.sizeX, 125.5, 0.01) && near(gridLayout.sizeY, 41.5, 0.01) && gridLayout.u === 2,
+  `${gridLayout.sizeX} × ${gridLayout.sizeY}, ${gridLayout.u}u`);
+check('overlapping tools in a bin refuse with a reason', gridLayout.clashReason === 'collision',
+  gridLayout.clashReason);
+
 console.log('\nGridfinity baseplate (holders.js)');
 check('L-shaped plate builds watertight', plate.ok && plate.bad === 0, `${plate.bad} bad edges`);
 check('partial cells skipped (8 of 9 sockets in the L)', plate.cellCount === 8, `${plate.cellCount} sockets`);

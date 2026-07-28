@@ -18,7 +18,10 @@ import { parseLength, formatLength, formatLengthLabelled } from './units.js';
 import { measureInfo, loopStats, REGION_LOOP_BASE } from './measure.js';
 import { suggestRegions } from './regions.js';
 import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
-import { buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate, roundedRect } from './holders.js';
+import {
+  buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate,
+  buildLayoutGridBin, gridContainerLoop, roundedRect,
+} from './holders.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
 import { APP_VERSION } from './version.js';
 
@@ -69,7 +72,7 @@ const state = {
   // from the library or the live trace at add time) so projects stay
   // self-contained. Container: a rectangle, or a saved container outline.
   layout: {
-    container: { type: 'rect', w: 220, h: 140, r: 6, name: null, outer: null },
+    container: { type: 'rect', w: 220, h: 140, r: 6, n: 3, m: 2, name: null, outer: null },
     items: [], clearance: 0.5, floor: 3, border: 5,
   },
   // Sections: [0] is the base (footprint = traced outline); extra sections
@@ -854,16 +857,29 @@ const layoutEditor = new LayoutEditor($('layoutCanvas'), {
 function layContainerLoop() {
   const c = state.layout.container;
   if (c.type === 'outline' && c.outer && c.outer.length >= 3) return c.outer;
+  if (c.type === 'grid') return gridContainerLoop(c.n || 3, c.m || 2);
   return roundedRect(5 + c.w / 2, 5 + c.h / 2, c.w, c.h, c.r);
+}
+// A gridfinity container enforces the bin's minimum wall as the border.
+function layBorderEff() {
+  return state.layout.container.type === 'grid'
+    ? (state.holder.grid.lip ? 2.6 : 1.2)
+    : state.layout.border;
 }
 function buildLayoutNow() {
   const L = state.layout;
   try {
+    if (L.container.type === 'grid') {
+      const g = state.holder.grid;
+      return buildLayoutGridBin(
+        { n: L.container.n || 3, m: L.container.m || 2, unitsH: g.unitsH, lip: g.lip, magnets: g.magnets },
+        L.items, { clearance: L.clearance });
+    }
     return buildLayoutInsert({ outer: layContainerLoop() }, L.items, {
       clearance: L.clearance, floor: L.floor, border: L.border,
       defaultDepth: state.regions[0].thickness,
     });
-  } catch (err) { console.error('buildLayoutInsert failed', err); return null; }
+  } catch (err) { console.error('layout build failed', err); return null; }
 }
 
 function refreshLaySelects() {
@@ -882,8 +898,11 @@ function refreshLaySelects() {
     toolSel.appendChild(opt);
   });
   const contSel = $('layContainerSel');
-  const keep = state.layout.container.type === 'outline' ? state.layout.container.name : 'rect';
-  contSel.innerHTML = '<option value="rect">Rectangle</option>';
+  const c = state.layout.container;
+  const keep = c.type === 'outline' ? c.name : c.type === 'grid' ? '__grid' : 'rect';
+  contSel.innerHTML = '<option value="rect">Rectangle</option>' +
+    '<option value="__grid">Gridfinity bin (N×M cells)</option>';
+  if (keep === '__grid') contSel.value = '__grid';
   list.forEach((o, i) => {
     if (o.kind !== 'container') return;
     const opt = document.createElement('option');
@@ -895,16 +914,21 @@ function refreshLaySelects() {
 }
 function syncLayoutFields() {
   const L = state.layout;
-  $('layW').value = fmtDim(L.container.w);
-  $('layH').value = fmtDim(L.container.h);
+  const grid = L.container.type === 'grid';
+  document.querySelector('label[for="layW"]').textContent = grid ? 'Cells wide (N)' : 'Width (mm)';
+  document.querySelector('label[for="layH"]').textContent = grid ? 'Cells deep (M)' : 'Depth (mm)';
+  $('layW').value = grid ? String(L.container.n || 3) : fmtDim(L.container.w);
+  $('layH').value = grid ? String(L.container.m || 2) : fmtDim(L.container.h);
   $('layClearance').value = fmtDim(L.clearance);
   $('layFloor').value = fmtDim(L.floor);
-  $('layBorder').value = fmtDim(L.border);
-  $('layRectFields').hidden = L.container.type !== 'rect';
+  $('layBorder').value = fmtDim(layBorderEff());
+  $('layFloor').disabled = grid;   // grid bins keep the spec base instead
+  $('layBorder').disabled = grid;  // …and enforce the bin's minimum wall
+  $('layRectFields').hidden = L.container.type === 'outline';
 }
 function refreshLayoutEditor() {
   layoutEditor.setLayout(layContainerLoop(), state.layout.items,
-    state.layout.clearance, state.layout.border);
+    state.layout.clearance, layBorderEff());
   updateLayoutInfo();
 }
 function updateLayoutInfo() {
@@ -920,9 +944,11 @@ function updateLayoutInfo() {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
-  $('layoutInfo').textContent =
-    `Container ${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm · ${n} tool${n === 1 ? '' : 's'}` +
-    (n ? ` · insert ${fmtDimL(Math.max(0.5, L.floor) + maxD)} thick` : '');
+  const grid = L.container.type === 'grid';
+  $('layoutInfo').textContent = grid
+    ? `Gridfinity ${L.container.n}×${L.container.m} (${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm) · ${n} tool${n === 1 ? '' : 's'}`
+    : `Container ${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm · ${n} tool${n === 1 ? '' : 's'}` +
+      (n ? ` · insert ${fmtDimL(Math.max(0.5, L.floor) + maxD)} thick` : '');
   $('layoutWarn').hidden = !bad;
   $('layoutWarn').textContent = bad
     ? `${bad} tool${bad === 1 ? '' : 's'} in red — overlapping another pocket or crossing the border. Drag to fix.`
@@ -955,6 +981,9 @@ $('layContainerSel').addEventListener('change', e => {
   if (v === 'rect') {
     state.layout.container.type = 'rect';
     state.layout.container.name = null;
+  } else if (v === '__grid') {
+    state.layout.container.type = 'grid';
+    state.layout.container.name = null;
   } else {
     const o = libLoad()[+v];
     if (o) {
@@ -967,10 +996,15 @@ $('layContainerSel').addEventListener('change', e => {
   syncLayoutFields();
   refreshLayoutEditor();
 });
-for (const [id, key] of [['layW', 'w'], ['layH', 'h']]) {
+for (const [id, key, cells] of [['layW', 'w', 'n'], ['layH', 'h', 'm']]) {
   $(id).addEventListener('change', e => {
-    const mm = parseDim(e.target.value);
-    if (mm > 10) state.layout.container[key] = mm;
+    if (state.layout.container.type === 'grid') {
+      const u = parseInt(e.target.value, 10);
+      if (u >= 1 && u <= 12) state.layout.container[cells] = u;
+    } else {
+      const mm = parseDim(e.target.value);
+      if (mm > 10) state.layout.container[key] = mm;
+    }
     syncLayoutFields();
     refreshLayoutEditor();
   });
@@ -1060,12 +1094,14 @@ $('layPreviewBtn').addEventListener('click', () => {
 $('layExportBtn').addEventListener('click', () => {
   const res = buildLayoutNow();
   if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the insert.'); return; }
-  const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} drawer`);
-  deliverExport(blob, `${state.fileName}-drawer-2p5d.stl`);
+  const grid = state.layout.container.type === 'grid';
+  const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} ${grid ? 'gridfinity' : 'drawer'}`);
+  deliverExport(blob, `${state.fileName}-${grid ? 'bin' : 'drawer'}-2p5d.stl`);
 });
 $('layExportSvgBtn').addEventListener('click', () => {
   const res = buildLayoutNow();
   if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return; }
+  if (!res.template) { toast('Template SVG is for flat drawer inserts (foam cutting) — export the bin as STL.'); return; }
   const T = res.template;
   const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
   const holes = T.pockets.flatMap(p => [shift(p.pocket), ...p.pillars.map(shift)]);

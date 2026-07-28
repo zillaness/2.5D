@@ -316,6 +316,14 @@ default off). Base pads, body-with-pocket and lip are built as
 watertight lofts and prisms — no CSG kernel — and mate with standard
 baseplates.
 
+**Multi-tool Gridfinity bins (the foam hybrid).** In the layout editor,
+switch the container to **Gridfinity bin (N×M cells)** — the same drag-and
+-rotate layout then carves into a spec bin body instead of a flat slab:
+every tool gets its own pocket depth, the bin's minimum wall is enforced as
+the border, height auto-sizes in 7 mm units, and the lip/magnet toggles
+follow the Gridfinity settings. That's Kaizen-style tool foam with a
+Gridfinity base, from photos.
+
 **Custom Gridfinity baseplates.** Pick **Gridfinity baseplate** with the
 *drawer itself* traced (photograph the drawer bottom on/around paper —
 beyond-paper capture helps) and get a baseplate in exactly that shape: spec
