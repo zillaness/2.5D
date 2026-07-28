@@ -18,7 +18,8 @@ import { parseLength, formatLength, formatLengthLabelled } from './units.js';
 import { measureInfo, loopStats, REGION_LOOP_BASE } from './measure.js';
 import { suggestRegions } from './regions.js';
 import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
-import { buildFoamInsert } from './holders.js';
+import { buildFoamInsert, buildLayoutInsert, roundedRect } from './holders.js';
+import { LayoutEditor } from './ui/layoutEditor.js';
 import { APP_VERSION } from './version.js';
 
 // Export quality presets: chord tolerance (mm) for round features and the
@@ -62,6 +63,13 @@ const state = {
     foam: { clearance: 0.5, margin: 10, cornerR: 4, depth: null, floor: 3, notch: 'bottom', notchDia: 25 },
   },
   holderMesh: null,
+  // Multi-tool drawer layout. Items embed their outline geometry (copied
+  // from the library or the live trace at add time) so projects stay
+  // self-contained. Container: a rectangle, or a saved container outline.
+  layout: {
+    container: { type: 'rect', w: 220, h: 140, r: 6, name: null, outer: null },
+    items: [], clearance: 0.5, floor: 3, border: 5,
+  },
   // Sections: [0] is the base (footprint = traced outline); extra sections
   // carry their own drawn footprint, thickness and floor offset (overhangs).
   regions: [
@@ -666,27 +674,37 @@ function buildHolderNow() {
   try { return buildFoamInsert(trace, holderParams()); }
   catch (err) { console.error('buildFoamInsert failed', err); return null; }
 }
+const LAYOUT_REASONS = {
+  empty: 'Add tools to the layout first (Multi-tool drawer → arrange).',
+  collision: 'Fix the red overlapping pockets in the layout.',
+  escaped: 'Fix the red tools crossing the layout border.',
+};
 function rebuildHolder() {
   clearTimeout(holderTimer);
   holderTimer = setTimeout(() => {
     if (state.holder.type === 'none') return;
-    const res = buildHolderNow();
-    state.holderMesh = res;
-    if (!res) {
+    const isLayout = state.holder.type === 'layout';
+    const res = isLayout ? buildLayoutNow() : buildHolderNow();
+    state.holderMesh = res && !res.reason ? res : null;
+    if (!state.holderMesh) {
       $('meshInfo').textContent = '';
       $('meshWarn').hidden = false;
-      $('meshWarn').textContent = 'Could not build the foam insert — check the outline.';
+      $('meshWarn').textContent = (res && LAYOUT_REASONS[res.reason]) ||
+        (isLayout ? 'Could not build the drawer insert — check the layout.'
+                  : 'Could not build the foam insert — check the outline.');
       if (viewer) viewer.setMesh(null);
       return;
     }
-    const s = res.stats;
+    const s = state.holderMesh.stats;
     $('meshInfo').textContent =
-      `Foam insert: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}\n` +
-      `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}\nTriangles: ${s.triangles}`;
+      `${isLayout ? 'Drawer insert' : 'Foam insert'}: ` +
+      `${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}\n` +
+      `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n` +
+      `Triangles: ${s.triangles}`;
     const warns = s.warnings || [];
     $('meshWarn').hidden = !warns.length;
     $('meshWarn').textContent = warns.join('\n');
-    if (viewer) viewer.setMesh(res, true);
+    if (viewer) viewer.setMesh(state.holderMesh, true);
   }, 120);
 }
 function syncHolderPanel() {
@@ -704,6 +722,7 @@ $('holderType').addEventListener('change', e => {
   state.holder.type = e.target.value;
   $('foamParams').hidden = state.holder.type !== 'foam';
   if (state.holder.type === 'none') { state.holderMesh = null; rebuildMesh(true); }
+  else if (state.holder.type === 'layout') { openLayoutModal(); rebuildHolder(); }
   else rebuildHolder();
 });
 // Numeric foam fields; floor may be 0 (through pocket), the rest must be > 0.
@@ -745,6 +764,236 @@ $('exportFoamSvgBtn').addEventListener('click', () => {
   const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
   const blob = toSVG(shift(T.slab), [shift(T.pocket), ...T.pillars.map(shift)], T.w, T.h, {});
   deliverExport(blob, `${state.fileName}-foam-template.svg`);
+});
+
+// ---------- multi-tool drawer layout ----------
+
+const layoutEditor = new LayoutEditor($('layoutCanvas'), {
+  onSelect: i => syncLaySelPanel(i),
+  onChange: final => { if (final) updateLayoutInfo(); },
+});
+
+// The container loop in layout mm space (origin margin 5, like the library).
+function layContainerLoop() {
+  const c = state.layout.container;
+  if (c.type === 'outline' && c.outer && c.outer.length >= 3) return c.outer;
+  return roundedRect(5 + c.w / 2, 5 + c.h / 2, c.w, c.h, c.r);
+}
+function buildLayoutNow() {
+  const L = state.layout;
+  try {
+    return buildLayoutInsert({ outer: layContainerLoop() }, L.items, {
+      clearance: L.clearance, floor: L.floor, border: L.border,
+      defaultDepth: state.regions[0].thickness,
+    });
+  } catch (err) { console.error('buildLayoutInsert failed', err); return null; }
+}
+
+function refreshLaySelects() {
+  const list = libLoad();
+  const toolSel = $('layToolSel');
+  toolSel.innerHTML = '';
+  const cur = document.createElement('option');
+  cur.value = '__current';
+  cur.textContent = '← current traced outline';
+  toolSel.appendChild(cur);
+  list.forEach((o, i) => {
+    if (o.kind === 'container') return;
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = o.name;
+    toolSel.appendChild(opt);
+  });
+  const contSel = $('layContainerSel');
+  const keep = state.layout.container.type === 'outline' ? state.layout.container.name : 'rect';
+  contSel.innerHTML = '<option value="rect">Rectangle</option>';
+  list.forEach((o, i) => {
+    if (o.kind !== 'container') return;
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = `⬚ ${o.name}`;
+    if (o.name === keep) opt.selected = true;
+    contSel.appendChild(opt);
+  });
+}
+function syncLayoutFields() {
+  const L = state.layout;
+  $('layW').value = fmtDim(L.container.w);
+  $('layH').value = fmtDim(L.container.h);
+  $('layClearance').value = fmtDim(L.clearance);
+  $('layFloor').value = fmtDim(L.floor);
+  $('layBorder').value = fmtDim(L.border);
+  $('layRectFields').hidden = L.container.type !== 'rect';
+}
+function refreshLayoutEditor() {
+  layoutEditor.setLayout(layContainerLoop(), state.layout.items,
+    state.layout.clearance, state.layout.border);
+  updateLayoutInfo();
+}
+function updateLayoutInfo() {
+  const L = state.layout;
+  const n = L.items.length;
+  const conf = layoutEditor.conflicts;
+  const bad = conf.collisions.size + conf.escaped.size;
+  const depths = L.items.map(it => it.depth || it.thickness || state.regions[0].thickness);
+  const maxD = depths.length ? Math.max(...depths) : 0;
+  const loop = layContainerLoop();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of loop) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  $('layoutInfo').textContent =
+    `Container ${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm · ${n} tool${n === 1 ? '' : 's'}` +
+    (n ? ` · insert ${fmtDimL(Math.max(0.5, L.floor) + maxD)} thick` : '');
+  $('layoutWarn').hidden = !bad;
+  $('layoutWarn').textContent = bad
+    ? `${bad} tool${bad === 1 ? '' : 's'} in red — overlapping another pocket or crossing the border. Drag to fix.`
+    : '';
+  if (state.holder.type === 'layout') rebuildHolder();
+}
+function syncLaySelPanel(i) {
+  const it = state.layout.items[i];
+  $('laySelPanel').hidden = !it;
+  if (!it) return;
+  $('laySelName').textContent = `Selected: ${it.name}`;
+  $('laySelDepth').value = it.depth ? fmtDim(it.depth) : '';
+  $('laySelDepth').placeholder = `auto (${fmtDim(it.thickness || state.regions[0].thickness)})`;
+  $('laySelRot').value = (it.rot || 0).toFixed(0);
+}
+function openLayoutModal() {
+  refreshLaySelects();
+  syncLayoutFields();
+  syncLaySelPanel(layoutEditor.sel);
+  $('layoutModal').hidden = false;
+  refreshLayoutEditor();
+}
+
+$('layoutCloseBtn').addEventListener('click', () => { $('layoutModal').hidden = true; });
+$('layoutModal').addEventListener('pointerdown', e => {
+  if (e.target === $('layoutModal')) $('layoutModal').hidden = true;
+});
+$('layContainerSel').addEventListener('change', e => {
+  const v = e.target.value;
+  if (v === 'rect') {
+    state.layout.container.type = 'rect';
+    state.layout.container.name = null;
+  } else {
+    const o = libLoad()[+v];
+    if (o) {
+      state.layout.container = {
+        ...state.layout.container, type: 'outline', name: o.name,
+        outer: structuredClone(o.outer),
+      };
+    }
+  }
+  syncLayoutFields();
+  refreshLayoutEditor();
+});
+for (const [id, key] of [['layW', 'w'], ['layH', 'h']]) {
+  $(id).addEventListener('change', e => {
+    const mm = parseDim(e.target.value);
+    if (mm > 10) state.layout.container[key] = mm;
+    syncLayoutFields();
+    refreshLayoutEditor();
+  });
+}
+for (const [id, key, min] of [['layClearance', 'clearance', 0], ['layFloor', 'floor', 0.5], ['layBorder', 'border', 0.5]]) {
+  $(id).addEventListener('change', e => {
+    const mm = parseDim(e.target.value);
+    if (mm !== null && mm >= min) state.layout[key] = mm;
+    syncLayoutFields();
+    refreshLayoutEditor();
+  });
+}
+$('layAddBtn').addEventListener('click', () => {
+  const v = $('layToolSel').value;
+  let src = null;
+  if (v === '__current') {
+    const { outer, holes, circles } = traceEditor.getTrace();
+    if (!outer || outer.length < 3) { toast('No traced outline to add yet.'); return; }
+    // Normalize like the library does so placement math matches.
+    let minX = Infinity, minY = Infinity;
+    for (const p of outer) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); }
+    const off = p => ({ x: p.x - minX + 5, y: p.y - minY + 5 });
+    src = {
+      name: state.fileName || 'current outline',
+      outer: outer.map(off), holes: holes.map(h => h.map(off)),
+      circles: circles.map(c => ({ ...c, cx: c.cx - minX + 5, cy: c.cy - minY + 5 })),
+      thickness: state.regions[0].thickness,
+    };
+  } else {
+    const o = libLoad()[+v];
+    if (!o) { toast('Pick a tool outline first.'); return; }
+    src = structuredClone(o);
+    if (!src.thickness) src.thickness = state.regions[0].thickness;
+  }
+  const loop = layContainerLoop();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of loop) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const n = state.layout.items.length;
+  state.layout.items.push({
+    name: src.name, outer: src.outer, holes: src.holes || [], circles: src.circles || [],
+    thickness: src.thickness, depth: null, rot: 0,
+    x: (minX + maxX) / 2 + (n % 3) * 12 - 12,
+    y: (minY + maxY) / 2 + Math.floor(n / 3) * 12,
+  });
+  layoutEditor.sel = state.layout.items.length - 1;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+});
+$('layRemoveBtn').addEventListener('click', () => {
+  if (layoutEditor.sel < 0) return;
+  state.layout.items.splice(layoutEditor.sel, 1);
+  layoutEditor.sel = -1;
+  syncLaySelPanel(-1);
+  refreshLayoutEditor();
+});
+$('laySelDepth').addEventListener('change', e => {
+  const it = state.layout.items[layoutEditor.sel];
+  if (!it) return;
+  const raw = e.target.value.trim();
+  if (raw === '') it.depth = null;
+  else {
+    const mm = parseDim(raw);
+    if (mm > 0) it.depth = mm;
+  }
+  syncLaySelPanel(layoutEditor.sel);
+  updateLayoutInfo();
+});
+$('laySelRot').addEventListener('change', e => {
+  const it = state.layout.items[layoutEditor.sel];
+  if (!it) return;
+  const deg = parseFloat(e.target.value);
+  if (Number.isFinite(deg)) it.rot = ((deg % 360) + 360) % 360;
+  refreshLayoutEditor();
+  syncLaySelPanel(layoutEditor.sel);
+});
+$('layPreviewBtn').addEventListener('click', () => {
+  state.holder.type = 'layout';
+  $('holderType').value = 'layout';
+  $('foamParams').hidden = true;
+  $('layoutModal').hidden = true;
+  goStep(3);
+  rebuildHolder();
+});
+$('layExportBtn').addEventListener('click', () => {
+  const res = buildLayoutNow();
+  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the insert.'); return; }
+  const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} drawer`);
+  deliverExport(blob, `${state.fileName}-drawer-2p5d.stl`);
+});
+$('layExportSvgBtn').addEventListener('click', () => {
+  const res = buildLayoutNow();
+  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return; }
+  const T = res.template;
+  const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
+  const holes = T.pockets.flatMap(p => [shift(p.pocket), ...p.pillars.map(shift)]);
+  const blob = toSVG(shift(T.slab), holes, T.w, T.h, {});
+  deliverExport(blob, `${state.fileName}-drawer-template.svg`);
 });
 
 // ---------- wiring: step 1 ----------
@@ -1712,6 +1961,7 @@ function serializeProject(includePhoto) {
     seg: state.seg,
     model: state.model,
     holder: state.holder,
+    layout: state.layout,
     regions: state.regions,
     trace: traceEditor.getTrace(),
     measurements: traceEditor.measurements,
@@ -1794,8 +2044,17 @@ function loadProject(p) {
   refreshModelFields();
   if (p.holder) {
     state.holder = {
-      type: p.holder.type === 'foam' ? 'foam' : 'none',
+      type: ['foam', 'layout'].includes(p.holder.type) ? p.holder.type : 'none',
       foam: { ...state.holder.foam, ...(p.holder.foam || {}) },
+    };
+  }
+  if (p.layout && Array.isArray(p.layout.items)) {
+    state.layout = {
+      container: { ...state.layout.container, ...(p.layout.container || {}) },
+      items: structuredClone(p.layout.items),
+      clearance: p.layout.clearance ?? state.layout.clearance,
+      floor: p.layout.floor ?? state.layout.floor,
+      border: p.layout.border ?? state.layout.border,
     };
   }
   syncHolderPanel();
@@ -1936,7 +2195,7 @@ function refreshLibList() {
   list.forEach((o, i) => {
     const opt = document.createElement('option');
     opt.value = String(i);
-    opt.textContent = o.name;
+    opt.textContent = `${o.name}${o.kind === 'container' ? ' ⬚' : ''}`;
     sel.appendChild(opt);
   });
   if (cur && +cur < list.length) sel.value = cur;
@@ -1945,6 +2204,7 @@ function refreshLibList() {
   $('libLoadBtn').disabled = !ok;
   $('libDeleteBtn').disabled = !ok;
   $('libNote').textContent = ok ? '' : 'Storage is unavailable here — the library needs the offline or hosted copy.';
+  if (!$('layoutModal').hidden) refreshLaySelects();
 }
 
 $('libSaveBtn').addEventListener('click', () => {
@@ -1957,6 +2217,8 @@ $('libSaveBtn').addEventListener('click', () => {
   const M = 5, off = p => ({ x: p.x - minX + M, y: p.y - minY + M });
   const entry = {
     name,
+    kind: $('libKind').value === 'container' ? 'container' : 'tool',
+    thickness: state.regions[0].thickness, // pocket-depth default for layouts
     outer: outer.map(off),
     holes: holes.map(h => h.map(off)),
     circles: circles.map(c => ({ ...c, cx: c.cx - minX + M, cy: c.cy - minY + M })),

@@ -264,6 +264,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .modal-head { display: flex; justify-content: space-between; align-items: center; }
 .modal-head h3 { font-size: 14px; }
+.modal-box.wide { width: min(1020px, 96vw); max-height: 94vh; overflow-y: auto; }
+#layoutCanvas { width: 100%; border: 1px solid var(--border); border-radius: 8px; touch-action: none; background: var(--bg1); }
 .cad-views {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));

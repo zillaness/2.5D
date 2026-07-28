@@ -485,6 +485,7 @@
         <select id="holderType">
           <option value="none">None — export the object itself</option>
           <option value="foam">Foam-style insert (pocket in a slab)</option>
+          <option value="layout">Multi-tool drawer insert (arrange…)</option>
         </select>
       </div>
       <div id="foamParams" hidden>
@@ -616,6 +617,10 @@
     in this browser.</p>
     <div class="btn-row">
       <input type="text" id="libName" placeholder="Outline name" style="flex:1">
+      <select id="libKind" title="Tools get pocketed into inserts; containers are the drawer/box shapes that hold them">
+        <option value="tool">Tool</option>
+        <option value="container">Container</option>
+      </select>
       <button id="libSaveBtn" class="btn">Save outline</button>
     </div>
     <div class="btn-row">
@@ -624,6 +629,83 @@
       <button id="libDeleteBtn" class="btn small">Delete</button>
     </div>
     <p id="libNote" class="hint"></p>
+  </div>
+</div>
+
+<div id="layoutModal" class="modal-overlay" hidden>
+  <div class="modal-box wide">
+    <div class="modal-head">
+      <h3>Multi-tool drawer / insert layout</h3>
+      <button id="layoutCloseBtn" class="btn small">✕ Close</button>
+    </div>
+    <div style="display:flex; gap:14px; flex-wrap:wrap">
+      <div style="flex:1 1 540px; min-width:320px">
+        <canvas id="layoutCanvas" width="960" height="640"></canvas>
+        <p id="layoutInfo" class="info" style="margin:6px 0 0"></p>
+        <p id="layoutWarn" class="warn" hidden></p>
+      </div>
+      <div style="flex:0 0 250px; display:flex; flex-direction:column; gap:8px">
+        <h3 style="margin:0">Container</h3>
+        <div class="field">
+          <select id="layContainerSel"><option value="rect">Rectangle</option></select>
+        </div>
+        <div class="field-row" id="layRectFields">
+          <div class="field">
+            <label for="layW">Width (mm)</label>
+            <input type="text" inputmode="decimal" id="layW" value="220">
+          </div>
+          <div class="field">
+            <label for="layH">Depth (mm)</label>
+            <input type="text" inputmode="decimal" id="layH" value="140">
+          </div>
+        </div>
+        <h3 style="margin:6px 0 0">Tools</h3>
+        <div class="btn-row">
+          <select id="layToolSel" style="flex:1"></select>
+          <button id="layAddBtn" class="btn small">＋ Add</button>
+        </div>
+        <div id="laySelPanel" hidden>
+          <p class="hint" id="laySelName" style="margin:0"></p>
+          <div class="field-row">
+            <div class="field">
+              <label for="laySelDepth">Pocket depth (mm)</label>
+              <input type="text" inputmode="decimal" id="laySelDepth" placeholder="auto">
+            </div>
+            <div class="field">
+              <label for="laySelRot">Rotation (°)</label>
+              <input type="text" inputmode="decimal" id="laySelRot" value="0">
+            </div>
+          </div>
+          <button id="layRemoveBtn" class="btn small">Remove tool</button>
+        </div>
+        <h3 style="margin:6px 0 0">Insert</h3>
+        <div class="field-row">
+          <div class="field">
+            <label for="layClearance">Clearance (mm)</label>
+            <input type="text" inputmode="decimal" id="layClearance" value="0.5">
+          </div>
+          <div class="field">
+            <label for="layFloor">Floor (mm)</label>
+            <input type="text" inputmode="decimal" id="layFloor" value="3">
+          </div>
+        </div>
+        <div class="field">
+          <label for="layBorder">Border (mm)</label>
+          <input type="text" inputmode="decimal" id="layBorder" value="5">
+        </div>
+        <div class="btn-row">
+          <button id="layPreviewBtn" class="btn">👁 Preview in 3D</button>
+        </div>
+        <div class="btn-row">
+          <button id="layExportBtn" class="btn primary">⬇ Insert STL</button>
+          <button id="layExportSvgBtn" class="btn" title="True-scale container + pocket outlines for cutting real foam">⬇ Template SVG</button>
+        </div>
+        <p class="hint">Drag tools to place them; drag the round handle to
+        rotate (Shift snaps 15°). Red = overlapping or crossing the border.
+        Tools and containers come from the outline library (Project modal) —
+        or add the currently traced outline directly.</p>
+      </div>
+    </div>
   </div>
 </div>
 

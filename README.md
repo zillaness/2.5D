@@ -290,9 +290,22 @@ wrench's hang hole) exactly the way letter counters stand in a debossed
 label, and it's the same single-shell recess construction, so the insert is
 one watertight mesh with an exact-depth floor. Export as **STL**, or as a
 true-scale **cut template SVG** (slab + pocket + pillars) for cutting real
-Kaizen foam on a laser or with a knife. Drawer layouts with multiple tools,
-Gridfinity bins and wall holsters are next — the roadmap lives in
-`docs/holders-prd.md`.
+Kaizen foam on a laser or with a knife.
+
+**Multi-tool drawer layouts.** Pick **Multi-tool drawer insert** to open the
+layout editor: choose a container (a plain rectangle, or a **saved container
+outline** — photograph the drawer itself on paper and save its trace), then
+add tools from the **outline library** or drop in the currently traced
+outline. Drag tools to place them, drag the round handle to rotate (Shift
+snaps 15°); anything overlapping another pocket or crossing the border turns
+red and blocks export until fixed. Each tool pockets at its **own depth**
+(saved with the tool, overridable per placement — one insert can hold a
+6 mm wrench next to a 2.5 mm ruler). Library entries now carry a **kind**
+(tool / container) and their thickness. Preview in 3D, export the insert as
+STL, or export the whole layout as a true-scale template SVG for cutting
+foam. Layouts save with the project, geometry embedded, so they survive a
+different browser. Gridfinity bins and wall holsters are next — the roadmap
+lives in `docs/holders-prd.md`.
 
 **Suggest regions.** In step 2, **▨ Suggest regions** scans the photo for
 visually-distinct areas inside the object — a boss catching the light, a
@@ -434,9 +447,7 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Tabled (deprioritized for now)
 
-- Multi-tool scanning → drawer/toolbox layout — scan several tools, save their
-  traces, and pack them into a drawer or toolbox insert (per-tool pockets,
-  nesting). The outline library is the seed for this.
+- *(Multi-tool drawer layout shipped — see "Multi-tool drawer layouts".)*
 - Photo/scan line-art vectorization (two-point scale) — only needed to recover
   geometry from a pure raster photo of a drawing; PDF (in the Blueprint fork)
   covers the common case.

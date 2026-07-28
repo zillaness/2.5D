@@ -84,6 +84,125 @@ const bboxOf = pts => {
   return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
 };
 
+// ---------- multi-tool layout (drawer / toolbox inserts) ----------
+
+// Place a library outline: rotate about its bbox centre, then move that
+// centre to (x, y). Layout space is mm, y down (same as trace space).
+export function placeLoop(pts, item) {
+  const bb = bboxOf(pts);
+  const c = { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
+  const a = ((item.rot || 0) * Math.PI) / 180;
+  const cos = Math.cos(a), sin = Math.sin(a);
+  return pts.map(p => {
+    const dx = p.x - c.x, dy = p.y - c.y;
+    return { x: item.x + dx * cos - dy * sin, y: item.y + dx * sin + dy * cos };
+  });
+}
+
+// Per-item pocket geometry in layout space: clearance-offset outline plus
+// standing pillars from the tool's holes/circles. Shared by the editor
+// (collision display), the mesh builder and the cut-template export.
+export function layoutPockets(items, clearance) {
+  return items.map(item => {
+    const pocket = offsetLoop(placeLoop(item.outer, item), Math.max(0, clearance))[0] || null;
+    const pillars = [];
+    const sources = [
+      ...(item.holes || []),
+      ...(item.circles || []).map(c => circleToPolygon(c.cx, c.cy, c.d, 32)),
+    ];
+    for (const h of sources) {
+      const inner = offsetLoop(placeLoop(h, item), -Math.max(0, clearance))[0];
+      if (inner && Math.abs(signedArea(inner)) >= 4) pillars.push(inner);
+    }
+    return { pocket, pillars };
+  });
+}
+
+// Validity: pockets must stay `border` mm inside the container and must not
+// overlap each other. Returns { collisions: Set(index), escaped: Set(index) }.
+export function layoutConflicts(containerOuter, pockets, border) {
+  const ClipperLib = CL();
+  const collisions = new Set(), escaped = new Set();
+  const inner = offsetLoop(containerOuter, -Math.max(0.5, border))[0];
+  for (let i = 0; i < pockets.length; i++) {
+    const p = pockets[i].pocket;
+    if (!p) { escaped.add(i); continue; }
+    if (!inner) { escaped.add(i); continue; }
+    const clipper = new ClipperLib.Clipper();
+    clipper.AddPath(positivePath(toClipperPath(p)), ClipperLib.PolyType.ptSubject, true);
+    clipper.AddPath(positivePath(toClipperPath(inner)), ClipperLib.PolyType.ptClip, true);
+    const sol = new ClipperLib.Paths();
+    clipper.Execute(ClipperLib.ClipType.ctDifference, sol,
+      ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+    let area = 0;
+    for (const path of sol) area += Math.abs(ClipperLib.Clipper.Area(path));
+    if (area > 0.05 * SCALE * SCALE) escaped.add(i);
+  }
+  for (let i = 0; i < pockets.length; i++) {
+    for (let j = i + 1; j < pockets.length; j++) {
+      const a = pockets[i].pocket, b = pockets[j].pocket;
+      if (!a || !b) continue;
+      const clipper = new ClipperLib.Clipper();
+      clipper.AddPath(positivePath(toClipperPath(a)), ClipperLib.PolyType.ptSubject, true);
+      clipper.AddPath(positivePath(toClipperPath(b)), ClipperLib.PolyType.ptClip, true);
+      const sol = new ClipperLib.Paths();
+      clipper.Execute(ClipperLib.ClipType.ctIntersection, sol,
+        ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+      let area = 0;
+      for (const path of sol) area += Math.abs(ClipperLib.Clipper.Area(path));
+      if (area > 0.05 * SCALE * SCALE) { collisions.add(i); collisions.add(j); }
+    }
+  }
+  return { collisions, escaped };
+}
+
+// Drawer / toolbox insert: the container outline extruded as a slab with one
+// pocket recess per placed tool, each at its own depth.
+//
+// container: { outer } in layout mm; items: [{ outer, holes, circles, x, y,
+// rot, depth }]; opts: { clearance, floor, border, defaultDepth }.
+// Returns { positions, indices, stats, template } or null. The layout must
+// be conflict-free (run layoutConflicts first) — conflicts return null with
+// a reason in `reason`.
+export function buildLayoutInsert(container, items, opts = {}) {
+  const { clearance = 0.5, floor = 3, border = 5, defaultDepth = 5 } = opts;
+  if (!container || !container.outer || container.outer.length < 3) return null;
+  if (!items || !items.length) return { reason: 'empty' };
+  const warnings = [];
+
+  const pockets = layoutPockets(items, clearance);
+  const { collisions, escaped } = layoutConflicts(container.outer, pockets, border);
+  if (collisions.size || escaped.size) {
+    return { reason: collisions.size ? 'collision' : 'escaped', collisions, escaped };
+  }
+
+  const depths = items.map(it => Math.max(0.3, it.depth || it.thickness || defaultDepth));
+  const maxDepth = Math.max(...depths);
+  const thickness = Math.max(0.5, floor) + maxDepth; // layouts always keep a floor
+  if (floor < 1) warnings.push(`Thin insert floor (${Math.max(0.5, floor).toFixed(1)} mm).`);
+
+  const none = { mode: 'none', size: 0 };
+  const recesses = pockets.map((p, i) => ({
+    islands: [{ outer: p.pocket, holes: p.pillars }],
+    depth: depths[i], face: 'top',
+  }));
+  const mesh = buildSolid(container.outer, [], [], {
+    thickness, zBase: 0, top: none, bottom: none, recesses,
+  });
+  if (!mesh) return null;
+  mesh.stats.warnings = [...warnings, ...(mesh.stats.warnings || [])];
+  const bb = bboxOf(container.outer);
+  mesh.stats.slab = { w: bb.w, h: bb.h, thickness, pocketDepth: maxDepth };
+  return {
+    ...mesh,
+    template: {
+      slab: container.outer,
+      pockets: pockets.map(p => ({ pocket: p.pocket, pillars: p.pillars })),
+      origin: { x: bb.minX, y: bb.minY }, w: bb.w, h: bb.h,
+    },
+  };
+}
+
 // Foam-style insert: a rounded-rect slab with the tool pocketed into the top.
 //
 // trace: { outer, holes, circles } in trace mm (image coords, y down).

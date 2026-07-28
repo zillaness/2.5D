@@ -2176,6 +2176,136 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 300));
 });
 
+// ---------- Multi-tool drawer layout (holders.js) ----------
+
+const layout = await page.evaluate(async () => {
+  const { buildLayoutInsert, layoutPockets, layoutConflicts, roundedRect } =
+    await import('/js/holders.js');
+  const badEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+  const hasZ = (m, z) => {
+    for (let i = 2; i < m.positions.length; i += 3) {
+      if (Math.abs(m.positions[i] - z) < 1e-6) return true;
+    }
+    return false;
+  };
+  const bbox = pts => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { w: maxX - minX, h: maxY - minY };
+  };
+
+  const toolOutline = [{ x: 5, y: 5 }, { x: 45, y: 5 }, { x: 45, y: 25 }, { x: 5, y: 25 }]; // 40×20
+  const mk = (x, y, rot, depth, thickness) =>
+    ({ name: 't', outer: toolOutline, holes: [], circles: [], x, y, rot, depth, thickness });
+  const container = { outer: roundedRect(5 + 105, 5 + 40, 210, 80, 4) }; // 210×80
+
+  // Two tools: A at default depth (thickness 6), B rotated 90° at 2.5 mm.
+  const items = [mk(60, 45, 0, null, 6), mk(150, 45, 90, 2.5, 6)];
+  const res = buildLayoutInsert(container, items, { clearance: 0.5, floor: 3, border: 5, defaultDepth: 6 });
+
+  // B rotated 90°: its clearance pocket must be ~21 × 41.
+  const pockets = layoutPockets(items, 0.5);
+  const rotBB = bbox(pockets[1].pocket);
+
+  // Collision + escape detection.
+  const clash = layoutConflicts(container.outer,
+    layoutPockets([mk(60, 45, 0, null, 6), mk(70, 50, 0, null, 6)], 0.5), 5);
+  const escape = layoutConflicts(container.outer,
+    layoutPockets([mk(205, 45, 0, null, 6)], 0.5), 5);
+  const blocked = buildLayoutInsert(container,
+    [mk(60, 45, 0, null, 6), mk(70, 50, 0, null, 6)],
+    { clearance: 0.5, floor: 3, border: 5 });
+
+  return {
+    ok: !!res && !res.reason,
+    bad: res && res.positions ? badEdges(res) : -1,
+    sizeX: res?.stats?.sizeX || 0, sizeY: res?.stats?.sizeY || 0, sizeZ: res?.stats?.sizeZ || 0,
+    floorA: res && res.positions ? hasZ(res, 3) : false,     // 9 − 6
+    floorB: res && res.positions ? hasZ(res, 6.5) : false,   // 9 − 2.5
+    rotW: rotBB.w, rotH: rotBB.h,
+    clashN: clash.collisions.size, escapeN: escape.escaped.size,
+    blockedReason: blocked ? blocked.reason : 'none',
+  };
+});
+
+console.log('\nMulti-tool drawer layout (holders.js)');
+check('two-tool insert builds watertight', layout.ok && layout.bad === 0, `${layout.bad} bad edges`);
+check('slab follows the container (210 × 80), thickness = floor + deepest',
+  near(layout.sizeX, 210, 0.2) && near(layout.sizeY, 80, 0.2) && near(layout.sizeZ, 9, 1e-6),
+  `${layout.sizeX.toFixed(1)} × ${layout.sizeY.toFixed(1)} × ${layout.sizeZ}`);
+check('per-tool pocket depths land at exact floors (3 and 6.5)',
+  layout.floorA && layout.floorB, '');
+check('90° rotation carries into the pocket (~21 × 41)',
+  near(layout.rotW, 21, 0.5) && near(layout.rotH, 41, 0.5),
+  `${layout.rotW.toFixed(1)} × ${layout.rotH.toFixed(1)}`);
+check('overlapping pockets and border escapes are detected',
+  layout.clashN === 2 && layout.escapeN === 1, `${layout.clashN} colliding, ${layout.escapeN} escaped`);
+check('conflicted layout refuses to build with a reason', layout.blockedReason === 'collision',
+  layout.blockedReason);
+
+// Layout UI: modal flow with the live trace, preview and export.
+await page.evaluate(() => window.__app.goStep(3));
+const layoutUI = await page.evaluate(async () => {
+  const sel = document.getElementById('holderType');
+  sel.value = 'layout';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  const modalOpen = !document.getElementById('layoutModal').hidden;
+  document.getElementById('layToolSel').value = '__current';
+  document.getElementById('layAddBtn').click();
+  await new Promise(r => setTimeout(r, 100));
+  const items = window.__app.state.layout.items.length;
+  document.getElementById('layPreviewBtn').click();
+  await new Promise(r => setTimeout(r, 500));
+  return {
+    modalOpen, items,
+    modalClosed: document.getElementById('layoutModal').hidden,
+    previewActive: !!window.__app.state.holderMesh,
+    info: document.getElementById('meshInfo').textContent,
+  };
+});
+check('layout modal opens, adds the live trace, previews in 3D',
+  layoutUI.modalOpen && layoutUI.items === 1 && layoutUI.modalClosed &&
+  layoutUI.previewActive && /Drawer insert/.test(layoutUI.info),
+  layoutUI.info.split('\n')[0] || `modal ${layoutUI.modalOpen}, items ${layoutUI.items}`);
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.evaluate(() => {
+      document.getElementById('holderType').dispatchEvent(new Event('change')); // keep state in sync
+      document.getElementById('layoutModal').hidden = false;
+    }).then(() => page.click('#layExportBtn')),
+  ]);
+  check('drawer insert STL export downloads',
+    !!dl && /-drawer-2p5d\.stl$/.test(dl.suggestedFilename()),
+    dl ? dl.suggestedFilename() : 'no download event');
+}
+await page.evaluate(async () => {
+  document.getElementById('layoutModal').hidden = true;
+  window.__app.state.layout.items.length = 0;
+  const sel = document.getElementById('holderType');
+  sel.value = 'none';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 300));
+});
+
 console.log('\nText → loops (emboss/deboss foundation)');
 check('blank text yields no loops', textRes.blankN === 0, `${textRes.blankN}`);
 check('"O" produces a counter (outer + hole ≥ 2 loops)', textRes.oN >= 2, `${textRes.oN} loops`);
