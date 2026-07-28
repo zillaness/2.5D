@@ -18,7 +18,7 @@ import { parseLength, formatLength, formatLengthLabelled } from './units.js';
 import { measureInfo, loopStats, REGION_LOOP_BASE } from './measure.js';
 import { suggestRegions } from './regions.js';
 import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
-import { buildFoamInsert, buildLayoutInsert, buildGridfinityBin, roundedRect } from './holders.js';
+import { buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate, roundedRect } from './holders.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
 import { APP_VERSION } from './version.js';
 
@@ -62,6 +62,7 @@ const state = {
     type: 'none',
     foam: { clearance: 0.5, margin: 10, cornerR: 4, depth: null, floor: 3, notch: 'bottom', notchDia: 25 },
     grid: { clearance: 0.5, depth: null, unitsH: null, lip: true, magnets: false },
+    plate: { floorT: 1.2 },
   },
   holderMesh: null,
   // Multi-tool drawer layout. Items embed their outline geometry (copied
@@ -680,15 +681,16 @@ function buildHolderNow() {
   const trace = traceEditor.getTrace();
   if (!trace.outer || trace.outer.length < 3) return null;
   try {
-    return state.holder.type === 'grid'
-      ? buildGridfinityBin(trace, gridParams())
-      : buildFoamInsert(trace, holderParams());
+    if (state.holder.type === 'grid') return buildGridfinityBin(trace, gridParams());
+    if (state.holder.type === 'plate') return buildBaseplate(trace, { floorT: state.holder.plate.floorT });
+    return buildFoamInsert(trace, holderParams());
   } catch (err) { console.error('holder build failed', err); return null; }
 }
 const LAYOUT_REASONS = {
   empty: 'Add tools to the layout first (Multi-tool drawer → arrange).',
   collision: 'Fix the red overlapping pockets in the layout.',
   escaped: 'Fix the red tools crossing the layout border.',
+  nocells: 'No full 42 mm cell fits inside the outline — trace a bigger area (beyond-paper capture helps).',
 };
 function rebuildHolder() {
   clearTimeout(holderTimer);
@@ -701,17 +703,18 @@ function rebuildHolder() {
       $('meshInfo').textContent = '';
       $('meshWarn').hidden = false;
       $('meshWarn').textContent = (res && LAYOUT_REASONS[res.reason]) ||
-        (isLayout ? 'Could not build the drawer insert — check the layout.'
-                  : 'Could not build the foam insert — check the outline.');
+        `Could not build the ${{ foam: 'foam insert', grid: 'Gridfinity bin', plate: 'baseplate', layout: 'drawer insert' }[state.holder.type] || 'holder'} — check the ${isLayout ? 'layout' : 'outline'}.`;
       if (viewer) viewer.setMesh(null);
       return;
     }
     const s = state.holderMesh.stats;
-    const label = { foam: 'Foam insert', grid: 'Gridfinity bin', layout: 'Drawer insert' }[state.holder.type];
+    const label = { foam: 'Foam insert', grid: 'Gridfinity bin', plate: 'Baseplate', layout: 'Drawer insert' }[state.holder.type];
+    const cellNote = !s.cells ? ''
+      : s.cells.u ? ` (${s.cells.n}×${s.cells.m} grid, ${s.cells.u}u)`
+      : ` (${s.cells.count} socket${s.cells.count === 1 ? '' : 's'})`;
     $('meshInfo').textContent =
-      `${label}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}` +
-      (s.cells ? ` (${s.cells.n}×${s.cells.m} grid, ${s.cells.u}u)` : '') + '\n' +
-      `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n` +
+      `${label}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}${cellNote}\n` +
+      (state.holder.type === 'plate' ? '' : `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n`) +
       `Triangles: ${s.triangles}`;
     const warns = s.warnings || [];
     $('meshWarn').hidden = !warns.length;
@@ -736,11 +739,14 @@ function syncHolderPanel() {
   $('gridUnits').value = g.unitsH ? String(g.unitsH) : '';
   $('gridLip').checked = !!g.lip;
   $('gridMagnets').checked = !!g.magnets;
+  $('plateParams').hidden = state.holder.type !== 'plate';
+  $('plateFloor').value = fmtDim(state.holder.plate.floorT);
 }
 $('holderType').addEventListener('change', e => {
   state.holder.type = e.target.value;
   $('foamParams').hidden = state.holder.type !== 'foam';
   $('gridParams').hidden = state.holder.type !== 'grid';
+  $('plateParams').hidden = state.holder.type !== 'plate';
   if (state.holder.type === 'none') { state.holderMesh = null; rebuildMesh(true); }
   else if (state.holder.type === 'layout') { openLayoutModal(); rebuildHolder(); }
   else rebuildHolder();
@@ -796,6 +802,22 @@ $('gridUnits').addEventListener('change', e => {
 });
 $('gridLip').addEventListener('change', e => { state.holder.grid.lip = e.target.checked; rebuildHolder(); });
 $('gridMagnets').addEventListener('change', e => { state.holder.grid.magnets = e.target.checked; rebuildHolder(); });
+$('plateFloor').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm !== null && mm >= 0.6) state.holder.plate.floorT = mm;
+  syncHolderPanel();
+  rebuildHolder();
+});
+$('exportPlateBtn').addEventListener('click', () => {
+  const trace = traceEditor.getTrace();
+  if (!trace.outer || trace.outer.length < 3) { toast('No outline to build a baseplate from yet.'); return; }
+  let res = null;
+  try { res = buildBaseplate(trace, { floorT: state.holder.plate.floorT }); }
+  catch (err) { console.error('buildBaseplate failed', err); }
+  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the baseplate.'); return; }
+  const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} baseplate`);
+  deliverExport(blob, `${state.fileName}-plate-2p5d.stl`);
+});
 $('exportGridBtn').addEventListener('click', () => {
   const trace = traceEditor.getTrace();
   if (!trace.outer || trace.outer.length < 3) { toast('No outline to build a bin from yet.'); return; }
@@ -2099,9 +2121,10 @@ function loadProject(p) {
   refreshModelFields();
   if (p.holder) {
     state.holder = {
-      type: ['foam', 'grid', 'layout'].includes(p.holder.type) ? p.holder.type : 'none',
+      type: ['foam', 'grid', 'plate', 'layout'].includes(p.holder.type) ? p.holder.type : 'none',
       foam: { ...state.holder.foam, ...(p.holder.foam || {}) },
       grid: { ...state.holder.grid, ...(p.holder.grid || {}) },
+      plate: { ...state.holder.plate, ...(p.holder.plate || {}) },
     };
   }
   if (p.layout && Array.isArray(p.layout.items)) {

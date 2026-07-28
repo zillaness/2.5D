@@ -314,8 +314,15 @@ N×M·42−0.5 that fits the pocket plus minimum wall, height in 7 mm units
 default on) and optional **magnet holes** (⌀6.5 × 2.4 at 26 mm centres,
 default off). Base pads, body-with-pocket and lip are built as
 watertight lofts and prisms — no CSG kernel — and mate with standard
-baseplates. Wall holsters and custom baseplates are next — the roadmap
-lives in `docs/holders-prd.md`.
+baseplates.
+
+**Custom Gridfinity baseplates.** Pick **Gridfinity baseplate** with the
+*drawer itself* traced (photograph the drawer bottom on/around paper —
+beyond-paper capture helps) and get a baseplate in exactly that shape: spec
+sockets on every full 42 mm cell that fits inside the outline, partial
+cells left solid, a configurable floor underneath. Print it, drop it in
+the drawer, snap standard bins onto it. Wall holsters are next — the
+roadmap lives in `docs/holders-prd.md`.
 
 **Suggest regions.** In step 2, **▨ Suggest regions** scans the photo for
 visually-distinct areas inside the object — a boss catching the light, a
@@ -464,6 +471,6 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 - *(Tool-foam insert shipped — see "Holders & organizers"; multi-tool layouts
   are next, per `docs/holders-prd.md`.)*
 - *(Gridfinity bin shipped — see "Gridfinity bins".)*
-- Custom Gridfinity baseplates shaped to a saved outline.
+- *(Custom Gridfinity baseplates shipped — see "Custom Gridfinity baseplates".)*
 - Surface textures / knurling via a second detection threshold.
 - Photogrammetry — multi-photo full-3D reconstruction.

@@ -486,6 +486,7 @@
           <option value="none">None — export the object itself</option>
           <option value="foam">Foam-style insert (pocket in a slab)</option>
           <option value="grid">Gridfinity bin (42 mm grid)</option>
+          <option value="plate">Gridfinity baseplate (outline-shaped)</option>
           <option value="layout">Multi-tool drawer insert (arrange…)</option>
         </select>
       </div>
@@ -560,6 +561,19 @@
         holes in the tool stay as support pillars.</p>
         <div class="btn-row">
           <button id="exportGridBtn" class="btn primary">⬇ Gridfinity bin STL</button>
+        </div>
+      </div>
+      <div id="plateParams" hidden>
+        <div class="field">
+          <label for="plateFloor">Floor under sockets (mm)</label>
+          <input type="text" inputmode="decimal" id="plateFloor" value="1.2">
+        </div>
+        <p class="hint">Trace the drawer or shelf itself (beyond-paper capture
+        helps for big drawers) and get a baseplate in exactly that shape:
+        spec sockets are placed on every full 42 mm cell that fits inside the
+        outline; partial cells stay solid.</p>
+        <div class="btn-row">
+          <button id="exportPlateBtn" class="btn primary">⬇ Baseplate STL</button>
         </div>
       </div>
 

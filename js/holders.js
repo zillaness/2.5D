@@ -409,6 +409,95 @@ export function buildGridfinityBin(trace, opts = {}) {
   };
 }
 
+// ---------- Gridfinity baseplate (custom outline) ----------
+//
+// Photograph the drawer, trace it, print a baseplate that fits it exactly:
+// a plate the shape of the traced outline with spec sockets (the inverse of
+// the bin base pad, +0.25 mm/side clearance) for every 42 mm cell that fits
+// fully inside. Socket opening is 41.9 (a 0.1 mm ridge between cells) so
+// adjacent openings never touch; profile top-down: 2.15 chamfer → 1.8
+// straight → 0.8 chamfer → floor, 4.75 deep.
+
+const GF_SOCKET = [ // depth below plate top, opening size, corner r
+  { d: 0, s: 41.9, r: 3.95 },
+  { d: 2.15, s: 37.6, r: 1.8 },
+  { d: 3.95, s: 37.6, r: 1.8 },
+  { d: 4.75, s: 36.0, r: 0.9 },
+];
+
+export function buildBaseplate(trace, opts = {}) {
+  const { floorT = 1.2 } = opts;
+  if (!trace || !trace.outer || trace.outer.length < 3) return null;
+  const warnings = [];
+  const outline = trace.outer;
+  const bb = bboxOf(outline);
+  const T = GF.baseH + Math.max(0.6, floorT);
+
+  // Centre the 42 mm grid on the outline's bbox and keep every cell whose
+  // square sits fully inside the outline (Clipper-exact).
+  const ClipperLib = CL();
+  const N = Math.max(1, Math.floor(bb.w / GF.grid));
+  const M = Math.max(1, Math.floor(bb.h / GF.grid));
+  const gx = (bb.minX + bb.maxX) / 2 - (N * GF.grid) / 2;
+  const gy = (bb.minY + bb.maxY) / 2 - (M * GF.grid) / 2;
+  const cellInside = (cx, cy) => {
+    const cell = roundedRect(cx, cy, GF.grid, GF.grid, 0.5, 2);
+    const clipper = new ClipperLib.Clipper();
+    clipper.AddPath(positivePath(toClipperPath(cell)), ClipperLib.PolyType.ptSubject, true);
+    clipper.AddPath(positivePath(toClipperPath(outline)), ClipperLib.PolyType.ptClip, true);
+    const sol = new ClipperLib.Paths();
+    clipper.Execute(ClipperLib.ClipType.ctDifference, sol,
+      ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+    let area = 0;
+    for (const p of sol) area += Math.abs(ClipperLib.Clipper.Area(p));
+    return area < 0.05 * SCALE * SCALE;
+  };
+  const cells = [];
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < M; j++) {
+      const cx = gx + (i + 0.5) * GF.grid, cy = gy + (j + 0.5) * GF.grid;
+      if (cellInside(cx, cy)) cells.push({ cx, cy });
+    }
+  }
+  if (!cells.length) return { reason: 'nocells' };
+
+  // Model coords: mirror y (image convention) and centre on the bbox.
+  const mcx = (bb.minX + bb.maxX) / 2, mcy = (bb.minY + bb.maxY) / 2;
+  const tx = pts => pts.map(p => ({ x: p.x - mcx, y: mcy - p.y }));
+
+  const mb = new MeshBuilder();
+  const outerM = ensureCCW(tx(outline));
+  zipRings(mb, outerM, 0, outerM, T);
+
+  const topOpenings = [];
+  for (const c of cells) {
+    const cM = { x: c.cx - mcx, y: mcy - c.cy };
+    const ringAt = s => ensureCW(roundedRect(cM.x, cM.y, s.s, s.s, s.r));
+    const slices = GF_SOCKET.map(s => ({ z: T - s.d, ring: ringAt(s) }));
+    for (let k = 0; k + 1 < slices.length; k++) {
+      // Descending z: zip lower slice to upper for consistent winding.
+      zipRings(mb, slices[k + 1].ring, slices[k + 1].z, slices[k].ring, slices[k].z);
+    }
+    addCap(mb, [slices[slices.length - 1].ring], T - GF.baseH, true); // socket floor
+    topOpenings.push(slices[0].ring);
+  }
+  addCap(mb, [outerM], 0, false);
+  addCap(mb, [outerM, ...topOpenings], T, true);
+
+  const positions = new Float32Array(mb.positions);
+  const indices = new Uint32Array(mb.indices);
+  return {
+    positions, indices,
+    stats: {
+      triangles: indices.length / 3,
+      sizeX: bb.w, sizeY: bb.h, sizeZ: T,
+      slab: { w: bb.w, h: bb.h, thickness: T, pocketDepth: GF.baseH },
+      cells: { count: cells.length, n: N, m: M },
+      warnings,
+    },
+  };
+}
+
 // Foam-style insert: a rounded-rect slab with the tool pocketed into the top.
 //
 // trace: { outer, holes, circles } in trace mm (image coords, y down).

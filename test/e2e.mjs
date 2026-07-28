@@ -2141,7 +2141,8 @@ const foamUI = await page.evaluate(async () => {
   const sel = document.getElementById('holderType');
   sel.value = 'foam';
   sel.dispatchEvent(new Event('change'));
-  await new Promise(r => setTimeout(r, 500));
+  await new Promise(r => setTimeout(r, 900)); // outlast any queued object rebuild
+
   return {
     previewActive: !!window.__app.state.holderMesh,
     info: document.getElementById('meshInfo').textContent,
@@ -2389,6 +2390,57 @@ check('base pads bottom out at 35.6 per cell and top at 4.75',
 check('pocket floor lands at 14 − 5 = 9', grid.pocketFloor, '');
 check('magnet holes appear only when enabled (ceilings at 2.4)',
   grid.magCeil && !grid.magCeilOff, '');
+
+// ---------- Gridfinity baseplate (holders.js) ----------
+
+const plate = await page.evaluate(async () => {
+  const { buildBaseplate } = await import('/js/holders.js');
+  const badEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+  const hasZ = (m, z) => {
+    for (let i = 2; i < m.positions.length; i += 3) {
+      if (Math.abs(m.positions[i] - z) < 1e-4) return true;
+    }
+    return false;
+  };
+  // An L-shaped "drawer": 130×130 with one 44×44 corner cell bitten out.
+  // Grid centring puts a 3×3 grid on the bbox (cells span 2..44..86..128);
+  // exactly the bitten corner's cell must be skipped → 8 sockets.
+  const L = [
+    { x: 0, y: 0 }, { x: 130, y: 0 }, { x: 130, y: 86 },
+    { x: 86, y: 86 }, { x: 86, y: 130 }, { x: 0, y: 130 },
+  ];
+  const res = buildBaseplate({ outer: L, holes: [], circles: [] }, { floorT: 1.2 });
+  const tiny = buildBaseplate({ outer: [{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 30, y: 30 }, { x: 0, y: 30 }] }, {});
+  return {
+    ok: !!res && !res.reason,
+    bad: res && res.positions ? badEdges(res) : -1,
+    cellCount: res?.stats?.cells?.count ?? -1,
+    sizeZ: res?.stats?.sizeZ || 0,
+    socketFloor: res && res.positions ? hasZ(res, 1.2) : false, // T − 4.75
+    tinyReason: tiny ? tiny.reason : 'none',
+  };
+});
+
+console.log('\nGridfinity baseplate (holders.js)');
+check('L-shaped plate builds watertight', plate.ok && plate.bad === 0, `${plate.bad} bad edges`);
+check('partial cells skipped (8 of 9 sockets in the L)', plate.cellCount === 8, `${plate.cellCount} sockets`);
+check('plate = 4.75 socket + 1.2 floor; socket floors at z=1.2',
+  near(plate.sizeZ, 5.95, 1e-6) && plate.socketFloor, `T ${plate.sizeZ}`);
+check('outline too small for any cell reports nocells', plate.tinyReason === 'nocells', plate.tinyReason);
 
 console.log('\nText → loops (emboss/deboss foundation)');
 check('blank text yields no loops', textRes.blankN === 0, `${textRes.blankN}`);
