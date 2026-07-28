@@ -927,21 +927,14 @@ function meshStats(pos) {
 initBlanks();
 { const el = $('appVersion'); if (el) el.textContent = VERSION; }
 // Light / dark theme toggle (top-right) — for contrast against the photo.
-// Defaults to the OS setting (prefers-color-scheme) and tracks it live; a manual
-// toggle takes over and persists, overriding the system from then on.
+// First visit defaults to DARK; a manual toggle is remembered in the browser
+// (localStorage) and used on every later visit.
 {
   const tb = $('themeBtn'), KEY = 'flr-theme';
   const apply = (t) => { document.documentElement.dataset.theme = t; if (tb) tb.textContent = t === 'light' ? '☀ Light' : '☾ Dark'; };
-  const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
-  const systemTheme = () => (mq && mq.matches) ? 'light' : 'dark';
-  const savedTheme = () => { try { const s = localStorage.getItem(KEY); return s === 'light' || s === 'dark' ? s : null; } catch { return null; } };
-  apply(savedTheme() || systemTheme());       // explicit choice wins, else follow the OS
+  let saved = null; try { saved = localStorage.getItem(KEY); } catch { /* private mode */ }
+  apply(saved === 'light' ? 'light' : 'dark');   // saved choice if any, else dark
   if (tb) tb.onclick = () => { const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; apply(t); try { localStorage.setItem(KEY, t); } catch { /* ignore */ } };
-  // Follow OS changes live, but only while the user hasn't picked a theme.
-  if (mq) {
-    const onChange = () => { if (!savedTheme()) apply(systemTheme()); };
-    mq.addEventListener ? mq.addEventListener('change', onChange) : mq.addListener(onChange);
-  }
 }
 // ── 3-step wizard (Photo/card → Trace → 3D key), mirroring the 2.5D flow ──────
 // Steps are freely re-selectable, and step 1 is skippable (no card → the scale
