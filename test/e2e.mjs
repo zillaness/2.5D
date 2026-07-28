@@ -2484,6 +2484,73 @@ check('plate = 4.75 socket + 1.2 floor; socket floors at z=1.2',
   near(plate.sizeZ, 5.95, 1e-6) && plate.socketFloor, `T ${plate.sizeZ}`);
 check('outline too small for any cell reports nocells', plate.tinyReason === 'nocells', plate.tinyReason);
 
+// ---------- Holster / wall holder (holders.js) ----------
+
+const holster = await page.evaluate(async () => {
+  const { buildHolster } = await import('/js/holders.js');
+  const outer = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 }];
+  const trace = { outer, holes: [], circles: [] };
+  // Per-shell watertightness: overlapping shells legitimately share pinch
+  // planes only if coordinates collide — leaks (odd edge use) must be zero.
+  const leaks = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let odd = 0, exact = 0;
+    for (const v of use.values()) { if (v % 2 === 1) odd++; if (v !== 2) exact++; }
+    return { odd, exact };
+  };
+
+  const band = buildHolster(trace, { clearance: 1, wall: 2.4, height: 20, floor: 0, flat: 'none', mount: 'none' });
+  const full = buildHolster(trace, { clearance: 1, wall: 2.4, height: 20, floor: 2, flat: 'bottom', mount: 'both' });
+  const bandT = band ? leaks(band) : { odd: -1, exact: -1 };
+  const fullT = full ? leaks(full) : { odd: -1, exact: -1 };
+
+  // Open band: nothing inside the tool area (through opening) — no vertex
+  // strictly inside the inner ring except at no z at all.
+  const zAt = (m, fx) => {
+    let found = false;
+    for (let i = 0; i < m.positions.length; i += 3) if (fx(m.positions[i], m.positions[i+1], m.positions[i+2])) { found = true; break; }
+    return found;
+  };
+  return {
+    bandOK: !!band, fullOK: !!full,
+    bandLeaks: bandT, fullLeaks: fullT,
+    // band: 40×30 tool + 1 clearance + 2.4 wall → outer ≈ 46.8 × 36.8
+    bandW: band?.stats?.sizeX || 0, bandH: band?.stats?.sizeY || 0, bandZ: band?.stats?.sizeZ || 0,
+    // full: flat bottom + plate (3 − 0.01 proud) + keyhole tab 22 above band
+    fullZ: full?.stats?.sizeZ || 0,
+    fullW: full?.stats?.sizeX || 0,
+    // keyhole ring: verts near (x≈0, z≈height+6) on the plate
+    keyhole: full ? zAt(full, (x, y, z) => Math.abs(x) < 5 && z > 22 && z < 30 && y < -17) : false,
+    // wings: verts beyond the band width on both sides
+    wingHole: full ? zAt(full, (x, y, z) => Math.abs(x) > 24 && y < -17 && z > 5 && z < 15) : false,
+    // Any z=2 vertex is the plug's top cap — the band has verts only at 0/20.
+    floorPlane: full ? zAt(full, (x, y, z) => Math.abs(z - 2) < 1e-4) : false,
+  };
+});
+
+console.log('\nHolster / wall holder (holders.js)');
+check('open band builds watertight', holster.bandOK && holster.bandLeaks.exact === 0,
+  `${holster.bandLeaks.exact} bad edges`);
+check('band size = outline + clearance + wall (≈46.8 × 36.8 × 20)',
+  near(holster.bandW, 46.8, 0.3) && near(holster.bandH, 36.8, 0.3) && near(holster.bandZ, 20, 1e-6),
+  `${holster.bandW.toFixed(1)} × ${holster.bandH.toFixed(1)} × ${holster.bandZ}`);
+check('flat back + floor + keyhole + wings: no open edges across shells',
+  holster.fullOK && holster.fullLeaks.odd === 0, `${holster.fullLeaks.odd} open edges`);
+check('keyhole tab rises above the band with its slot',
+  near(holster.fullZ, 42, 0.5) && holster.keyhole, `top ${holster.fullZ.toFixed(1)}, ring ${holster.keyhole}`);
+check('screw wings extend past the band with holes', holster.wingHole && holster.fullW > 60,
+  `width ${holster.fullW.toFixed(1)}`);
+check('floor plug closes the bottom at 2 mm', holster.floorPlane, '');
+
 console.log('\nText → loops (emboss/deboss foundation)');
 check('blank text yields no loops', textRes.blankN === 0, `${textRes.blankN}`);
 check('"O" produces a counter (outer + hole ≥ 2 loops)', textRes.oN >= 2, `${textRes.oN} loops`);

@@ -546,6 +546,161 @@ export function buildBaseplate(trace, opts = {}) {
   };
 }
 
+// ---------- Holster / wall holder ----------
+//
+// A band around the outline: inner = outline + clearance, outer = + wall,
+// extruded to a height. Options: a floor (0 = open-through), a flattened
+// side (plan union with a tangent full-width rectangle — a flat face for
+// velcro), and a mounting plate: a SEPARATE watertight prism extruded along
+// the wall normal and rotated into place (0.01 mm buried overlap into the
+// band — the deboss precedent), carrying a keyhole hanging tab above the
+// band and/or screw wings beside it. Screen-direction sides, like the foam
+// notch. No pegboard/multiboard. Everything is still a 2D footprint per
+// prism — no CSG.
+
+const HOLSTER_SIDES = {
+  // Model-space face normal n and tangent t = z × n per screen side
+  // (image y-down mirrors to model y, so screen bottom = model −y).
+  bottom: { n: [0, -1, 0], t: [1, 0, 0] },
+  top:    { n: [0, 1, 0],  t: [-1, 0, 0] },
+  left:   { n: [-1, 0, 0], t: [0, -1, 0] },
+  right:  { n: [1, 0, 0],  t: [0, 1, 0] },
+};
+
+export function buildHolster(trace, opts = {}) {
+  const {
+    clearance = 1.0, wall = 2.4, height = 20, floor = 0,
+    flat = 'none', mount = 'none', plateT = 3,
+  } = opts;
+  if (!trace || !trace.outer || trace.outer.length < 3) return null;
+  if (!(height > 1) || !(wall > 0.6)) return null;
+  const warnings = [];
+  const flatSide = (mount !== 'none' && flat === 'none') ? 'bottom' : flat;
+  if (mount !== 'none' && flat === 'none') {
+    warnings.push('Mounting needs a flat side — flattened the bottom edge.');
+  }
+
+  const inner = offsetLoop(trace.outer, Math.max(0, clearance))[0];
+  let outer = offsetLoop(trace.outer, Math.max(0, clearance) + wall)[0];
+  if (!inner || !outer) return null;
+
+  // Flatten one side: union with a full-width rectangle tangent to the
+  // band's extreme on that side (trace space, y down).
+  if (flatSide !== 'none' && HOLSTER_SIDES[flatSide]) {
+    const bb = bboxOf(outer);
+    const D = wall * 2 + 4; // deep enough to always fuse with the band
+    let rect;
+    if (flatSide === 'bottom') rect = [{ x: bb.minX, y: bb.maxY - D }, { x: bb.maxX, y: bb.maxY - D }, { x: bb.maxX, y: bb.maxY }, { x: bb.minX, y: bb.maxY }];
+    else if (flatSide === 'top') rect = [{ x: bb.minX, y: bb.minY }, { x: bb.maxX, y: bb.minY }, { x: bb.maxX, y: bb.minY + D }, { x: bb.minX, y: bb.minY + D }];
+    else if (flatSide === 'left') rect = [{ x: bb.minX, y: bb.minY }, { x: bb.minX + D, y: bb.minY }, { x: bb.minX + D, y: bb.maxY }, { x: bb.minX, y: bb.maxY }];
+    else rect = [{ x: bb.maxX - D, y: bb.minY }, { x: bb.maxX, y: bb.minY }, { x: bb.maxX, y: bb.maxY }, { x: bb.maxX - D, y: bb.maxY }];
+    const merged = unionLoops([outer, rect])[0];
+    if (merged) outer = merged;
+  }
+
+  const none = { mode: 'none', size: 0 };
+  const bb = bboxOf(outer);
+  const center = { cx: (bb.minX + bb.maxX) / 2, cy: (bb.minY + bb.maxY) / 2 };
+  const parts = [];
+  const band = buildSolid(outer, [inner], [], {
+    thickness: height, zBase: 0, top: none, bottom: none, center,
+  });
+  if (!band) return null;
+  parts.push(band);
+
+  if (floor > 0) {
+    // A plug under the opening, buried into the band's wall by ~half the
+    // wall so its side face is interior (bottom faces share the bed plane —
+    // unambiguous, both exterior).
+    const plug = offsetLoop(trace.outer, Math.max(0, clearance) + Math.min(wall * 0.6, wall - 0.2))[0];
+    const floorMesh = plug && buildSolid(plug, [], [], {
+      thickness: floor, zBase: 0, top: none, bottom: none, center,
+    });
+    if (floorMesh) parts.push(floorMesh);
+    else warnings.push('Floor could not be built — left open.');
+  }
+
+  // Mounting plate: local footprint in (u, v) = (along the wall, up).
+  if (mount !== 'none') {
+    const S = HOLSTER_SIDES[flatSide];
+    const modelBB = { // model-space band bbox (mirror of the trace bbox)
+      xMin: bb.minX - center.cx, xMax: bb.maxX - center.cx,
+      yMin: center.cy - bb.maxY, yMax: center.cy - bb.minY,
+    };
+    const along = (flatSide === 'left' || flatSide === 'right')
+      ? modelBB.yMax - modelBB.yMin : modelBB.xMax - modelBB.xMin;
+
+    const wingW = 12, tabW = 18, tabH = 22, holeD = 4.4;
+    const keyhole = mount === 'keyhole' || mount === 'both';
+    const wings = mount === 'wings' || mount === 'both';
+    const w2 = along / 2;
+    const rects = [[-w2, 0, w2, height]]; // base plate over the flat face
+    if (wings) rects.push([-w2 - wingW, 0, w2 + wingW, height]);
+    if (keyhole) rects.push([-tabW / 2, 0, tabW / 2, height + tabH]);
+    const rectLoop = ([x0, y0, x1, y1]) =>
+      [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+    const plateOutline = unionLoops(rects.map(rectLoop))[0];
+    const holes = [];
+    if (keyhole) {
+      // Big hole the nail head passes through, slot upward — the holster
+      // slides down so the nail ends at the slot top.
+      const cyK = height + 6;
+      const kh = unionLoops([
+        circleToPolygon(0, cyK, 8.5, 48),
+        rectLoop([-2.25, cyK, 2.25, cyK + 9]),
+        circleToPolygon(0, cyK + 9, 4.5, 32),
+      ])[0];
+      if (kh) holes.push(kh);
+    }
+    const circles = wings ? [
+      { cx: w2 + wingW / 2, cy: -(height / 2), d: holeD },
+      { cx: -w2 - wingW / 2, cy: -(height / 2), d: holeD },
+    ] : [];
+    // buildSolid mirrors y, so pre-flip v; extrude thickness = plateT.
+    const flipV = pts => pts.map(p => ({ x: p.x, y: -p.y }));
+    const plateLocal = buildSolid(flipV(plateOutline), holes.map(flipV),
+      circles.map(c => ({ ...c, type: 'through' })), {
+        thickness: plateT, zBase: 0, top: none, bottom: none, center: { cx: 0, cy: 0 },
+      });
+    if (plateLocal) {
+      // Local (X=u, Y=v, Z=w∈[0,plateT]) → world t·u + zAxis·v + n·nn where
+      // nn runs outward from 0.01 inside the flat face. The basis [t, z, n]
+      // has det +1 for every side, so triangle winding survives.
+      const faceN = {
+        bottom: -modelBB.yMin, top: modelBB.yMax,
+        left: -modelBB.xMin, right: modelBB.xMax,
+      }[flatSide];
+      const p = plateLocal.positions;
+      for (let i = 0; i < p.length; i += 3) {
+        const u = p[i], v = p[i + 1], w = p[i + 2];
+        const nn = faceN - 0.01 + w;
+        p[i] = S.t[0] * u + S.n[0] * nn;
+        p[i + 1] = S.t[1] * u + S.n[1] * nn;
+        p[i + 2] = v;
+      }
+      parts.push(plateLocal);
+    } else {
+      warnings.push('Mounting plate could not be built.');
+    }
+  }
+
+  const merged = mergeParts(parts);
+  const stats = {
+    triangles: merged.indices.length / 3,
+    sizeX: 0, sizeY: 0, sizeZ: 0,
+    slab: { w: bb.maxX - bb.minX, h: bb.maxY - bb.minY, thickness: height, pocketDepth: height },
+    warnings,
+  };
+  let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i < merged.positions.length; i += 3) {
+    minX = Math.min(minX, merged.positions[i]); maxX = Math.max(maxX, merged.positions[i]);
+    minY = Math.min(minY, merged.positions[i + 1]); maxY = Math.max(maxY, merged.positions[i + 1]);
+    minZ = Math.min(minZ, merged.positions[i + 2]); maxZ = Math.max(maxZ, merged.positions[i + 2]);
+  }
+  stats.sizeX = maxX - minX; stats.sizeY = maxY - minY; stats.sizeZ = maxZ - minZ;
+  return { ...merged, stats };
+}
+
 // Foam-style insert: a rounded-rect slab with the tool pocketed into the top.
 //
 // trace: { outer, holes, circles } in trace mm (image coords, y down).

@@ -20,7 +20,7 @@ import { suggestRegions } from './regions.js';
 import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
 import {
   buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate,
-  buildLayoutGridBin, gridContainerLoop, roundedRect,
+  buildLayoutGridBin, gridContainerLoop, buildHolster, roundedRect,
 } from './holders.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
 import { APP_VERSION } from './version.js';
@@ -66,6 +66,7 @@ const state = {
     foam: { clearance: 0.5, margin: 10, cornerR: 4, depth: null, floor: 3, notch: 'bottom', notchDia: 25 },
     grid: { clearance: 0.5, depth: null, unitsH: null, lip: true, magnets: false },
     plate: { floorT: 1.2 },
+    holster: { clearance: 1, wall: 2.4, height: 20, floor: 0, flat: 'none', mount: 'none' },
   },
   holderMesh: null,
   // Multi-tool drawer layout. Items embed their outline geometry (copied
@@ -686,6 +687,7 @@ function buildHolderNow() {
   try {
     if (state.holder.type === 'grid') return buildGridfinityBin(trace, gridParams());
     if (state.holder.type === 'plate') return buildBaseplate(trace, { floorT: state.holder.plate.floorT });
+    if (state.holder.type === 'holster') return buildHolster(trace, state.holder.holster);
     return buildFoamInsert(trace, holderParams());
   } catch (err) { console.error('holder build failed', err); return null; }
 }
@@ -711,13 +713,13 @@ function rebuildHolder() {
       return;
     }
     const s = state.holderMesh.stats;
-    const label = { foam: 'Foam insert', grid: 'Gridfinity bin', plate: 'Baseplate', layout: 'Drawer insert' }[state.holder.type];
+    const label = { foam: 'Foam insert', grid: 'Gridfinity bin', plate: 'Baseplate', holster: 'Holster', layout: 'Drawer insert' }[state.holder.type];
     const cellNote = !s.cells ? ''
       : s.cells.u ? ` (${s.cells.n}×${s.cells.m} grid, ${s.cells.u}u)`
       : ` (${s.cells.count} socket${s.cells.count === 1 ? '' : 's'})`;
     $('meshInfo').textContent =
       `${label}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}${cellNote}\n` +
-      (state.holder.type === 'plate' ? '' : `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n`) +
+      (['plate', 'holster'].includes(state.holder.type) ? '' : `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n`) +
       `Triangles: ${s.triangles}`;
     const warns = s.warnings || [];
     $('meshWarn').hidden = !warns.length;
@@ -744,15 +746,47 @@ function syncHolderPanel() {
   $('gridMagnets').checked = !!g.magnets;
   $('plateParams').hidden = state.holder.type !== 'plate';
   $('plateFloor').value = fmtDim(state.holder.plate.floorT);
+  $('holsterParams').hidden = state.holder.type !== 'holster';
+  const ho = state.holder.holster;
+  $('holClearance').value = fmtDim(ho.clearance);
+  $('holWall').value = fmtDim(ho.wall);
+  $('holHeight').value = fmtDim(ho.height);
+  $('holFloor').value = fmtDim(ho.floor);
+  $('holFlat').value = ho.flat;
+  $('holMount').value = ho.mount;
 }
 $('holderType').addEventListener('change', e => {
   state.holder.type = e.target.value;
   $('foamParams').hidden = state.holder.type !== 'foam';
   $('gridParams').hidden = state.holder.type !== 'grid';
   $('plateParams').hidden = state.holder.type !== 'plate';
+  $('holsterParams').hidden = state.holder.type !== 'holster';
   if (state.holder.type === 'none') { state.holderMesh = null; rebuildMesh(true); }
   else if (state.holder.type === 'layout') { openLayoutModal(); rebuildHolder(); }
   else rebuildHolder();
+});
+for (const [id, key, min] of [
+  ['holClearance', 'clearance', 0], ['holWall', 'wall', 0.8],
+  ['holHeight', 'height', 2], ['holFloor', 'floor', 0],
+]) {
+  $(id).addEventListener('change', e => {
+    const mm = parseDim(e.target.value);
+    if (mm !== null && mm >= min) state.holder.holster[key] = mm;
+    syncHolderPanel();
+    rebuildHolder();
+  });
+}
+$('holFlat').addEventListener('change', e => { state.holder.holster.flat = e.target.value; rebuildHolder(); });
+$('holMount').addEventListener('change', e => { state.holder.holster.mount = e.target.value; rebuildHolder(); });
+$('exportHolsterBtn').addEventListener('click', () => {
+  const trace = traceEditor.getTrace();
+  if (!trace.outer || trace.outer.length < 3) { toast('No outline to build a holster from yet.'); return; }
+  let res = null;
+  try { res = buildHolster(trace, state.holder.holster); }
+  catch (err) { console.error('buildHolster failed', err); }
+  if (!res) { toast('Could not build the holster.'); return; }
+  const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} holster`);
+  deliverExport(blob, `${state.fileName}-holster-2p5d.stl`);
 });
 // Numeric foam fields; floor may be 0 (through pocket), the rest must be > 0.
 for (const [id, key, min] of [
@@ -2157,10 +2191,11 @@ function loadProject(p) {
   refreshModelFields();
   if (p.holder) {
     state.holder = {
-      type: ['foam', 'grid', 'plate', 'layout'].includes(p.holder.type) ? p.holder.type : 'none',
+      type: ['foam', 'grid', 'plate', 'holster', 'layout'].includes(p.holder.type) ? p.holder.type : 'none',
       foam: { ...state.holder.foam, ...(p.holder.foam || {}) },
       grid: { ...state.holder.grid, ...(p.holder.grid || {}) },
       plate: { ...state.holder.plate, ...(p.holder.plate || {}) },
+      holster: { ...state.holder.holster, ...(p.holder.holster || {}) },
     };
   }
   if (p.layout && Array.isArray(p.layout.items)) {

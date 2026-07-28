@@ -487,6 +487,7 @@
           <option value="foam">Foam-style insert (pocket in a slab)</option>
           <option value="grid">Gridfinity bin (42 mm grid)</option>
           <option value="plate">Gridfinity baseplate (outline-shaped)</option>
+          <option value="holster">Holster / wall holder (band around outline)</option>
           <option value="layout">Multi-tool drawer insert (arrange…)</option>
         </select>
       </div>
@@ -574,6 +575,55 @@
         outline; partial cells stay solid.</p>
         <div class="btn-row">
           <button id="exportPlateBtn" class="btn primary">⬇ Baseplate STL</button>
+        </div>
+      </div>
+      <div id="holsterParams" hidden>
+        <div class="field-row">
+          <div class="field">
+            <label for="holClearance">Clearance (mm)</label>
+            <input type="text" inputmode="decimal" id="holClearance" value="1" title="Gap so the tool slides in and out">
+          </div>
+          <div class="field">
+            <label for="holWall">Wall (mm)</label>
+            <input type="text" inputmode="decimal" id="holWall" value="2.4">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="holHeight">Band height (mm)</label>
+            <input type="text" inputmode="decimal" id="holHeight" value="20">
+          </div>
+          <div class="field">
+            <label for="holFloor">Floor (mm, 0 = open)</label>
+            <input type="text" inputmode="decimal" id="holFloor" value="0">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="holFlat">Flat side (velcro / mount)</label>
+            <select id="holFlat">
+              <option value="none">None (band only)</option>
+              <option value="bottom">Bottom edge</option>
+              <option value="top">Top edge</option>
+              <option value="left">Left edge</option>
+              <option value="right">Right edge</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="holMount">Mounting</label>
+            <select id="holMount">
+              <option value="none">None</option>
+              <option value="keyhole">Keyhole tab (nail / screw head)</option>
+              <option value="wings">Screw wings</option>
+              <option value="both">Keyhole + wings</option>
+            </select>
+          </div>
+        </div>
+        <p class="hint">The band wraps the outline at true scale. A flat side
+        gives a velcro-able face; mounting adds a back plate (own watertight
+        shell, screws point into the wall). Prints band-upright.</p>
+        <div class="btn-row">
+          <button id="exportHolsterBtn" class="btn primary">⬇ Holster STL</button>
         </div>
       </div>
 

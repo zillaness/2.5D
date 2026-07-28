@@ -1,6 +1,6 @@
 # PRD: Holders & Organizers — foam inserts, drawer layouts, Gridfinity, holsters
 
-Status: **draft for sign-off** · 2026-07-27 · target branch `claude/2.5d-photo-stl-s3-y0oodn`
+Status: **complete — all phases shipped (v1.11.0–v1.17.0)** · 2026-07-27 · target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 ## Problem
 

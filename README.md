@@ -329,8 +329,18 @@ Gridfinity base, from photos.
 beyond-paper capture helps) and get a baseplate in exactly that shape: spec
 sockets on every full 42 mm cell that fits inside the outline, partial
 cells left solid, a configurable floor underneath. Print it, drop it in
-the drawer, snap standard bins onto it. Wall holsters are next — the
-roadmap lives in `docs/holders-prd.md`.
+the drawer, snap standard bins onto it.
+
+**Holsters & wall holders.** Pick **Holster** and the outline becomes a band
+around the tool: **clearance** so it slides in and out, **wall** thickness,
+**band height**, an optional **floor** (0 = open-through for long tools). A
+**flat side** (any edge) gives a velcro-able face; **mounting** adds a back
+plate — its own watertight shell extruded along the wall normal and rotated
+into place, so the **keyhole tab** (nail/screw-head hang, slot upward) and
+**screw wings** get real through-holes pointing into the wall with no 3D
+booleans involved. Prints band-upright, plate vertical. That completes the
+holders roadmap (`docs/holders-prd.md`) — every phase shipped without a CSG
+kernel.
 
 **Suggest regions.** In step 2, **▨ Suggest regions** scans the photo for
 visually-distinct areas inside the object — a boss catching the light, a
