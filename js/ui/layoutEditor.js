@@ -4,7 +4,7 @@
 // view/controller — the geometry lives in js/holders.js.
 
 import { pointInPolygon } from '../contour.js';
-import { placeLoop, layoutPockets, layoutConflicts } from '../holders.js';
+import { placeLoop, layoutPockets, layoutConflicts, worldToItemLocal } from '../holders.js';
 
 export class LayoutEditor {
   constructor(canvas, callbacks = {}) {
@@ -85,6 +85,12 @@ export class LayoutEditor {
     return { x: item.x + r * Math.cos(a), y: item.y + r * Math.sin(a) };
   }
 
+  // The selected item's notch marker (pocket-boundary point), if any.
+  _notchAt(idx) {
+    const p = this._pockets && this._pockets[idx];
+    return p && p.notchAt ? p.notchAt : null;
+  }
+
   _down(e) {
     if (!this.container) return;
     const mm = this.screenToMm(e);
@@ -93,6 +99,13 @@ export class LayoutEditor {
       const h = this._rotHandle(this.items[this.sel]);
       if (Math.hypot(mm.x - h.x, mm.y - h.y) < tolPx) {
         this._drag = { kind: 'rotate', idx: this.sel };
+        this.canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+      const nAt = this._notchAt(this.sel);
+      if (nAt && Math.hypot(mm.x - nAt.x, mm.y - nAt.y) <
+          Math.max(tolPx, (this.items[this.sel].notch.dia || 25) / 2)) {
+        this._drag = { kind: 'notch', idx: this.sel };
         this.canvas.setPointerCapture(e.pointerId);
         return;
       }
@@ -122,6 +135,13 @@ export class LayoutEditor {
     if (this._drag.kind === 'move') {
       it.x = mm.x + this._drag.dx;
       it.y = mm.y + this._drag.dy;
+    } else if (this._drag.kind === 'notch') {
+      // Store in item-local coords; the pocket builder snaps it to the
+      // boundary, so dragging anywhere pulls the notch to the nearest edge.
+      const local = worldToItemLocal(it, mm);
+      it.notch.x = local.x;
+      it.notch.y = local.y;
+      this._pockets = layoutPockets(this.items, this.clearance); // live marker
     } else {
       let deg = (Math.atan2(mm.y - it.y, mm.x - it.x) * 180) / Math.PI + 90;
       if (e.shiftKey) deg = Math.round(deg / 15) * 15;
@@ -179,13 +199,34 @@ export class LayoutEditor {
       ctx.lineWidth = 1;
       loopPath(placeLoop(item.outer, item));
       ctx.stroke();
-      for (const h of item.holes || []) { loopPath(placeLoop(h, item)); ctx.stroke(); }
+      for (const h of item.holes || []) { loopPath(placeLoop(h, item, item.outer)); ctx.stroke(); }
       // Name.
       const c = this.mmToScreen(this._centroid(item));
       ctx.fillStyle = conflicted ? '#ef4444' : 'rgba(127,127,127,0.95)';
       ctx.font = '12px system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(item.name || `Tool ${i + 1}`, c.x, c.y - 4);
+      // Finger-notch marker (draggable when selected).
+      const nAt = pockets[i] && pockets[i].notchAt;
+      if (nAt) {
+        const ns = this.mmToScreen(nAt);
+        const nr = ((item.notch && item.notch.dia) || 25) / 2 * this.view.scale;
+        ctx.beginPath();
+        ctx.arc(ns.x, ns.y, nr, 0, Math.PI * 2);
+        ctx.strokeStyle = selected ? '#f59e0b' : 'rgba(245,158,11,0.6)';
+        ctx.lineWidth = selected ? 2 : 1;
+        ctx.setLineDash([4, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (selected) {
+          ctx.beginPath();
+          ctx.arc(ns.x, ns.y, 6, 0, Math.PI * 2);
+          ctx.fillStyle = '#f59e0b';
+          ctx.fill();
+          ctx.strokeStyle = '#fff';
+          ctx.stroke();
+        }
+      }
       // Rotation handle for the selection.
       if (selected) {
         const h = this.mmToScreen(this._rotHandle(item));

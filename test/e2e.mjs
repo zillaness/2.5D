@@ -2477,6 +2477,94 @@ check('bin footprint = 3×1 cells (125.5 × 41.5), auto 2u',
 check('overlapping tools in a bin refuse with a reason', gridLayout.clashReason === 'collision',
   gridLayout.clashReason);
 
+// Placeable finger notches + hole-pivot placement.
+const notches = await page.evaluate(async () => {
+  const { buildFoamInsert, buildGridfinityBin, layoutPockets, layoutConflicts, gridContainerLoop } =
+    await import('/js/holders.js');
+  const outer = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 }];
+  const trace = { outer, holes: [], circles: [] };
+  const badEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+
+  // Custom-position foam notches: two different fractions move the bulge.
+  const fA = buildFoamInsert(trace, { clearance: 0.5, margin: 10, depth: 5, floor: 3, notch: 'custom', notchFrac: 0.1, notchDia: 20 });
+  const fB = buildFoamInsert(trace, { clearance: 0.5, margin: 10, depth: 5, floor: 3, notch: 'custom', notchFrac: 0.35, notchDia: 20 });
+  const bboxAt = (m, z) => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (let i = 0; i < m.positions.length; i += 3) {
+      if (Math.abs(m.positions[i+2] - z) > 1e-4) continue;
+      minX = Math.min(minX, m.positions[i]); maxX = Math.max(maxX, m.positions[i]);
+      minY = Math.min(minY, m.positions[i+1]); maxY = Math.max(maxY, m.positions[i+1]);
+    }
+    return { minX, minY, maxX, maxY };
+  };
+  const moved = fA && fB &&
+    JSON.stringify(bboxAt(fA, 3)) !== JSON.stringify(bboxAt(fB, 3));
+
+  // Gridfinity notch: a Ø25 bottom notch pushes the 2×1 bin to 2×2.
+  const gPlain = buildGridfinityBin(trace, { clearance: 0.5, depth: 5, lip: true });
+  const gNotch = buildGridfinityBin(trace, { clearance: 0.5, depth: 5, lip: true, notch: 'bottom', notchDia: 25 });
+
+  // Layout: notch stored item-local, snapped to the pocket boundary; and the
+  // pillar pivot fix — an off-centre hole must place at its offset.
+  const item = {
+    name: 't', outer, holes: [[{ x: 30, y: 7 }, { x: 38, y: 7 }, { x: 38, y: 13 }, { x: 30, y: 13 }]].map(h => h),
+    circles: [], x: 60, y: 45, rot: 0, depth: 4, thickness: 5,
+    notch: { x: 20, y: 30, dia: 20 },
+  };
+  const pk = layoutPockets([item], 0.5)[0];
+  // Outline centre (20,15); hole centre (34,10) → world (60+14, 45−5) = (74, 40).
+  const pillarBB = pk.pillars.length ? (() => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of pk.pillars[0]) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+  })() : null;
+  // Border escape via notch: tool near the bin wall, notch pointing at it.
+  const nearWall = { ...item, x: 30, y: 26, notch: { x: 20, y: 30, dia: 20 } };
+  const esc = layoutConflicts(gridContainerLoop(2, 1),
+    layoutPockets([nearWall], 0.5), 2.6);
+
+  return {
+    foamOK: !!fA && !!fB && badEdges(fA) === 0 && badEdges(fB) === 0, moved,
+    gPlainM: gPlain?.stats?.cells?.m || 0,
+    gNotchM: gNotch?.stats?.cells?.m || 0,
+    gNotchBad: gNotch ? badEdges(gNotch) : -1,
+    notchAtY: pk.notchAt ? pk.notchAt.y : 0,   // pocket bottom ≈ 45+15+0.5
+    pillar: pillarBB,                            // expect ≈ (69, 40)
+    escaped: esc.escaped.size,
+  };
+});
+
+console.log('\nPlaceable finger notches');
+check('custom-position foam notches build watertight and move with the slider',
+  notches.foamOK && notches.moved, `moved ${notches.moved}`);
+check('Gridfinity notch counts toward grid fit (2×1 → 2×2) and stays watertight',
+  notches.gPlainM === 1 && notches.gNotchM === 2 && notches.gNotchBad === 0,
+  `m ${notches.gPlainM}→${notches.gNotchM}, ${notches.gNotchBad} bad edges`);
+check('layout notch snaps to the pocket boundary near its stored point',
+  near(notches.notchAtY, 60.5, 0.6), `y ${notches.notchAtY.toFixed(2)}`);
+check('off-centre tool hole pillars keep their offset (pivot fix)',
+  notches.pillar && near(notches.pillar.cx, 74, 0.6) && near(notches.pillar.cy, 40, 0.6),
+  notches.pillar ? `(${notches.pillar.cx.toFixed(1)}, ${notches.pillar.cy.toFixed(1)})` : 'no pillar');
+check('a notch pointing at the bin wall flags the tool as escaped',
+  notches.escaped === 1, `${notches.escaped} escaped`);
+
 console.log('\nGridfinity baseplate (holders.js)');
 check('L-shaped plate builds watertight', plate.ok && plate.bad === 0, `${plate.bad} bad edges`);
 check('partial cells skipped (8 of 9 sockets in the L)', plate.cellCount === 8, `${plate.cellCount} sockets`);

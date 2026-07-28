@@ -63,8 +63,8 @@ const state = {
   // `depth: null` = follow the base section's thickness.
   holder: {
     type: 'none',
-    foam: { clearance: 0.5, margin: 10, cornerR: 4, depth: null, floor: 3, notch: 'bottom', notchDia: 25 },
-    grid: { clearance: 0.5, depth: null, unitsH: null, lip: true, magnets: false },
+    foam: { clearance: 0.5, margin: 10, cornerR: 4, depth: null, floor: 3, notch: 'bottom', notchDia: 25, notchFrac: 0.5 },
+    grid: { clearance: 0.5, depth: null, unitsH: null, lip: true, magnets: false, notch: 'none', notchDia: 25, notchFrac: 0.5 },
     plate: { floorT: 1.2 },
     holster: { clearance: 1, wall: 2.4, height: 20, floor: 0, flat: 'none', mount: 'none' },
   },
@@ -671,7 +671,7 @@ function holderParams() {
   return {
     clearance: f.clearance, margin: f.margin, cornerR: f.cornerR,
     depth: f.depth || state.regions[0].thickness,
-    floor: f.floor, notch: f.notch, notchDia: f.notchDia,
+    floor: f.floor, notch: f.notch, notchDia: f.notchDia, notchFrac: f.notchFrac,
   };
 }
 function gridParams() {
@@ -679,6 +679,7 @@ function gridParams() {
   return {
     clearance: g.clearance, depth: g.depth || state.regions[0].thickness,
     unitsH: g.unitsH, lip: g.lip, magnets: g.magnets,
+    notch: g.notch, notchDia: g.notchDia, notchFrac: g.notchFrac,
   };
 }
 function buildHolderNow() {
@@ -738,12 +739,20 @@ function syncHolderPanel() {
   $('foamFloor').value = fmtDim(f.floor);
   $('foamNotch').value = f.notch;
   $('foamNotchDia').value = fmtDim(f.notchDia);
+  $('foamNotchPosRow').hidden = f.notch !== 'custom';
+  $('foamNotchPos').value = Math.round((f.notchFrac ?? 0.5) * 100);
+  $('foamNotchPosVal').textContent = `${Math.round((f.notchFrac ?? 0.5) * 100)}%`;
   const g = state.holder.grid;
   $('gridClearance').value = fmtDim(g.clearance);
   $('gridDepth').value = g.depth ? fmtDim(g.depth) : '';
   $('gridUnits').value = g.unitsH ? String(g.unitsH) : '';
   $('gridLip').checked = !!g.lip;
   $('gridMagnets').checked = !!g.magnets;
+  $('gridNotch').value = g.notch || 'none';
+  $('gridNotchDia').value = fmtDim(g.notchDia);
+  $('gridNotchPosRow').hidden = g.notch !== 'custom';
+  $('gridNotchPos').value = Math.round((g.notchFrac ?? 0.5) * 100);
+  $('gridNotchPosVal').textContent = `${Math.round((g.notchFrac ?? 0.5) * 100)}%`;
   $('plateParams').hidden = state.holder.type !== 'plate';
   $('plateFloor').value = fmtDim(state.holder.plate.floorT);
   $('holsterParams').hidden = state.holder.type !== 'holster';
@@ -812,6 +821,28 @@ $('foamDepth').addEventListener('change', e => {
 });
 $('foamNotch').addEventListener('change', e => {
   state.holder.foam.notch = e.target.value;
+  syncHolderPanel();
+  rebuildHolder();
+});
+$('foamNotchPos').addEventListener('input', e => {
+  state.holder.foam.notchFrac = (parseInt(e.target.value, 10) || 0) / 100;
+  $('foamNotchPosVal').textContent = `${e.target.value}%`;
+  rebuildHolder();
+});
+$('gridNotch').addEventListener('change', e => {
+  state.holder.grid.notch = e.target.value;
+  syncHolderPanel();
+  rebuildHolder();
+});
+$('gridNotchDia').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm > 2) state.holder.grid.notchDia = mm;
+  syncHolderPanel();
+  rebuildHolder();
+});
+$('gridNotchPos').addEventListener('input', e => {
+  state.holder.grid.notchFrac = (parseInt(e.target.value, 10) || 0) / 100;
+  $('gridNotchPosVal').textContent = `${e.target.value}%`;
   rebuildHolder();
 });
 $('gridClearance').addEventListener('change', e => {
@@ -997,6 +1028,8 @@ function syncLaySelPanel(i) {
   $('laySelDepth').value = it.depth ? fmtDim(it.depth) : '';
   $('laySelDepth').placeholder = `auto (${fmtDim(it.thickness || state.regions[0].thickness)})`;
   $('laySelRot').value = (it.rot || 0).toFixed(0);
+  $('laySelNotch').checked = !!it.notch;
+  $('laySelNotchDia').value = fmtDim(it.notch ? it.notch.dia : 25);
 }
 function openLayoutModal() {
   refreshLaySelects();
@@ -1116,6 +1149,32 @@ $('laySelRot').addEventListener('change', e => {
   if (Number.isFinite(deg)) it.rot = ((deg % 360) + 360) % 360;
   refreshLayoutEditor();
   syncLaySelPanel(layoutEditor.sel);
+});
+$('laySelNotch').addEventListener('change', e => {
+  const it = state.layout.items[layoutEditor.sel];
+  if (!it) return;
+  if (e.target.checked) {
+    // Seed at the outline's bottom mid-edge (local coords); drag to place.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of it.outer) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    const dia = parseDim($('laySelNotchDia').value) || 25;
+    it.notch = { x: (minX + maxX) / 2, y: maxY, dia };
+  } else {
+    it.notch = null;
+  }
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+});
+$('laySelNotchDia').addEventListener('change', e => {
+  const it = state.layout.items[layoutEditor.sel];
+  if (!it || !it.notch) return;
+  const mm = parseDim(e.target.value);
+  if (mm > 2) it.notch.dia = mm;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
 });
 $('layPreviewBtn').addEventListener('click', () => {
   state.holder.type = 'layout';

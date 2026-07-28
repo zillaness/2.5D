@@ -292,6 +292,15 @@ one watertight mesh with an exact-depth floor. Export as **STL**, or as a
 true-scale **cut template SVG** (slab + pocket + pillars) for cutting real
 Kaizen foam on a laser or with a knife.
 
+**Finger notches, placeable.** Every pocket can carry a finger notch and you
+control where it sits: in the single-tool foam and Gridfinity modes pick an
+edge or **Custom position…** and slide the notch anywhere around the outline
+(live 3D preview); in the layout editor tick **Finger notch** on a selected
+tool and **drag the amber marker** — it snaps to the pocket boundary
+wherever you drop it, rides along with moves and rotations, and counts
+toward collision/border checks (a notch pointing at a Gridfinity wall
+flags red and bumps the bin size).
+
 **Multi-tool drawer layouts.** Pick **Multi-tool drawer insert** to open the
 layout editor: choose a container (a plain rectangle, or a **saved container
 outline** — photograph the drawer itself on paper and save its trace), then

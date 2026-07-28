@@ -520,6 +520,7 @@
               <option value="top">Top edge</option>
               <option value="left">Left edge</option>
               <option value="right">Right edge</option>
+              <option value="custom">Custom position…</option>
               <option value="none">Off</option>
             </select>
           </div>
@@ -527,6 +528,10 @@
             <label for="foamNotchDia">Notch ⌀ (mm)</label>
             <input type="text" inputmode="decimal" id="foamNotchDia" value="25">
           </div>
+        </div>
+        <div class="field" id="foamNotchPosRow" hidden>
+          <label>Notch position around the outline <span id="foamNotchPosVal" class="val"></span></label>
+          <input type="range" id="foamNotchPos" min="0" max="100" value="50">
         </div>
         <p class="hint">Traced holes in the tool stay as support pillars (they
         poke into the tool's own openings). The 3D view previews the insert
@@ -557,9 +562,31 @@
             <label><input type="checkbox" id="gridMagnets"> Magnet holes (⌀6.5×2.4)</label>
           </div>
         </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="gridNotch">Finger notch</label>
+            <select id="gridNotch">
+              <option value="none">Off</option>
+              <option value="bottom">Bottom edge</option>
+              <option value="top">Top edge</option>
+              <option value="left">Left edge</option>
+              <option value="right">Right edge</option>
+              <option value="custom">Custom position…</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="gridNotchDia">Notch ⌀ (mm)</label>
+            <input type="text" inputmode="decimal" id="gridNotchDia" value="25">
+          </div>
+        </div>
+        <div class="field" id="gridNotchPosRow" hidden>
+          <label>Notch position around the outline <span id="gridNotchPosVal" class="val"></span></label>
+          <input type="range" id="gridNotchPos" min="0" max="100" value="50">
+        </div>
         <p class="hint">Bin size snaps to the 42 mm Gridfinity grid
-        automatically (spec base profile, 0.25 mm fit gap per side). Traced
-        holes in the tool stay as support pillars.</p>
+        automatically (spec base profile, 0.25 mm fit gap per side); a finger
+        notch bulges the pocket and counts toward the fit. Traced holes in
+        the tool stay as support pillars.</p>
         <div class="btn-row">
           <button id="exportGridBtn" class="btn primary">⬇ Gridfinity bin STL</button>
         </div>
@@ -767,6 +794,15 @@
             <div class="field">
               <label for="laySelRot">Rotation (°)</label>
               <input type="text" inputmode="decimal" id="laySelRot" value="0">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field" style="display:flex; align-items:end">
+              <label><input type="checkbox" id="laySelNotch"> Finger notch</label>
+            </div>
+            <div class="field">
+              <label for="laySelNotchDia">Notch ⌀ (mm)</label>
+              <input type="text" inputmode="decimal" id="laySelNotchDia" value="25">
             </div>
           </div>
           <button id="layRemoveBtn" class="btn small">Remove tool</button>

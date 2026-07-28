@@ -78,6 +78,104 @@ export function roundedRect(cx, cy, w, h, r, segs = 10) {
   return pts;
 }
 
+// Closest point on a closed loop's boundary to pt.
+export function closestOnLoop(loop, pt) {
+  let best = null, bestD = Infinity;
+  for (let i = 0, n = loop.length; i < n; i++) {
+    const a = loop[i], b = loop[(i + 1) % n];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 > 0 ? ((pt.x - a.x) * dx + (pt.y - a.y) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const q = { x: a.x + dx * t, y: a.y + dy * t };
+    const d = (q.x - pt.x) ** 2 + (q.y - pt.y) ** 2;
+    if (d < bestD) { bestD = d; best = q; }
+  }
+  return best;
+}
+
+// Point at an arc-length fraction (0..1) along a closed loop.
+export function pointAtFrac(loop, frac) {
+  let per = 0;
+  for (let i = 0, n = loop.length; i < n; i++) {
+    const a = loop[i], b = loop[(i + 1) % n];
+    per += Math.hypot(b.x - a.x, b.y - a.y);
+  }
+  if (!(per > 0)) return loop[0];
+  let target = ((frac % 1) + 1) % 1 * per;
+  for (let i = 0, n = loop.length; i < n; i++) {
+    const a = loop[i], b = loop[(i + 1) % n];
+    const seg = Math.hypot(b.x - a.x, b.y - a.y);
+    if (target <= seg) {
+      const t = seg > 0 ? target / seg : 0;
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    }
+    target -= seg;
+  }
+  return loop[0];
+}
+
+// Where the boundary crosses the middle of a screen side (legacy notch
+// anchor): the extreme-most crossing of the bbox-centre axis.
+function sideCrossing(loop, side) {
+  const bb0 = bboxOf(loop);
+  const cx0 = (bb0.minX + bb0.maxX) / 2, cy0 = (bb0.minY + bb0.maxY) / 2;
+  const vertical = side === 'top' || side === 'bottom';
+  let best = null;
+  for (let i = 0, n = loop.length; i < n; i++) {
+    const a = loop[i], b = loop[(i + 1) % n];
+    let pt = null;
+    if (vertical) {
+      if ((a.x - cx0) * (b.x - cx0) > 0 || a.x === b.x) continue;
+      const t = (cx0 - a.x) / (b.x - a.x);
+      pt = { x: cx0, y: a.y + t * (b.y - a.y) };
+    } else {
+      if ((a.y - cy0) * (b.y - cy0) > 0 || a.y === b.y) continue;
+      const t = (cy0 - a.y) / (b.y - a.y);
+      pt = { x: a.x + t * (b.x - a.x), y: cy0 };
+    }
+    const better = best === null ||
+      (side === 'bottom' && pt.y > best.y) || (side === 'top' && pt.y < best.y) ||
+      (side === 'right' && pt.x > best.x) || (side === 'left' && pt.x < best.x);
+    if (better) best = pt;
+  }
+  return best;
+}
+
+// Union a finger-notch circle into a pocket. spec: { dia } plus one of
+// { frac } (perimeter fraction), { x, y } (snapped to the boundary), or
+// { side } ('top'|'bottom'|'left'|'right'). Returns the (new) pocket, and
+// the resolved centre via spec._at for callers that draw a marker.
+export function applyNotch(pocket, spec) {
+  if (!pocket || !spec || !(spec.dia > 2)) return pocket;
+  let c = null;
+  if (typeof spec.frac === 'number') c = pointAtFrac(pocket, spec.frac);
+  else if (Number.isFinite(spec.x) && Number.isFinite(spec.y)) c = closestOnLoop(pocket, spec);
+  else if (spec.side) c = sideCrossing(pocket, spec.side);
+  if (!c) return pocket;
+  spec._at = c;
+  return unionLoops([pocket, circleToPolygon(c.x, c.y, spec.dia, 48)])[0] || pocket;
+}
+
+// Transform a point with an item's placement (same math as placeLoop).
+export function placePoint(item, pt) {
+  const bb = bboxOf(item.outer);
+  const c = { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
+  const a = ((item.rot || 0) * Math.PI) / 180;
+  const cos = Math.cos(a), sin = Math.sin(a);
+  const dx = pt.x - c.x, dy = pt.y - c.y;
+  return { x: item.x + dx * cos - dy * sin, y: item.y + dx * sin + dy * cos };
+}
+// Inverse: a world/layout point back into the item's local outline frame.
+export function worldToItemLocal(item, pt) {
+  const bb = bboxOf(item.outer);
+  const c = { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
+  const a = -(((item.rot || 0) * Math.PI) / 180);
+  const cos = Math.cos(a), sin = Math.sin(a);
+  const dx = pt.x - item.x, dy = pt.y - item.y;
+  return { x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos };
+}
+
 const bboxOf = pts => {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of pts) {
@@ -89,10 +187,12 @@ const bboxOf = pts => {
 
 // ---------- multi-tool layout (drawer / toolbox inserts) ----------
 
-// Place a library outline: rotate about its bbox centre, then move that
-// centre to (x, y). Layout space is mm, y down (same as trace space).
-export function placeLoop(pts, item) {
-  const bb = bboxOf(pts);
+// Place a library loop: rotate about the reference loop's bbox centre (the
+// tool OUTLINE — pass it explicitly when placing the tool's holes, so they
+// keep their offset within the tool), then move that centre to (x, y).
+// Layout space is mm, y down (same as trace space).
+export function placeLoop(pts, item, ref = pts) {
+  const bb = bboxOf(ref);
   const c = { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
   const a = ((item.rot || 0) * Math.PI) / 180;
   const cos = Math.cos(a), sin = Math.sin(a);
@@ -107,17 +207,26 @@ export function placeLoop(pts, item) {
 // (collision display), the mesh builder and the cut-template export.
 export function layoutPockets(items, clearance) {
   return items.map(item => {
-    const pocket = offsetLoop(placeLoop(item.outer, item), Math.max(0, clearance))[0] || null;
+    let pocket = offsetLoop(placeLoop(item.outer, item), Math.max(0, clearance))[0] || null;
+    let notchAt = null;
+    if (pocket && item.notch && item.notch.dia > 2) {
+      // Notch centre stored in item-local coords; place it with the item,
+      // snap to the pocket boundary, union.
+      const w = placePoint(item, item.notch);
+      const spec = { dia: item.notch.dia, x: w.x, y: w.y };
+      pocket = applyNotch(pocket, spec);
+      notchAt = spec._at || null;
+    }
     const pillars = [];
     const sources = [
       ...(item.holes || []),
       ...(item.circles || []).map(c => circleToPolygon(c.cx, c.cy, c.d, 32)),
     ];
     for (const h of sources) {
-      const inner = offsetLoop(placeLoop(h, item), -Math.max(0, clearance))[0];
+      const inner = offsetLoop(placeLoop(h, item, item.outer), -Math.max(0, clearance))[0];
       if (inner && Math.abs(signedArea(inner)) >= 4) pillars.push(inner);
     }
-    return { pocket, pillars };
+    return { pocket, pillars, notchAt };
   });
 }
 
@@ -402,6 +511,13 @@ export function buildGridfinityBin(trace, opts = {}) {
 
   let pocket = offsetLoop(trace.outer, Math.max(0, clearance))[0];
   if (!pocket || pocket.length < 3) return null;
+  // Finger notch, before grid sizing so the bulge counts toward the fit.
+  const { notch = 'none', notchDia = 25, notchFrac = 0.5 } = opts;
+  if (notch && notch !== 'none') {
+    pocket = applyNotch(pocket, notch === 'custom'
+      ? { dia: notchDia, frac: notchFrac }
+      : { dia: notchDia, side: notch });
+  }
   const pillarLoops = [];
   if (pillars) {
     const sources = [
@@ -728,36 +844,12 @@ export function buildFoamInsert(trace, opts = {}) {
   let pocket = offsetLoop(trace.outer, Math.max(0, clearance))[0];
   if (!pocket || pocket.length < 3) return null;
 
-  // Finger notch: a circle centred where the pocket boundary crosses the
-  // middle of the chosen side (screen directions, y down) — the extreme-most
-  // crossing of the bbox-centre axis, so the notch lands mid-edge rather
-  // than tie-breaking onto a corner. Unioned into the pocket.
-  if (notch && notch !== 'none' && notchDia > 2) {
-    const bb0 = bboxOf(pocket);
-    const cx0 = (bb0.minX + bb0.maxX) / 2, cy0 = (bb0.minY + bb0.maxY) / 2;
-    const vertical = notch === 'top' || notch === 'bottom';
-    let best = null;
-    for (let i = 0, n = pocket.length; i < n; i++) {
-      const a = pocket[i], b = pocket[(i + 1) % n];
-      let pt = null;
-      if (vertical) {
-        if ((a.x - cx0) * (b.x - cx0) > 0 || a.x === b.x) continue;
-        const t = (cx0 - a.x) / (b.x - a.x);
-        pt = { x: cx0, y: a.y + t * (b.y - a.y) };
-      } else {
-        if ((a.y - cy0) * (b.y - cy0) > 0 || a.y === b.y) continue;
-        const t = (cy0 - a.y) / (b.y - a.y);
-        pt = { x: a.x + t * (b.x - a.x), y: cy0 };
-      }
-      const better = best === null ||
-        (notch === 'bottom' && pt.y > best.y) || (notch === 'top' && pt.y < best.y) ||
-        (notch === 'right' && pt.x > best.x) || (notch === 'left' && pt.x < best.x);
-      if (better) best = pt;
-    }
-    if (best) {
-      const merged = unionLoops([pocket, circleToPolygon(best.x, best.y, notchDia, 48)])[0];
-      if (merged) pocket = merged;
-    }
+  // Finger notch: side anchor, or 'custom' + notchFrac (perimeter fraction,
+  // driven by the position slider). Bulges outward only.
+  if (notch && notch !== 'none') {
+    pocket = applyNotch(pocket, notch === 'custom'
+      ? { dia: notchDia, frac: opts.notchFrac ?? 0.5 }
+      : { dia: notchDia, side: notch });
   }
 
   // Support pillars: traced holes (and manual circles) deflated by the
