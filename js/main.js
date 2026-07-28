@@ -18,6 +18,7 @@ import { parseLength, formatLength, formatLengthLabelled } from './units.js';
 import { measureInfo, loopStats, REGION_LOOP_BASE } from './measure.js';
 import { suggestRegions } from './regions.js';
 import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
+import { buildFoamInsert } from './holders.js';
 import { APP_VERSION } from './version.js';
 
 // Export quality presets: chord tolerance (mm) for round features and the
@@ -54,6 +55,13 @@ const state = {
     detectHoles: true, simplify: 0.4, smooth: 1, minHoleAreaMm2: 3,
   },
   model: { arcSegments: 8, quality: 'medium' },
+  // Holder generators (foam insert now; layouts/Gridfinity/holsters later).
+  // `depth: null` = follow the base section's thickness.
+  holder: {
+    type: 'none',
+    foam: { clearance: 0.5, margin: 10, cornerR: 4, depth: null, floor: 3, notch: 'bottom', notchDia: 25 },
+  },
+  holderMesh: null,
   // Sections: [0] is the base (footprint = traced outline); extra sections
   // carry their own drawn footprint, thickness and floor offset (overhangs).
   regions: [
@@ -621,8 +629,12 @@ function rebuildMesh(fit = false) {
     warns.push(...(mesh.stats.warnings || []));
     $('meshWarn').hidden = !warns.length;
     $('meshWarn').textContent = warns.join('\n');
-    renderMeshInfo();
-    if (viewer) viewer.setMesh(mesh, fit);
+    if (state.holder.type !== 'none') {
+      rebuildHolder(); // holder preview follows the trace/model live
+    } else {
+      renderMeshInfo();
+      if (viewer) viewer.setMesh(mesh, fit);
+    }
   }, 120);
 }
 
@@ -636,6 +648,104 @@ function renderMeshInfo() {
     (s.sections > 1 ? `\nSections: ${s.sections}` : '') +
     (s.islands > s.sections ? `\nParts: ${s.islands}` : '');
 }
+
+// ---------- holders (foam insert; layouts/Gridfinity/holsters follow) ----------
+
+let holderTimer = null;
+function holderParams() {
+  const f = state.holder.foam;
+  return {
+    clearance: f.clearance, margin: f.margin, cornerR: f.cornerR,
+    depth: f.depth || state.regions[0].thickness,
+    floor: f.floor, notch: f.notch, notchDia: f.notchDia,
+  };
+}
+function buildHolderNow() {
+  const trace = traceEditor.getTrace();
+  if (!trace.outer || trace.outer.length < 3) return null;
+  try { return buildFoamInsert(trace, holderParams()); }
+  catch (err) { console.error('buildFoamInsert failed', err); return null; }
+}
+function rebuildHolder() {
+  clearTimeout(holderTimer);
+  holderTimer = setTimeout(() => {
+    if (state.holder.type === 'none') return;
+    const res = buildHolderNow();
+    state.holderMesh = res;
+    if (!res) {
+      $('meshInfo').textContent = '';
+      $('meshWarn').hidden = false;
+      $('meshWarn').textContent = 'Could not build the foam insert — check the outline.';
+      if (viewer) viewer.setMesh(null);
+      return;
+    }
+    const s = res.stats;
+    $('meshInfo').textContent =
+      `Foam insert: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}\n` +
+      `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}\nTriangles: ${s.triangles}`;
+    const warns = s.warnings || [];
+    $('meshWarn').hidden = !warns.length;
+    $('meshWarn').textContent = warns.join('\n');
+    if (viewer) viewer.setMesh(res, true);
+  }, 120);
+}
+function syncHolderPanel() {
+  $('holderType').value = state.holder.type;
+  $('foamParams').hidden = state.holder.type !== 'foam';
+  const f = state.holder.foam;
+  $('foamClearance').value = fmtDim(f.clearance);
+  $('foamDepth').value = f.depth ? fmtDim(f.depth) : '';
+  $('foamMargin').value = fmtDim(f.margin);
+  $('foamFloor').value = fmtDim(f.floor);
+  $('foamNotch').value = f.notch;
+  $('foamNotchDia').value = fmtDim(f.notchDia);
+}
+$('holderType').addEventListener('change', e => {
+  state.holder.type = e.target.value;
+  $('foamParams').hidden = state.holder.type !== 'foam';
+  if (state.holder.type === 'none') { state.holderMesh = null; rebuildMesh(true); }
+  else rebuildHolder();
+});
+// Numeric foam fields; floor may be 0 (through pocket), the rest must be > 0.
+for (const [id, key, min] of [
+  ['foamClearance', 'clearance', 0], ['foamMargin', 'margin', 0.01],
+  ['foamFloor', 'floor', 0], ['foamNotchDia', 'notchDia', 0.01],
+]) {
+  $(id).addEventListener('change', e => {
+    const mm = parseDim(e.target.value);
+    if (mm !== null && mm >= min) state.holder.foam[key] = mm;
+    syncHolderPanel();
+    rebuildHolder();
+  });
+}
+$('foamDepth').addEventListener('change', e => {
+  const raw = e.target.value.trim();
+  if (raw === '') state.holder.foam.depth = null; // auto: follow thickness
+  else {
+    const mm = parseDim(raw);
+    if (mm > 0) state.holder.foam.depth = mm;
+  }
+  syncHolderPanel();
+  rebuildHolder();
+});
+$('foamNotch').addEventListener('change', e => {
+  state.holder.foam.notch = e.target.value;
+  rebuildHolder();
+});
+$('exportFoamBtn').addEventListener('click', () => {
+  const res = buildHolderNow();
+  if (!res) { toast('No outline to build a foam insert from yet.'); return; }
+  const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} foam`);
+  deliverExport(blob, `${state.fileName}-foam-2p5d.stl`);
+});
+$('exportFoamSvgBtn').addEventListener('click', () => {
+  const res = buildHolderNow();
+  if (!res) { toast('No outline to build a cut template from yet.'); return; }
+  const T = res.template;
+  const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
+  const blob = toSVG(shift(T.slab), [shift(T.pocket), ...T.pillars.map(shift)], T.w, T.h, {});
+  deliverExport(blob, `${state.fileName}-foam-template.svg`);
+});
 
 // ---------- wiring: step 1 ----------
 
@@ -1601,6 +1711,7 @@ function serializeProject(includePhoto) {
     corners: state.corners,
     seg: state.seg,
     model: state.model,
+    holder: state.holder,
     regions: state.regions,
     trace: traceEditor.getTrace(),
     measurements: traceEditor.measurements,
@@ -1681,6 +1792,13 @@ function loadProject(p) {
   }
   state.selRegion = 0;
   refreshModelFields();
+  if (p.holder) {
+    state.holder = {
+      type: p.holder.type === 'foam' ? 'foam' : 'none',
+      foam: { ...state.holder.foam, ...(p.holder.foam || {}) },
+    };
+  }
+  syncHolderPanel();
 
   const applyTrace = () => {
     if (p.trace) {

@@ -479,6 +479,60 @@
 
       <button id="regionDeleteBtn" class="btn small" disabled>Delete section</button>
 
+      <h3>Holder / organizer</h3>
+      <div class="field">
+        <label for="holderType">Make a holder for this object</label>
+        <select id="holderType">
+          <option value="none">None — export the object itself</option>
+          <option value="foam">Foam-style insert (pocket in a slab)</option>
+        </select>
+      </div>
+      <div id="foamParams" hidden>
+        <div class="field-row">
+          <div class="field">
+            <label for="foamClearance">Clearance (mm)</label>
+            <input type="text" inputmode="decimal" id="foamClearance" value="0.5" title="Gap around the tool so it drops in and out easily">
+          </div>
+          <div class="field">
+            <label for="foamDepth">Pocket depth (mm)</label>
+            <input type="text" inputmode="decimal" id="foamDepth" value="" placeholder="= thickness" title="How deep the tool sinks; empty = the object's thickness">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="foamMargin">Border (mm)</label>
+            <input type="text" inputmode="decimal" id="foamMargin" value="10" title="Slab material around the pocket">
+          </div>
+          <div class="field">
+            <label for="foamFloor">Floor (mm)</label>
+            <input type="text" inputmode="decimal" id="foamFloor" value="3" title="Slab below the pocket floor; 0 punches the pocket through">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="foamNotch">Finger notch</label>
+            <select id="foamNotch">
+              <option value="bottom">Bottom edge</option>
+              <option value="top">Top edge</option>
+              <option value="left">Left edge</option>
+              <option value="right">Right edge</option>
+              <option value="none">Off</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="foamNotchDia">Notch ⌀ (mm)</label>
+            <input type="text" inputmode="decimal" id="foamNotchDia" value="25">
+          </div>
+        </div>
+        <p class="hint">Traced holes in the tool stay as support pillars (they
+        poke into the tool's own openings). The 3D view previews the insert
+        while this is selected.</p>
+        <div class="btn-row">
+          <button id="exportFoamBtn" class="btn primary">⬇ Foam insert STL</button>
+          <button id="exportFoamSvgBtn" class="btn" title="True-scale slab + pocket outlines for cutting real foam">⬇ Cut template SVG</button>
+        </div>
+      </div>
+
       <h3>Export detail</h3>
       <div class="field">
         <label for="qualitySel">Quality preset</label>

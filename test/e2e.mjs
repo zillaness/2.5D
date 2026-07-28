@@ -2057,6 +2057,125 @@ check('glyph-overlapping feature falls back to the split (bore + warning), no op
   debScrew.clashWarned && debScrew.clashParts === 2 && debScrew.clashLeaks === 0,
   `${debScrew.clashParts} parts, ${debScrew.clashLeaks} open edges`);
 
+// ---------- Foam-style insert (holders.js) ----------
+
+const foam = await page.evaluate(async () => {
+  const { buildFoamInsert } = await import('/js/holders.js');
+  const outer = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 }];
+  const hole = [{ x: 15, y: 10 }, { x: 25, y: 10 }, { x: 25, y: 20 }, { x: 15, y: 20 }];
+  const badEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+  const hasZ = (m, z) => {
+    for (let i = 2; i < m.positions.length; i += 3) {
+      if (Math.abs(m.positions[i] - z) < 1e-6) return true;
+    }
+    return false;
+  };
+
+  // 40×30 tool with a 10×10 hole; 0.5 clearance, 10 border, 5 deep on a
+  // 3 mm floor, Ø20 finger notch on the bottom edge.
+  const res = buildFoamInsert({ outer, holes: [hole], circles: [] }, {
+    clearance: 0.5, margin: 10, cornerR: 4, depth: 5, floor: 3,
+    notch: 'bottom', notchDia: 20,
+  });
+  // Same tool, pocket punched through (no floor) — pillars must drop.
+  const thru = buildFoamInsert({ outer, holes: [hole], circles: [] }, {
+    clearance: 0.5, margin: 10, cornerR: 4, depth: 8, floor: 0, notch: 'none',
+  });
+
+  // Pillar top cap: vertices at the slab top inside the pocket area can only
+  // come from the standing pillar (hole 10×10 → pillar 9×9 centred on model
+  // (0, 5); the slab's own top cap has no vertices inside the pocket).
+  let pillarVerts = 0;
+  if (res) {
+    for (let i = 0; i < res.positions.length; i += 3) {
+      if (Math.abs(res.positions[i + 2] - 8) < 1e-6 &&
+          Math.abs(res.positions[i]) < 4.6 &&
+          Math.abs(res.positions[i + 1] - 5) < 4.6) pillarVerts++;
+    }
+  }
+  return {
+    ok: !!res, thruOk: !!thru,
+    bad: res ? badEdges(res) : -1,
+    thruBad: thru ? badEdges(thru) : -1,
+    slab: res ? res.stats.slab : null,
+    sizeX: res ? res.stats.sizeX : 0, sizeY: res ? res.stats.sizeY : 0, sizeZ: res ? res.stats.sizeZ : 0,
+    floorPlane: res ? hasZ(res, 3) : false,
+    pillarVerts,
+    thruWarned: thru ? (thru.stats.warnings || []).some(w => /pillars would float/.test(w)) : false,
+    thruSizeZ: thru ? thru.stats.sizeZ : 0,
+    tmplW: res ? res.template.w : 0, tmplH: res ? res.template.h : 0,
+  };
+});
+
+console.log('\nFoam-style insert (holders.js)');
+check('insert builds and is watertight', foam.ok && foam.bad === 0, `${foam.bad} bad edges`);
+check('slab = pocket bbox + border (41+20 × 41+20, notch included)',
+  near(foam.sizeX, 61, 0.2) && near(foam.sizeY, 61, 0.2) && near(foam.sizeZ, 8, 1e-6),
+  `${foam.sizeX.toFixed(1)} × ${foam.sizeY.toFixed(1)} × ${foam.sizeZ}`);
+check('pocket floor sits at exactly floor = 3 mm', foam.floorPlane, '');
+check('tool hole stands as a support pillar (cap flush with the top)',
+  foam.pillarVerts >= 4, `${foam.pillarVerts} verts`);
+check('through pocket (floor 0) drops pillars with a warning, stays watertight',
+  foam.thruOk && foam.thruBad === 0 && foam.thruWarned && near(foam.thruSizeZ, 8, 1e-6),
+  `${foam.thruBad} bad edges`);
+check('cut template carries true-scale slab dims', near(foam.tmplW, 61, 0.2) && near(foam.tmplH, 61, 0.2),
+  `${foam.tmplW.toFixed(1)} × ${foam.tmplH.toFixed(1)}`);
+
+// Foam UI: preview swap + export buttons deliver real downloads.
+await page.evaluate(() => window.__app.goStep(3));
+const foamUI = await page.evaluate(async () => {
+  const sel = document.getElementById('holderType');
+  sel.value = 'foam';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 500));
+  return {
+    previewActive: !!window.__app.state.holderMesh,
+    info: document.getElementById('meshInfo').textContent,
+    paramsShown: !document.getElementById('foamParams').hidden,
+  };
+});
+check('foam preview builds from the live trace and takes over the viewer',
+  foamUI.previewActive && foamUI.paramsShown && /Foam insert/.test(foamUI.info),
+  foamUI.info.split('\n')[0]);
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#exportFoamBtn'),
+  ]);
+  check('foam STL export downloads with the right name',
+    !!dl && /-foam-2p5d\.stl$/.test(dl.suggestedFilename()),
+    dl ? dl.suggestedFilename() : 'no download event');
+  const [svgDl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#exportFoamSvgBtn'),
+  ]);
+  const svgPath = svgDl ? await svgDl.path().catch(() => null) : null;
+  const svgTxt = svgPath ? fs.readFileSync(svgPath, 'utf8') : '';
+  check('foam cut-template SVG downloads with real content',
+    !!svgDl && /-foam-template\.svg$/.test(svgDl.suggestedFilename()) && svgTxt.includes('<svg'),
+    svgDl ? svgDl.suggestedFilename() : 'no download event');
+}
+await page.evaluate(async () => {
+  const sel = document.getElementById('holderType');
+  sel.value = 'none';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 300));
+});
+
 console.log('\nText → loops (emboss/deboss foundation)');
 check('blank text yields no loops', textRes.blankN === 0, `${textRes.blankN}`);
 check('"O" produces a counter (outer + hole ≥ 2 loops)', textRes.oN >= 2, `${textRes.oN} loops`);

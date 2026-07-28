@@ -278,6 +278,22 @@ stay open.
 Labels live in the trace overlay (green = emboss, orange = deboss) and are saved
 with the project.
 
+**Holders & organizers (step 3).** Instead of printing the object, print a
+*home* for it. Pick **Foam-style insert** under *Holder / organizer* and the
+3D view previews a rounded slab with the tool pocketed into the top:
+**clearance** around the outline so it drops in, **pocket depth** (defaults
+to the object's thickness), a **floor** beneath (0 punches the pocket
+through), a **border** of slab material, and a **finger notch** on any edge
+for lifting the tool out. Traced holes in the tool stay as **support
+pillars** — they poke into the tool's own openings (a tape-roll core, a
+wrench's hang hole) exactly the way letter counters stand in a debossed
+label, and it's the same single-shell recess construction, so the insert is
+one watertight mesh with an exact-depth floor. Export as **STL**, or as a
+true-scale **cut template SVG** (slab + pocket + pillars) for cutting real
+Kaizen foam on a laser or with a knife. Drawer layouts with multiple tools,
+Gridfinity bins and wall holsters are next — the roadmap lives in
+`docs/holders-prd.md`.
+
 **Suggest regions.** In step 2, **▨ Suggest regions** scans the photo for
 visually-distinct areas inside the object — a boss catching the light, a
 shadowed pocket, a differently-coloured pad — and drops each in as an **editable
@@ -424,7 +440,8 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 - Photo/scan line-art vectorization (two-point scale) — only needed to recover
   geometry from a pure raster photo of a drawing; PDF (in the Blueprint fork)
   covers the common case.
-- Tool-foam negative export (block minus offset outline).
+- *(Tool-foam insert shipped — see "Holders & organizers"; multi-tool layouts
+  are next, per `docs/holders-prd.md`.)*
 - Gridfinity bin with the object as a cutout.
 - Custom Gridfinity baseplates shaped to a saved outline.
 - Surface textures / knurling via a second detection threshold.
