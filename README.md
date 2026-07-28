@@ -304,7 +304,17 @@ red and blocks export until fixed. Each tool pockets at its **own depth**
 (tool / container) and their thickness. Preview in 3D, export the insert as
 STL, or export the whole layout as a true-scale template SVG for cutting
 foam. Layouts save with the project, geometry embedded, so they survive a
-different browser. Gridfinity bins and wall holsters are next — the roadmap
+different browser.
+
+**Gridfinity bins.** Pick **Gridfinity bin** and the tool pockets into a
+spec-true bin on the 42 mm grid: footprint auto-snaps to the smallest
+N×M·42−0.5 that fits the pocket plus minimum wall, height in 7 mm units
+(auto from the pocket depth), the standard base profile per cell
+(35.6 → 41.5 over 4.75 mm), an optional **stacking lip** (2.6 × 4.4,
+default on) and optional **magnet holes** (⌀6.5 × 2.4 at 26 mm centres,
+default off). Base pads, body-with-pocket and lip are built as
+watertight lofts and prisms — no CSG kernel — and mate with standard
+baseplates. Wall holsters and custom baseplates are next — the roadmap
 lives in `docs/holders-prd.md`.
 
 **Suggest regions.** In step 2, **▨ Suggest regions** scans the photo for
@@ -453,7 +463,7 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
   covers the common case.
 - *(Tool-foam insert shipped — see "Holders & organizers"; multi-tool layouts
   are next, per `docs/holders-prd.md`.)*
-- Gridfinity bin with the object as a cutout.
+- *(Gridfinity bin shipped — see "Gridfinity bins".)*
 - Custom Gridfinity baseplates shaped to a saved outline.
 - Surface textures / knurling via a second detection threshold.
 - Photogrammetry — multi-photo full-3D reconstruction.

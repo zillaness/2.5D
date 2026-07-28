@@ -9,7 +9,10 @@
 // clearance, and the tool's traced holes become standing support pillars
 // exactly the way letter counters stay standing in a debossed label.
 
-import { buildSolid, circleToPolygon } from './mesh.js';
+import {
+  buildSolid, circleToPolygon,
+  MeshBuilder, zipRings, addCap, circleRing, emitBand, emitDisk,
+} from './mesh.js';
 import { signedArea } from './contour.js';
 
 const CL = () => window.ClipperLib;
@@ -199,6 +202,209 @@ export function buildLayoutInsert(container, items, opts = {}) {
       slab: container.outer,
       pockets: pockets.map(p => ({ pocket: p.pocket, pillars: p.pillars })),
       origin: { x: bb.minX, y: bb.minY }, w: bb.w, h: bb.h,
+    },
+  };
+}
+
+// ---------- Gridfinity bin ----------
+//
+// Spec (gridfinity-unofficial / gridfinity-rebuilt): 42 mm grid, 7 mm height
+// unit. Bin footprint N·42−0.5 per side, corner r 3.75. Per-cell base pad,
+// bottom-up: 35.6² r0.8 → 0.8 mm 45° chamfer → 37.2² r1.6 → 1.8 mm straight
+// → 2.15 mm 45° chamfer → 41.5² r3.75 at z 4.75. Stacking lip: 4.4 mm tall ×
+// 2.6 deep (0.7 chamfer / 1.8 straight / 1.9 chamfer, ending near the outer
+// edge). Magnets: Ø6.5 × 2.4 at ±13 mm from each cell centre.
+//
+// Built as overlapping watertight parts (slicers union them, the deboss
+// precedent): per-cell base-pad lofts (+0.01 mm buried overlap into the
+// body), the body prism with the tool pocket as a single-shell recess, and
+// the lip as a ring loft. No CSG.
+
+const GF = {
+  grid: 42, gap: 0.5, baseH: 4.75, unitH: 7,
+  pad: [ // z, size, corner r — lofted per cell. Top is 41.5 per spec, held
+    // 0.02 under so the pad tucks INSIDE the bin wall instead of exactly
+    // flush with it (two shells sharing identical edge coordinates) — the
+    // 10 µm/side shortfall on the chamfer tip is far below print resolution.
+    { z: 0, s: 35.6, r: 0.8 },
+    { z: 0.8, s: 37.2, r: 1.6 },
+    { z: 2.6, s: 37.2, r: 1.6 },
+    { z: 4.75, s: 41.48, r: 3.74 },
+  ],
+  binR: 3.75,
+  lip: { h1: 0.7, h2: 1.8, h3: 1.9, inset: 2.6, tip: 0.05 }, // 4.4 total
+  magnet: { r: 3.25, depth: 2.4, off: 13 },
+  wall: 1.2, wallLip: 2.6,
+};
+
+const ensureCCW = loop => (signedArea(loop) > 0 ? loop : loop.slice().reverse());
+const ensureCW = loop => (signedArea(loop) < 0 ? loop : loop.slice().reverse());
+
+// Merge independently-watertight parts into one mesh (buildModel's scheme).
+function mergeParts(parts) {
+  const positions = new Float32Array(parts.reduce((n, p) => n + p.positions.length, 0));
+  const indices = new Uint32Array(parts.reduce((n, p) => n + p.indices.length, 0));
+  let vOff = 0, iOff = 0;
+  for (const p of parts) {
+    positions.set(p.positions, vOff * 3);
+    for (let k = 0; k < p.indices.length; k++) indices[iOff + k] = p.indices[k] + vOff;
+    vOff += p.positions.length / 3;
+    iOff += p.indices.length;
+  }
+  return { positions, indices };
+}
+
+// A gridfinity base pad for one cell, lofted in model coords (z up), with
+// optional magnet holes. cx/cy = cell centre in model mm.
+function padMesh(cx, cy, magnets) {
+  const mb = new MeshBuilder();
+  const EPS = 0.01;
+  const slices = GF.pad.map(p => ({
+    z: p.z, loop: ensureCCW(roundedRect(cx, cy, p.s, p.s, p.r)),
+  }));
+  // Overrun into the body slab so no faces are exactly coincident.
+  slices.push({ z: GF.baseH + EPS, loop: slices[slices.length - 1].loop });
+  for (let i = 0; i + 1 < slices.length; i++) {
+    if (slices[i + 1].z - slices[i].z < 1e-9) continue;
+    zipRings(mb, slices[i].loop, slices[i].z, slices[i + 1].loop, slices[i + 1].z);
+  }
+  const holes = [];
+  if (magnets) {
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        holes.push({ x: cx + sx * GF.magnet.off, y: cy + sy * GF.magnet.off });
+      }
+    }
+    for (const h of holes) {
+      emitBand(mb, h, 0, GF.magnet.r, GF.magnet.depth, GF.magnet.r, 48);
+      emitDisk(mb, h, GF.magnet.depth, GF.magnet.r, false, 48); // hole ceiling
+    }
+  }
+  addCap(mb, [slices[0].loop, ...holes.map(h => circleRing(h, GF.magnet.r, 48))], 0, false);
+  addCap(mb, [slices[slices.length - 1].loop], GF.baseH + EPS, true);
+  return { positions: new Float32Array(mb.positions), indices: new Uint32Array(mb.indices) };
+}
+
+// The stacking lip: a ring loft on top of the body (outer wall constant, the
+// inner surface steps out per the spec profile), overlapping the body top by
+// 0.01 mm. w/h = bin footprint, zTop = body top, model coords centred.
+function lipMesh(w, h, zTop) {
+  const mb = new MeshBuilder();
+  const EPS = 0.01;
+  const L = GF.lip;
+  const outer = ensureCCW(roundedRect(0, 0, w, h, GF.binR));
+  const innerAt = inset => ensureCW(roundedRect(0, 0, w - 2 * inset, h - 2 * inset,
+    Math.max(0.2, GF.binR - inset)));
+  const slices = [
+    { z: zTop - EPS, inset: L.inset },
+    { z: zTop + L.h1, inset: L.inset - L.h1 },          // 45° chamfer out
+    { z: zTop + L.h1 + L.h2, inset: L.inset - L.h1 },   // straight
+    { z: zTop + L.h1 + L.h2 + L.h3, inset: L.tip },     // 45° chamfer to near-edge
+  ].map(s => ({ z: s.z, inner: innerAt(s.inset) }));
+  for (let i = 0; i + 1 < slices.length; i++) {
+    zipRings(mb, outer, slices[i].z, outer, slices[i + 1].z);
+    zipRings(mb, slices[i].inner, slices[i].z, slices[i + 1].inner, slices[i + 1].z);
+  }
+  addCap(mb, [outer, slices[0].inner], slices[0].z, false);
+  addCap(mb, [outer, slices[slices.length - 1].inner], slices[slices.length - 1].z, true);
+  return { positions: new Float32Array(mb.positions), indices: new Uint32Array(mb.indices) };
+}
+
+// Gridfinity bin with the tool pocketed into the top. trace as in
+// buildFoamInsert; opts: { clearance, depth, unitsH (null = auto), lip,
+// magnets, pillars }. Returns { positions, indices, stats, cells } or null.
+export function buildGridfinityBin(trace, opts = {}) {
+  const {
+    clearance = 0.5, depth = 5, unitsH = null,
+    lip = true, magnets = false, pillars = true,
+  } = opts;
+  if (!trace || !trace.outer || trace.outer.length < 3) return null;
+  if (!(depth > 0.2)) return null;
+  const warnings = [];
+
+  let pocket = offsetLoop(trace.outer, Math.max(0, clearance))[0];
+  if (!pocket || pocket.length < 3) return null;
+  const pillarLoops = [];
+  if (pillars) {
+    const sources = [
+      ...(trace.holes || []),
+      ...(trace.circles || []).map(c => circleToPolygon(c.cx, c.cy, c.d, 32)),
+    ];
+    for (const h of sources) {
+      const inner = offsetLoop(h, -Math.max(0, clearance))[0];
+      if (inner && Math.abs(signedArea(inner)) >= 4) pillarLoops.push(inner);
+    }
+  }
+
+  // Grid size: pocket bbox + minimum wall must fit N·42−0.5, verified
+  // exactly against the rounded bin corners (bump N/M when the pocket's
+  // corners poke into them).
+  const minWall = lip ? GF.wallLip : GF.wall;
+  const bb = bboxOf(pocket);
+  let N = Math.max(1, Math.ceil((bb.w + 2 * minWall + GF.gap) / GF.grid));
+  let M = Math.max(1, Math.ceil((bb.h + 2 * minWall + GF.gap) / GF.grid));
+  const pcx = (bb.minX + bb.maxX) / 2, pcy = (bb.minY + bb.maxY) / 2;
+  const centred = loop => loop.map(p => ({ x: p.x - pcx, y: p.y - pcy }));
+  const fits = (n, m) => {
+    const w = n * GF.grid - GF.gap, h = m * GF.grid - GF.gap;
+    const inner = offsetLoop(roundedRect(0, 0, w, h, GF.binR), -minWall)[0];
+    if (!inner) return false;
+    const grown = offsetLoop(centred(pocket), 0.01)[0] || centred(pocket);
+    return unionLoops([inner, grown]).length === 1 &&
+      Math.abs(Math.abs(signedArea(unionLoops([inner, grown])[0])) - Math.abs(signedArea(inner))) < 0.5;
+  };
+  let guard = 0;
+  while (!fits(N, M) && guard++ < 3) {
+    if ((N * GF.grid) / (bb.w + 1) < (M * GF.grid) / (bb.h + 1)) N++; else M++;
+  }
+  const W = N * GF.grid - GF.gap, H2 = M * GF.grid - GF.gap;
+
+  // Height: units of 7 mm; the pocket floor must clear the base + 1 mm.
+  const minH = GF.baseH + 1 + depth;
+  const u = unitsH || Math.max(2, Math.ceil(minH / GF.unitH));
+  const H = u * GF.unitH;
+  let d = depth;
+  if (H - GF.baseH - 1 < d) {
+    d = H - GF.baseH - 1;
+    warnings.push(`Pocket depth reduced to ${d.toFixed(1)} mm to clear the base (${u}u bin).`);
+  }
+
+  // Model coords: bin centred on the origin. Pocket recentred to match, and
+  // handed to buildSolid in trace-space convention (y down) — the bin is
+  // symmetric so only the pocket needs the flip-consistency care.
+  const pocketC = centred(pocket);
+  const pillarsC = pillarLoops.map(centred);
+  const binLoop = roundedRect(0, 0, W, H2, GF.binR);
+  const none = { mode: 'none', size: 0 };
+  const body = buildSolid(binLoop, [], [], {
+    thickness: H - GF.baseH, zBase: GF.baseH, top: none, bottom: none,
+    center: { cx: 0, cy: 0 },
+    recesses: [{ islands: [{ outer: pocketC, holes: pillarsC }], depth: d, face: 'top' }],
+  });
+  if (!body) return null;
+  warnings.push(...(body.stats.warnings || []));
+
+  const parts = [body];
+  // Base pads per cell (model coords; y sign is symmetric so no flip issues).
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < M; j++) {
+      const cx = (i + 0.5) * GF.grid - (N * GF.grid) / 2;
+      const cy = (j + 0.5) * GF.grid - (M * GF.grid) / 2;
+      parts.push(padMesh(cx, cy, magnets));
+    }
+  }
+  if (lip) parts.push(lipMesh(W, H2, H));
+
+  const merged = mergeParts(parts);
+  const zTopAll = lip ? H + GF.lip.h1 + GF.lip.h2 + GF.lip.h3 : H;
+  return {
+    ...merged,
+    stats: {
+      triangles: merged.indices.length / 3,
+      sizeX: W, sizeY: H2, sizeZ: zTopAll,
+      slab: { w: W, h: H2, thickness: zTopAll, pocketDepth: d },
+      cells: { n: N, m: M, u },
+      warnings,
     },
   };
 }

@@ -287,7 +287,7 @@ function ringParams(pts) {
   return t;
 }
 
-class MeshBuilder {
+export class MeshBuilder {
   constructor() {
     this.positions = [];
     this.indices = [];
@@ -303,7 +303,7 @@ class MeshBuilder {
 
 // Stitch ring A (at zA) to ring B (at zB) with a triangle band that keeps
 // every original vertex. Both rings must share winding and aligned starts.
-function zipRings(mb, ringA, zA, ringB, zB) {
+export function zipRings(mb, ringA, zA, ringB, zB) {
   const tA = ringParams(ringA), tB = ringParams(ringB);
   const idxA = ringA.map(p => mb.addVertex(p.x, p.y, zA));
   const idxB = ringB.map(p => mb.addVertex(p.x, p.y, zB));
@@ -327,7 +327,7 @@ function zipRings(mb, ringA, zA, ringB, zB) {
 
 // Triangulate a slice (outer + holes) with earcut and append at height z.
 // up=true -> normal +z (top cap), up=false -> normal -z (bottom cap).
-function addCap(mb, rings, z, up) {
+export function addCap(mb, rings, z, up) {
   const flat = [];
   const holeIndices = [];
   for (let r = 0; r < rings.length; r++) {
@@ -359,7 +359,7 @@ function addCap(mb, rings, z, up) {
 
 // Ring of N points around centre c at radius r (deterministic start angle so
 // walls, shelves and caps share exact vertex coordinates).
-function circleRing(c, r, N) {
+export function circleRing(c, r, N) {
   const pts = [];
   for (let k = 0; k < N; k++) {
     const a = (k / N) * Math.PI * 2;
@@ -370,7 +370,7 @@ function circleRing(c, r, N) {
 
 // Cylinder/cone wall between (z0, r0) and (z1, r1), z0 < z1, normals facing
 // the hole axis (outward from the material).
-function emitBand(mb, c, z0, r0, z1, r1, N) {
+export function emitBand(mb, c, z0, r0, z1, r1, N) {
   const A = circleRing(c, r0, N).map(p => mb.addVertex(p.x, p.y, z0));
   const B = circleRing(c, r1, N).map(p => mb.addVertex(p.x, p.y, z1));
   for (let k = 0; k < N; k++) {
@@ -398,7 +398,7 @@ function emitFlat(mb, c, z, rIn, rOut, up, N) {
 }
 
 // Filled disc at z (blind-hole floor/ceiling). up=true -> normal +z.
-function emitDisk(mb, c, z, r, up, N) {
+export function emitDisk(mb, c, z, r, up, N) {
   const P = circleRing(c, r, N).map(p => mb.addVertex(p.x, p.y, z));
   const C = mb.addVertex(c.x, c.y, z);
   for (let k = 0; k < N; k++) {

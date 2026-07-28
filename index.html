@@ -485,6 +485,7 @@
         <select id="holderType">
           <option value="none">None — export the object itself</option>
           <option value="foam">Foam-style insert (pocket in a slab)</option>
+          <option value="grid">Gridfinity bin (42 mm grid)</option>
           <option value="layout">Multi-tool drawer insert (arrange…)</option>
         </select>
       </div>
@@ -531,6 +532,34 @@
         <div class="btn-row">
           <button id="exportFoamBtn" class="btn primary">⬇ Foam insert STL</button>
           <button id="exportFoamSvgBtn" class="btn" title="True-scale slab + pocket outlines for cutting real foam">⬇ Cut template SVG</button>
+        </div>
+      </div>
+      <div id="gridParams" hidden>
+        <div class="field-row">
+          <div class="field">
+            <label for="gridClearance">Clearance (mm)</label>
+            <input type="text" inputmode="decimal" id="gridClearance" value="0.5">
+          </div>
+          <div class="field">
+            <label for="gridDepth">Pocket depth (mm)</label>
+            <input type="text" inputmode="decimal" id="gridDepth" value="" placeholder="= thickness">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="gridUnits">Height (7 mm units)</label>
+            <input type="text" inputmode="decimal" id="gridUnits" value="" placeholder="auto">
+          </div>
+          <div class="field" style="display:flex; flex-direction:column; gap:4px; justify-content:center">
+            <label><input type="checkbox" id="gridLip" checked> Stacking lip</label>
+            <label><input type="checkbox" id="gridMagnets"> Magnet holes (⌀6.5×2.4)</label>
+          </div>
+        </div>
+        <p class="hint">Bin size snaps to the 42 mm Gridfinity grid
+        automatically (spec base profile, 0.25 mm fit gap per side). Traced
+        holes in the tool stay as support pillars.</p>
+        <div class="btn-row">
+          <button id="exportGridBtn" class="btn primary">⬇ Gridfinity bin STL</button>
         </div>
       </div>
 

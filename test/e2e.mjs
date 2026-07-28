@@ -2306,6 +2306,90 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 300));
 });
 
+// ---------- Gridfinity bin (holders.js) ----------
+
+const grid = await page.evaluate(async () => {
+  const { buildGridfinityBin } = await import('/js/holders.js');
+  const outer = [{ x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 }];
+  const badEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+  const zRange = m => {
+    let lo = 1e9, hi = -1e9;
+    for (let i = 2; i < m.positions.length; i += 3) {
+      lo = Math.min(lo, m.positions[i]); hi = Math.max(hi, m.positions[i]);
+    }
+    return { lo, hi };
+  };
+  const hasZ = (m, z, tol = 1e-4) => {
+    for (let i = 2; i < m.positions.length; i += 3) {
+      if (Math.abs(m.positions[i] - z) < tol) return true;
+    }
+    return false;
+  };
+  const sliceBox = (m, z) => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (let i = 0; i < m.positions.length; i += 3) {
+      if (Math.abs(m.positions[i + 2] - z) < 1e-4) {
+        minX = Math.min(minX, m.positions[i]); maxX = Math.max(maxX, m.positions[i]);
+        minY = Math.min(minY, m.positions[i + 1]); maxY = Math.max(maxY, m.positions[i + 1]);
+      }
+    }
+    return { w: maxX - minX, h: maxY - minY };
+  };
+
+  const trace = { outer, holes: [], circles: [] };
+  const bin = buildGridfinityBin(trace, { clearance: 0.5, depth: 5, lip: true, magnets: false });
+  const plain = buildGridfinityBin(trace, { clearance: 0.5, depth: 5, lip: false, magnets: false });
+  const mag = buildGridfinityBin(trace, { clearance: 0.5, depth: 5, lip: false, magnets: true });
+
+  return {
+    ok: !!bin && !!plain && !!mag,
+    bad: bin ? badEdges(bin) : -1,
+    plainBad: plain ? badEdges(plain) : -1,
+    magBad: mag ? badEdges(mag) : -1,
+    cells: bin ? bin.stats.cells : null,
+    sizeX: bin ? bin.stats.sizeX : 0, sizeY: bin ? bin.stats.sizeY : 0,
+    z: bin ? zRange(bin) : null,
+    plainTop: plain ? zRange(plain).hi : 0,
+    padBottom: bin ? sliceBox(bin, 0) : null,      // pad bottoms: 35.6 per cell
+    baseTop: bin ? hasZ(bin, 4.75) : false,        // base profile tops out at 4.75
+    pocketFloor: bin ? hasZ(bin, 14 - 5) : false,  // 2u bin, depth 5 → floor at 9
+    magCeil: mag ? hasZ(mag, 2.4) : false,         // magnet ceilings
+    magCeilOff: bin ? hasZ(bin, 2.4) : false,      // absent without magnets
+  };
+});
+
+console.log('\nGridfinity bin (holders.js)');
+check('bins build watertight (lip / plain / magnets)',
+  grid.ok && grid.bad === 0 && grid.plainBad === 0 && grid.magBad === 0,
+  `${grid.bad}/${grid.plainBad}/${grid.magBad} bad edges`);
+check('auto grid size = 2×1 cells, footprint 83.5 × 41.5 (spec 42−0.5)',
+  grid.cells && grid.cells.n === 2 && grid.cells.m === 1 &&
+  near(grid.sizeX, 83.5, 0.01) && near(grid.sizeY, 41.5, 0.01),
+  `${grid.cells?.n}×${grid.cells?.m}, ${grid.sizeX} × ${grid.sizeY}`);
+check('height = 2u (14) + 4.4 lip; plain bin tops at 14',
+  grid.z && near(grid.z.lo, 0, 1e-6) && near(grid.z.hi, 18.4, 0.1) && near(grid.plainTop, 14, 1e-6),
+  `${grid.z?.lo}..${grid.z?.hi}, plain ${grid.plainTop}`);
+check('base pads bottom out at 35.6 per cell and top at 4.75',
+  grid.padBottom && near(grid.padBottom.h, 35.6, 0.05) && near(grid.padBottom.w, 35.6 + 42, 0.05) && grid.baseTop,
+  `bottom span ${grid.padBottom?.w.toFixed(1)} × ${grid.padBottom?.h.toFixed(1)}`);
+check('pocket floor lands at 14 − 5 = 9', grid.pocketFloor, '');
+check('magnet holes appear only when enabled (ceilings at 2.4)',
+  grid.magCeil && !grid.magCeilOff, '');
+
 console.log('\nText → loops (emboss/deboss foundation)');
 check('blank text yields no loops', textRes.blankN === 0, `${textRes.blankN}`);
 check('"O" produces a counter (outer + hole ≥ 2 loops)', textRes.oN >= 2, `${textRes.oN} loops`);

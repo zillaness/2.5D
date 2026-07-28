@@ -18,7 +18,7 @@ import { parseLength, formatLength, formatLengthLabelled } from './units.js';
 import { measureInfo, loopStats, REGION_LOOP_BASE } from './measure.js';
 import { suggestRegions } from './regions.js';
 import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
-import { buildFoamInsert, buildLayoutInsert, roundedRect } from './holders.js';
+import { buildFoamInsert, buildLayoutInsert, buildGridfinityBin, roundedRect } from './holders.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
 import { APP_VERSION } from './version.js';
 
@@ -61,6 +61,7 @@ const state = {
   holder: {
     type: 'none',
     foam: { clearance: 0.5, margin: 10, cornerR: 4, depth: null, floor: 3, notch: 'bottom', notchDia: 25 },
+    grid: { clearance: 0.5, depth: null, unitsH: null, lip: true, magnets: false },
   },
   holderMesh: null,
   // Multi-tool drawer layout. Items embed their outline geometry (copied
@@ -668,11 +669,21 @@ function holderParams() {
     floor: f.floor, notch: f.notch, notchDia: f.notchDia,
   };
 }
+function gridParams() {
+  const g = state.holder.grid;
+  return {
+    clearance: g.clearance, depth: g.depth || state.regions[0].thickness,
+    unitsH: g.unitsH, lip: g.lip, magnets: g.magnets,
+  };
+}
 function buildHolderNow() {
   const trace = traceEditor.getTrace();
   if (!trace.outer || trace.outer.length < 3) return null;
-  try { return buildFoamInsert(trace, holderParams()); }
-  catch (err) { console.error('buildFoamInsert failed', err); return null; }
+  try {
+    return state.holder.type === 'grid'
+      ? buildGridfinityBin(trace, gridParams())
+      : buildFoamInsert(trace, holderParams());
+  } catch (err) { console.error('holder build failed', err); return null; }
 }
 const LAYOUT_REASONS = {
   empty: 'Add tools to the layout first (Multi-tool drawer → arrange).',
@@ -696,9 +707,10 @@ function rebuildHolder() {
       return;
     }
     const s = state.holderMesh.stats;
+    const label = { foam: 'Foam insert', grid: 'Gridfinity bin', layout: 'Drawer insert' }[state.holder.type];
     $('meshInfo').textContent =
-      `${isLayout ? 'Drawer insert' : 'Foam insert'}: ` +
-      `${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}\n` +
+      `${label}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}` +
+      (s.cells ? ` (${s.cells.n}×${s.cells.m} grid, ${s.cells.u}u)` : '') + '\n' +
       `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n` +
       `Triangles: ${s.triangles}`;
     const warns = s.warnings || [];
@@ -710,6 +722,7 @@ function rebuildHolder() {
 function syncHolderPanel() {
   $('holderType').value = state.holder.type;
   $('foamParams').hidden = state.holder.type !== 'foam';
+  $('gridParams').hidden = state.holder.type !== 'grid';
   const f = state.holder.foam;
   $('foamClearance').value = fmtDim(f.clearance);
   $('foamDepth').value = f.depth ? fmtDim(f.depth) : '';
@@ -717,10 +730,17 @@ function syncHolderPanel() {
   $('foamFloor').value = fmtDim(f.floor);
   $('foamNotch').value = f.notch;
   $('foamNotchDia').value = fmtDim(f.notchDia);
+  const g = state.holder.grid;
+  $('gridClearance').value = fmtDim(g.clearance);
+  $('gridDepth').value = g.depth ? fmtDim(g.depth) : '';
+  $('gridUnits').value = g.unitsH ? String(g.unitsH) : '';
+  $('gridLip').checked = !!g.lip;
+  $('gridMagnets').checked = !!g.magnets;
 }
 $('holderType').addEventListener('change', e => {
   state.holder.type = e.target.value;
   $('foamParams').hidden = state.holder.type !== 'foam';
+  $('gridParams').hidden = state.holder.type !== 'grid';
   if (state.holder.type === 'none') { state.holderMesh = null; rebuildMesh(true); }
   else if (state.holder.type === 'layout') { openLayoutModal(); rebuildHolder(); }
   else rebuildHolder();
@@ -750,6 +770,41 @@ $('foamDepth').addEventListener('change', e => {
 $('foamNotch').addEventListener('change', e => {
   state.holder.foam.notch = e.target.value;
   rebuildHolder();
+});
+$('gridClearance').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm !== null && mm >= 0) state.holder.grid.clearance = mm;
+  syncHolderPanel();
+  rebuildHolder();
+});
+$('gridDepth').addEventListener('change', e => {
+  const raw = e.target.value.trim();
+  if (raw === '') state.holder.grid.depth = null;
+  else {
+    const mm = parseDim(raw);
+    if (mm > 0) state.holder.grid.depth = mm;
+  }
+  syncHolderPanel();
+  rebuildHolder();
+});
+$('gridUnits').addEventListener('change', e => {
+  const raw = e.target.value.trim();
+  const u = parseInt(raw, 10);
+  state.holder.grid.unitsH = raw === '' || !(u >= 1) ? null : Math.min(20, u);
+  syncHolderPanel();
+  rebuildHolder();
+});
+$('gridLip').addEventListener('change', e => { state.holder.grid.lip = e.target.checked; rebuildHolder(); });
+$('gridMagnets').addEventListener('change', e => { state.holder.grid.magnets = e.target.checked; rebuildHolder(); });
+$('exportGridBtn').addEventListener('click', () => {
+  const trace = traceEditor.getTrace();
+  if (!trace.outer || trace.outer.length < 3) { toast('No outline to build a bin from yet.'); return; }
+  let res = null;
+  try { res = buildGridfinityBin(trace, gridParams()); }
+  catch (err) { console.error('buildGridfinityBin failed', err); }
+  if (!res) { toast('Could not build the Gridfinity bin.'); return; }
+  const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} gridfinity`);
+  deliverExport(blob, `${state.fileName}-bin-2p5d.stl`);
 });
 $('exportFoamBtn').addEventListener('click', () => {
   const res = buildHolderNow();
@@ -2044,8 +2099,9 @@ function loadProject(p) {
   refreshModelFields();
   if (p.holder) {
     state.holder = {
-      type: ['foam', 'layout'].includes(p.holder.type) ? p.holder.type : 'none',
+      type: ['foam', 'grid', 'layout'].includes(p.holder.type) ? p.holder.type : 'none',
       foam: { ...state.holder.foam, ...(p.holder.foam || {}) },
+      grid: { ...state.holder.grid, ...(p.holder.grid || {}) },
     };
   }
   if (p.layout && Array.isArray(p.layout.items)) {
