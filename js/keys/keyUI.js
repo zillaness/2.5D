@@ -926,15 +926,34 @@ function meshStats(pos) {
 
 initBlanks();
 { const el = $('appVersion'); if (el) el.textContent = VERSION; }
-// Light / dark theme toggle (top-right) — for contrast against the photo.
-// First visit defaults to DARK; a manual toggle is remembered in the browser
-// (localStorage) and used on every later visit.
+// Theme (top-right) — for contrast against the photo. THREE states, cycled by
+// the button:  Dark → Light → Auto (follow the OS) → Dark …
+// First visit opens DARK (not the OS setting); the choice is then remembered in
+// the browser (localStorage 'flr-theme') for later visits. In Auto the app
+// follows prefers-color-scheme and tracks OS changes live.
 {
   const tb = $('themeBtn'), KEY = 'flr-theme';
-  const apply = (t) => { document.documentElement.dataset.theme = t; if (tb) tb.textContent = t === 'light' ? '☀ Light' : '☾ Dark'; };
-  let saved = null; try { saved = localStorage.getItem(KEY); } catch { /* private mode */ }
-  apply(saved === 'light' ? 'light' : 'dark');   // saved choice if any, else dark
-  if (tb) tb.onclick = () => { const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'; apply(t); try { localStorage.setItem(KEY, t); } catch { /* ignore */ } };
+  const MODES = ['dark', 'light', 'auto'];
+  const LABEL = { dark: '☾ Dark', light: '☀ Light', auto: '◐ Auto' };
+  const mq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+  const systemTheme = () => (mq && mq.matches) ? 'light' : 'dark';
+  let mode = 'dark';                                   // default on first visit
+  try { const s = localStorage.getItem(KEY); if (MODES.includes(s)) mode = s; } catch { /* private mode */ }
+  const apply = () => {
+    document.documentElement.dataset.theme = mode === 'auto' ? systemTheme() : mode;
+    if (tb) tb.textContent = LABEL[mode];
+  };
+  apply();
+  if (tb) tb.onclick = () => {
+    mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length];
+    apply();
+    try { localStorage.setItem(KEY, mode); } catch { /* ignore */ }
+  };
+  // In Auto, follow the OS live (no effect in the fixed Dark/Light modes).
+  if (mq) {
+    const onChange = () => { if (mode === 'auto') apply(); };
+    mq.addEventListener ? mq.addEventListener('change', onChange) : mq.addListener(onChange);
+  }
 }
 // ── 3-step wizard (Photo/card → Trace → 3D key), mirroring the 2.5D flow ──────
 // Steps are freely re-selectable, and step 1 is skippable (no card → the scale

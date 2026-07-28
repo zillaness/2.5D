@@ -5,11 +5,11 @@
 // Single source of truth: bump this on each meaningful change; the header stamps
 // it on load so you can tell which build you're looking at.
 //
-//   v5.2  theme: first visit defaults to DARK; a manual light/dark choice is
-//         remembered in the browser (localStorage) for later visits. (Reverts
-//         v5.1's auto-follow-OS default — dark-first was preferred.)
-//   v5.1  theme briefly followed the OS by default (prefers-color-scheme).
-//         Superseded by v5.2.
+//   v5.3  theme is now a THREE-state cycle: Dark → Light → Auto (follow the OS
+//         via prefers-color-scheme, tracked live). First visit still opens DARK;
+//         the choice is remembered in the browser (localStorage) for later
+//         visits. (v5.1 defaulted to the OS, v5.2 dropped Auto entirely — this
+//         keeps dark-first AND the option to follow system settings.)
 //   v5.0  3-step wizard (1 Photo & card · 2 Trace · 3 3D key), borrowed from the
 //         2.5D flow: steps are freely re-selectable and the card is skippable.
 //         Advancing from step 1 with a card set now WARPS THE PHOTO FLAT through
@@ -95,4 +95,4 @@
 //   v1.6  bow welded to blade as one watertight manifold; bow matched to blade
 //         thickness so the key prints flat; version badge in the header.
 //   v1.5  flat-print + single-manifold groundwork, app-side decode UI, real bows.
-export const VERSION = 'v5.2';
+export const VERSION = 'v5.3';
