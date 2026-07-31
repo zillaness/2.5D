@@ -20,7 +20,7 @@ photo never leaves your machine.
 
 | 1 — Photo & paper | 2 — Trace & holes | 3 — Model & export |
 | --- | --- | --- |
-| ![corners](docs/step1-corners.png) | ![trace](docs/step2-trace.png) | ![model](docs/step3-model.png) |
+| ![Step 1 — photo on A4, sheet corners auto-detected with draggable handles](docs/screenshots/2_5d_corner_marking_v1.0.png) | ![Step 2 — traced outline with auto-detected hole and the editing toolset](docs/screenshots/2_5d_trace_editing_v1.0.png) | ![Step 3 — extruded solid with fillet and chamfer, hole cut through](docs/screenshots/2_5d_3d_model_v1.0.png) |
 
 ## Running it
 
@@ -75,6 +75,8 @@ the fully offline option.
   since a coin can't correct perspective. Best for small objects where a full
   sheet of paper is overkill.
 
+![Coin reference mode — a US quarter as the scale reference](docs/screenshots/2_5d_coin_mode_v1.0.png)
+
 A **Rotate photo** control uprights a sideways shot in 90° steps (the corners
 rotate with it). Or skip the photo entirely and **import a vector drawing** —
 see below.
@@ -104,6 +106,8 @@ are all flattened — so a 2.5D SVG/DXF export (fillet arcs as bulges/`A`, holes
 as true circles) re-imports as the same curved geometry, not faceted chamfers. A multi-view sheet shows a **view picker** — click the
 plan/top view to use it. Everything then edits and exports like any other
 trace. (`.dwg` is binary and unsupported — export it as DXF from your CAD app.)
+
+![DXF import — the view picker on a multi-view drawing sheet](docs/screenshots/2_5d_cad_import_v1.0.png)
 
 **2 — Trace & holes.** The photo is rectified to a flat, true-scale image and
 the object is segmented against the background colour. You get:
