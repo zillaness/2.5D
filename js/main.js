@@ -22,6 +22,7 @@ import {
   buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate,
   buildLayoutGridBin, gridContainerLoop, buildHolster, roundedRect,
 } from './holders.js';
+import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
 import { APP_VERSION } from './version.js';
 
@@ -86,6 +87,9 @@ const state = {
   ],
   selRegion: 0,
   meshData: null,
+  // Back (underside) photo: rectified copy, alignment onto the front trace,
+  // and the pre-rendered registered canvas used as an underlay.
+  back: { rect: null, align: null, registered: null, showing: false },
   step: 1,
   units: 'mm', // display unit; inputs accept both (12.7 / 1/2" / 0.5 in)
 };
@@ -344,6 +348,10 @@ function doRectify() {
     $('threshVal').textContent = state.seg.threshold;
   }
   traceEditor.setRectified(res.canvas, res.pxPerMm);
+  // A new front rectification invalidates the underside view (and possibly
+  // its alignment — the Auto button re-registers against the new trace).
+  state.back.showing = false;
+  backUISync();
   return true;
 }
 
@@ -662,6 +670,139 @@ function renderMeshInfo() {
     (s.sections > 1 ? `\nSections: ${s.sections}` : '') +
     (s.islands > s.sections ? `\nParts: ${s.islands}` : '');
 }
+
+// ---------- back (underside) photo ----------
+
+function backUISync() {
+  const has = !!state.back.registered;
+  $('backViewBtn').hidden = !has;
+  $('backTools').hidden = !has;
+  $('backViewBtn').textContent = state.back.showing ? '🔄 Show front' : '🔄 Show underside';
+  if (has && state.back.align) {
+    const mm = state.back.align.score / (state.rect ? state.rect.pxPerMm : 1);
+    $('backScore').textContent = Number.isFinite(mm)
+      ? (mm > 3 ? `Auto-align looks rough (≈${mm.toFixed(1)} mm off) — nudge or re-shoot.`
+                : `Aligned (≈${mm.toFixed(1)} mm mean silhouette error).`)
+      : '';
+  } else {
+    $('backScore').textContent = '';
+  }
+}
+function backApplyView() {
+  if (!state.rect) return;
+  traceEditor.setBackdrop(state.back.showing && state.back.registered
+    ? state.back.registered : state.rect.canvas);
+}
+// (Re)build the registered underlay from the stored rect + alignment.
+function backRender() {
+  if (!state.back.rect || !state.back.align || !state.rect) return;
+  state.back.registered = renderRegistered(
+    state.back.rect.canvas, state.rect.canvas.width, state.rect.canvas.height,
+    state.back.align);
+  backApplyView();
+  backUISync();
+}
+function backAutoAlign() {
+  if (!state.back.rect || !state.rect) return false;
+  const { outer } = traceEditor.getTrace();
+  if (!outer || outer.length < 3) { toast('Trace the object first — alignment matches silhouettes.'); return false; }
+  const sil = silhouetteOf(state.back.rect.canvas, state.back.rect.paperRect || null);
+  if (!sil) { toast('No object found in the back photo — check contrast / retake.'); return false; }
+  const ppmF = state.rect.pxPerMm, ppmB = state.back.rect.pxPerMm;
+  const frontPx = outer.map(p => ({ x: p.x * ppmF, y: p.y * ppmF }));
+  const align = registerBack(frontPx, sil, state.back.rect.canvas.width, ppmF / ppmB);
+  align.scale = ppmF / ppmB;
+  state.back.align = align;
+  return true;
+}
+
+$('backAddBtn').addEventListener('click', () => {
+  if (!state.rect) { toast('Rectify the front photo first (step 1).'); return; }
+  $('backFile').click();
+});
+$('backFile').addEventListener('change', e => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    let corners = null;
+    try { corners = detectPaperCorners(img); } catch (err) { console.error(err); }
+    if (!corners) {
+      toast('Could not find the paper corners in the back photo — retake with all four corners visible.', 6000);
+      return;
+    }
+    const { w, h } = currentPaper();
+    const marginMm = (state.captureFrac || 0) * Math.max(w, h);
+    const res = rectify(img, corners, w, h, { k1: state.lens.k1, k2: state.lens.k2, marginMm });
+    if (!res) { toast('Back photo rectification failed — retake.'); return; }
+    state.back.rect = res;
+    if (backAutoAlign()) {
+      state.back.showing = true;
+      backRender();
+      toast('Back photo aligned — you are looking at the underside. Draw sections against it, or ▨ Suggest underside regions.', 6500);
+    }
+  };
+  img.onerror = () => toast('Could not read that image.');
+  img.src = URL.createObjectURL(file);
+});
+$('backViewBtn').addEventListener('click', () => {
+  state.back.showing = !state.back.showing;
+  backApplyView();
+  backUISync();
+});
+const backNudge = dRad => {
+  if (!state.back.align) return;
+  state.back.align.rot += dRad;
+  state.back.align.score = NaN; // manual — score no longer meaningful
+  backRender();
+};
+$('backRot180').addEventListener('click', () => backNudge(Math.PI));
+$('backRotP').addEventListener('click', () => backNudge((2 * Math.PI) / 180));
+$('backRotM').addEventListener('click', () => backNudge((-2 * Math.PI) / 180));
+$('backReauto').addEventListener('click', () => { if (backAutoAlign()) backRender(); });
+$('backClearBtn').addEventListener('click', () => {
+  state.back = { rect: null, align: null, registered: null, showing: false };
+  backApplyView();
+  backUISync();
+});
+$('suggestUndersideBtn').addEventListener('click', () => {
+  if (!state.back.registered) { toast('Add a back photo first.'); return; }
+  const { outer, holes, circles } = traceEditor.getTrace();
+  if (!outer || outer.length < 3) { toast('Trace the object first.'); return; }
+  const circPoly = c => {
+    const pts = [];
+    for (let k = 0; k < 24; k++) { const a = k / 24 * Math.PI * 2; pts.push({ x: c.cx + c.d / 2 * Math.cos(a), y: c.cy + c.d / 2 * Math.sin(a) }); }
+    return pts;
+  };
+  const cands = suggestRegions(state.back.registered, outer,
+    [...holes, ...circles.map(circPoly)], state.rect.pxPerMm);
+  if (!cands.length) {
+    toast('No distinct underside areas found — draw sections by hand with the ▱ tool while showing the underside.');
+    return;
+  }
+  traceEditor.pushUndo();
+  const base = state.regions[0].thickness;
+  for (const c of cands) {
+    state.regions.push({
+      name: `Under ${state.regions.length}`,
+      pts: c.pts,
+      // thickness = recess depth: how far this area sits off the bed.
+      thickness: Math.round(Math.min(base * 0.4, base - 0.5) * 100) / 100,
+      zBase: 0,
+      top: { mode: 'none', size: 1 },
+      bottom: { mode: 'none', size: 1 },
+      suggested: true,
+      underside: true,
+    });
+  }
+  state.selRegion = state.regions.length - 1;
+  traceEditor.setSections(state.regions);
+  refreshModelFields();
+  traceEditor.draw();
+  rebuildMesh();
+  toast(`${cands.length} underside region${cands.length > 1 ? 's' : ''} added as bottom recesses — set each depth (how far off the bed) in step 3.`, 6500);
+});
 
 // ---------- holders (foam insert; layouts/Gridfinity/holsters follow) ----------
 
@@ -1992,7 +2133,8 @@ function refreshRegionSelect() {
   state.regions.forEach((r, i) => {
     const opt = document.createElement('option');
     opt.value = i;
-    opt.textContent = (r.name || `Section ${i + 1}`) + (i === 0 ? ' (base)' : '');
+    opt.textContent = (r.name || `Section ${i + 1}`) +
+      (i === 0 ? ' (base)' : r.underside ? ' (underside)' : '');
     sel.appendChild(opt);
   });
   sel.value = state.selRegion;
@@ -2010,6 +2152,14 @@ function refreshModelFields() {
   $('bottomMode').value = r.bottom.mode;
   $('bottomSize').value = fmtDim(r.bottom.size);
   $('regionDeleteBtn').disabled = state.selRegion === 0;
+  // Underside sections are bottom recesses: `thickness` is the recess depth
+  // (how far off the bed) and the floor offset does not apply.
+  const uz = !!r.underside;
+  $('floorOffset').disabled = uz;
+  document.querySelector('label[for="thickness"]').textContent =
+    uz ? 'Off-bed depth (mm)' : 'Thickness (mm)';
+  $('topMode').disabled = uz; $('topSize').disabled = uz;
+  $('bottomMode').disabled = uz; $('bottomSize').disabled = uz;
 }
 
 $('regionSel').addEventListener('change', e => {
@@ -2177,6 +2327,11 @@ function serializeProject(includePhoto) {
     holeTemplate: traceEditor.holeTemplate,
     pxPerMm: state.rect ? state.rect.pxPerMm : null,
     rectified: state.rect ? state.rect.canvas.toDataURL('image/jpeg', 0.85) : null,
+    back: state.back.rect ? {
+      rectified: state.back.rect.canvas.toDataURL('image/jpeg', 0.85),
+      pxPerMm: state.back.rect.pxPerMm,
+      align: state.back.align || null,
+    } : null,
     photo: includePhoto && state.image ? imageToDataURL(state.image) : null,
   });
 }
@@ -2267,6 +2422,27 @@ function loadProject(p) {
     };
   }
   syncHolderPanel();
+  // Back (underside) photo: restore the rectified copy + alignment; the
+  // registered underlay re-renders once the front rectification is back
+  // (both restores are async, so retry briefly).
+  state.back = { rect: null, align: null, registered: null, showing: false };
+  backUISync();
+  if (p.back && p.back.rectified && p.back.align) {
+    const bim = new Image();
+    bim.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = bim.width; c.height = bim.height;
+      c.getContext('2d').drawImage(bim, 0, 0);
+      state.back.rect = { canvas: c, pxPerMm: p.back.pxPerMm || 4 };
+      state.back.align = p.back.align;
+      const tryRender = (n = 0) => {
+        if (state.rect) { backRender(); }
+        else if (n < 20) setTimeout(() => tryRender(n + 1), 250);
+      };
+      tryRender();
+    };
+    bim.src = p.back.rectified;
+  }
 
   const applyTrace = () => {
     if (p.trace) {

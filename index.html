@@ -387,6 +387,30 @@
         <button id="suggestRegionsBtn" class="btn small" title="Scan the photo for distinct raised/recessed areas and add them as editable sections (you set the height in step 3)">▨ Suggest regions</button>
       </div>
 
+      <h3>Underside (back photo)</h3>
+      <p class="hint">Flip the object over on the same paper and photograph
+      it — the shot is mirrored and auto-aligned to your trace so you can see
+      the underside while drawing overhang / recess sections. Depth stays
+      yours to set: photos say where, not how deep.</p>
+      <input type="file" id="backFile" accept="image/*" hidden>
+      <div class="btn-row">
+        <button id="backAddBtn" class="btn small">📷 Add back photo…</button>
+        <button id="backViewBtn" class="btn small" hidden>🔄 Show underside</button>
+      </div>
+      <div id="backTools" hidden>
+        <div class="btn-row">
+          <button id="backRot180" class="btn small" title="Rotate the aligned back photo 180°">↻ 180°</button>
+          <button id="backRotP" class="btn small">+2°</button>
+          <button id="backRotM" class="btn small">−2°</button>
+          <button id="backReauto" class="btn small" title="Re-run automatic alignment">Auto</button>
+          <button id="backClearBtn" class="btn small">✕ Remove</button>
+        </div>
+        <div class="btn-row">
+          <button id="suggestUndersideBtn" class="btn small" title="Scan the aligned back photo for distinct areas and add them as underside sections (bottom recesses / overhangs)">▨ Suggest underside regions</button>
+        </div>
+        <p class="hint" id="backScore"></p>
+      </div>
+
       <h3>Selection <span class="val" id="selCount"></span></h3>
       <p class="hint">Ctrl/⌘-click points to multi-select, or Shift-drag a box
       around them. Drag any selected point to move the group; Delete removes

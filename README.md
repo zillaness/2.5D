@@ -351,6 +351,20 @@ booleans involved. Prints band-upright, plate vertical. That completes the
 holders roadmap (`docs/holders-prd.md`) — every phase shipped without a CSG
 kernel.
 
+**Back photo — see the underside (step 2).** Flip the object over on the
+same paper and **📷 Add back photo…**: the shot is corner-detected,
+rectified, **mirrored and auto-aligned** to your front trace (silhouette
+registration; nudge buttons and a re-Auto if a symmetric part lands wrong),
+and becomes a toggleable **underside underlay** in the workspace. Draw
+sections against what's really under there instead of guessing, or run
+**▨ Suggest underside regions** to auto-propose them. Sections created this
+way are **underside sections**: instead of extruding, they carve a
+bottom-face recess — you set the *off-bed depth* (how far that area floats
+above the bed) and the recess rides the same single-shell machinery as
+deboss labels, so the part stays one watertight mesh. Two flat photos still
+carry no depth — the back photo answers *where*, the depth stays yours.
+The back photo and its alignment save with the project.
+
 **Suggest regions.** In step 2, **▨ Suggest regions** scans the photo for
 visually-distinct areas inside the object — a boss catching the light, a
 shadowed pocket, a differently-coloured pad — and drops each in as an **editable

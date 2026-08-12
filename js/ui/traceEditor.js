@@ -129,6 +129,13 @@ export class TraceEditor {
     this.draw();
   }
 
+  // Swap the backdrop image without refitting the viewport — used to toggle
+  // between the front photo and the registered back (underside) photo.
+  setBackdrop(canvas) {
+    this.rectified = canvas;
+    this.draw();
+  }
+
   // keepRefs: an index-preserving replacement (e.g. rotate) keeps
   // measurements/constraints; a real re-trace or import drops loop refs.
   setTrace(outer, holes, keepUndo = false, keepRefs = false) {

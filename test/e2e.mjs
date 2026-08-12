@@ -2687,6 +2687,113 @@ check('edge pick + H constraint levels the edge via the solver',
   ui.nCons === 1 && ui.levelled < 1e-3,
   `picks ${ui.picks}, Δy ${ui.levelled}`);
 
+// ---------- back photo (underside) registration + underside sections ----------
+
+const backReg = await page.evaluate(async () => {
+  const { silhouetteOf, registerBack, renderRegistered } = await import('/js/backphoto.js');
+  // Synthetic "front": paper-ish background with a dark L-shaped object.
+  const W = 400, H = 300;
+  const mk = () => {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    // Slight gradient: a perfectly flat synthetic background degenerates
+    // Otsu's threshold (real photos always carry noise).
+    const g = ctx.createLinearGradient(0, 0, W, H);
+    g.addColorStop(0, '#f1efe8');
+    g.addColorStop(1, '#f7f5ef');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    return c;
+  };
+  const drawL = ctx => {
+    ctx.fillStyle = '#333';
+    ctx.beginPath();
+    ctx.moveTo(120, 90); ctx.lineTo(280, 90); ctx.lineTo(280, 140);
+    ctx.lineTo(170, 140); ctx.lineTo(170, 210); ctx.lineTo(120, 210);
+    ctx.closePath(); ctx.fill();
+  };
+  const front = mk();
+  drawL(front.getContext('2d'));
+  // Synthetic "back photo": the same scene mirrored (flipped object) and
+  // rotated 22° about the canvas centre.
+  const back = mk();
+  const bctx = back.getContext('2d');
+  bctx.translate(W / 2, H / 2);
+  bctx.rotate((22 * Math.PI) / 180);
+  bctx.scale(-1, 1);
+  bctx.translate(-W / 2, -H / 2);
+  drawL(bctx);
+  bctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  const frontSil = silhouetteOf(front);
+  const backSil = silhouetteOf(back);
+  if (!frontSil || !backSil) return { ok: false };
+  const align = registerBack(frontSil, backSil, W, 1);
+  align.scale = 1;
+  const reg = renderRegistered(back, W, H, align);
+  const rctx = reg.getContext('2d');
+  const darkAt = (x, y) => rctx.getImageData(x, y, 1, 1).data[0] < 120;
+  return {
+    ok: true,
+    score: align.score,
+    // Interior probes of the L must be dark in the registered image; the
+    // notch (removed quadrant) must be light.
+    inA: darkAt(140, 110), inB: darkAt(260, 115), inC: darkAt(140, 190),
+    outA: !darkAt(240, 190), outB: !darkAt(60, 40),
+  };
+});
+console.log('\nBack photo (underside) registration');
+check('mirrored + 22°-rotated back photo registers onto the front (probes match)',
+  backReg.ok && backReg.inA && backReg.inB && backReg.inC && backReg.outA && backReg.outB,
+  `score ${backReg.score?.toFixed(2)} px`);
+// The score carries segmentation noise (antialiasing, morphology) on top of
+// alignment error — it gates the UI hint, not geometry. Sane = well under
+// the ~12 px (3 mm at 4 px/mm) "looks rough" warning threshold.
+check('alignment score is sane (< 10 px incl. segmentation noise)',
+  backReg.ok && backReg.score < 10, `${backReg.score?.toFixed(2)} px`);
+
+const undersideMesh = await page.evaluate(async () => {
+  const { buildModel } = await import('/js/mesh.js');
+  const outer = [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 40 }, { x: 0, y: 40 }];
+  const none = { mode: 'none', size: 0 };
+  const regions = [
+    { name: 'Base', pts: null, thickness: 6, zBase: 0, top: none, bottom: none },
+    { name: 'Under', underside: true, thickness: 2.5, zBase: 0, top: none, bottom: none,
+      pts: [{ x: 15, y: 12 }, { x: 35, y: 12 }, { x: 35, y: 28 }, { x: 15, y: 28 }] },
+  ];
+  const m = buildModel(outer, [], [], regions, { arcSegments: 6 });
+  if (!m) return { ok: false };
+  const use = new Map();
+  const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+  for (let t = 0; t < m.indices.length; t += 3) {
+    const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+    if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+    for (let e = 0; e < 3; e++) {
+      const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+      use.set(key, (use.get(key) || 0) + 1);
+    }
+  }
+  let bad = 0;
+  for (const v of use.values()) if (v !== 2) bad++;
+  const hasZ = z => {
+    for (let i = 2; i < m.positions.length; i += 3) {
+      if (Math.abs(m.positions[i] - z) < 1e-6) return true;
+    }
+    return false;
+  };
+  return {
+    ok: true, bad,
+    sizeZ: m.stats.sizeZ,
+    parts: m.stats.sections,
+    recessCeil: hasZ(2.5),  // bottom recess: ceiling at z = off-bed depth
+  };
+});
+check('underside section carves a bottom recess in one watertight shell',
+  undersideMesh.ok && undersideMesh.bad === 0 && undersideMesh.parts === 1 &&
+  near(undersideMesh.sizeZ, 6, 1e-6) && undersideMesh.recessCeil,
+  `${undersideMesh.bad} bad edges, ${undersideMesh.parts} parts, ceiling ${undersideMesh.recessCeil}`);
+
 // ---------- theme: dark → light → auto (follow system) ----------
 console.log('\nTheme cycle');
 const themeCycle = await page.evaluate(() => {

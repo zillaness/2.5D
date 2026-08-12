@@ -908,14 +908,26 @@ function canSingleShell(fp, tracedHoles, screws, labels, t, edgeInset) {
 // blind / rim features apply on the true entry face — the region with the
 // highest top for side="top" holes, the lowest bottom for side="bottom" —
 // and everywhere else the hole is a plain bore.
-export function buildModel(outer, tracedHoles, screwHoles, regions, opts) {
-  if (!outer || outer.length < 3 || !regions || !regions.length) return null;
+export function buildModel(outer, tracedHoles, screwHoles, allRegions, opts) {
+  if (!outer || outer.length < 3 || !allRegions || !allRegions.length) return null;
   // opts may be a number (legacy arcSegments) or { arcSegments, chordTol }.
   const arcSegments = typeof opts === 'number' ? opts : (opts && opts.arcSegments) || 8;
   const chordTol = (opts && typeof opts === 'object' && opts.chordTol) || 0.35;
+  // Underside sections (drawn against the back photo) are not prisms of
+  // their own — they are blind recesses cut into the BOTTOM face, so they
+  // ride the deboss pipeline (single-shell fast path, two-layer fallback,
+  // clamps, warnings) with the drawn footprint as the "glyph". Their
+  // `thickness` is the recess depth: how far that area sits off the bed.
+  const underside = allRegions.filter(r =>
+    r.underside && r.pts && r.pts.length >= 3 && r.thickness > 0);
+  const regions = allRegions.filter(r => !r.underside);
+  if (!regions.length) return null;
   // labels: [{ loops, mode:'emboss'|'deboss', face:'top'|'bottom', size }] in
   // trace mm space — raised lettering or an engraved recess on a face.
-  const rawLabels = (opts && typeof opts === 'object' && opts.labels) || [];
+  const rawLabels = [
+    ...((opts && typeof opts === 'object' && opts.labels) || []),
+    ...underside.map(r => ({ loops: [r.pts], mode: 'deboss', face: 'bottom', size: r.thickness })),
+  ];
   const warnings = [];
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
