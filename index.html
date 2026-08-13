@@ -128,7 +128,33 @@
 
     <!-- ============ Step 2 ============ -->
     <section id="panel2" class="panel" hidden>
-      <h2>Trace &amp; holes</h2>
+      <h2 id="panel2Title">Trace &amp; holes</h2>
+
+      <div id="undersidePanel" class="underside-panel" hidden>
+        <h3 style="margin-top:0">▽ Underside view</h3>
+        <p class="hint">You're looking at the flipped object, aligned to your
+        outline. <b>The outline is reused</b> — don't re-trace it. Just mark
+        the areas that sit <i>above</i> the bed: draw them with ▱ Section or
+        let Suggest find them, then set each one's off-bed depth in step 3.</p>
+        <div class="btn-row">
+          <button id="suggestUndersideBtn" class="btn small" title="Scan the aligned back photo for distinct areas and add them as underside sections">▨ Suggest underside regions</button>
+        </div>
+        <p class="hint" style="margin:2px 0">Alignment</p>
+        <div class="btn-row">
+          <button id="backRot180" class="btn small" title="Rotate the aligned back photo 180°">↻ 180°</button>
+          <button id="backRotP" class="btn small">+2°</button>
+          <button id="backRotM" class="btn small">−2°</button>
+          <button id="backReauto" class="btn small" title="Re-run automatic alignment against the outline">Auto</button>
+          <button id="backReshootBtn" class="btn small" title="Replace the back photo">📷 Re-shoot</button>
+        </div>
+        <p class="hint" id="backScore"></p>
+        <div class="btn-row">
+          <button id="undersideDoneBtn" class="btn primary small">✓ Done — back to the top view</button>
+        </div>
+        <div class="btn-row">
+          <button id="backClearBtn" class="btn small">✕ Discard the underside view</button>
+        </div>
+      </div>
 
       <div class="field">
         <label>Detection threshold <span id="threshVal" class="val"></span></label>
@@ -387,28 +413,9 @@
         <button id="suggestRegionsBtn" class="btn small" title="Scan the photo for distinct raised/recessed areas and add them as editable sections (you set the height in step 3)">▨ Suggest regions</button>
       </div>
 
-      <h3>Underside (back photo)</h3>
-      <p class="hint">Flip the object over on the same paper and photograph
-      it — the shot is mirrored and auto-aligned to your trace so you can see
-      the underside while drawing overhang / recess sections. Depth stays
-      yours to set: photos say where, not how deep.</p>
       <input type="file" id="backFile" accept="image/*" hidden>
-      <div class="btn-row">
-        <button id="backAddBtn" class="btn small">📷 Add back photo…</button>
-        <button id="backViewBtn" class="btn small" hidden>🔄 Show underside</button>
-      </div>
-      <div id="backTools" hidden>
-        <div class="btn-row">
-          <button id="backRot180" class="btn small" title="Rotate the aligned back photo 180°">↻ 180°</button>
-          <button id="backRotP" class="btn small">+2°</button>
-          <button id="backRotM" class="btn small">−2°</button>
-          <button id="backReauto" class="btn small" title="Re-run automatic alignment">Auto</button>
-          <button id="backClearBtn" class="btn small">✕ Remove</button>
-        </div>
-        <div class="btn-row">
-          <button id="suggestUndersideBtn" class="btn small" title="Scan the aligned back photo for distinct areas and add them as underside sections (bottom recesses / overhangs)">▨ Suggest underside regions</button>
-        </div>
-        <p class="hint" id="backScore"></p>
+      <div class="btn-row" id="undersideForkRow" hidden>
+        <button id="undersideForkBtn" class="btn small" title="Optional: photograph the object flipped over to see and model its underside. Your outline is reused — you only add the recessed areas.">⤵ Add underside view…</button>
       </div>
 
       <h3>Selection <span class="val" id="selCount"></span></h3>

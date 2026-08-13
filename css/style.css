@@ -265,6 +265,15 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .modal-head { display: flex; justify-content: space-between; align-items: center; }
 .modal-head h3 { font-size: 14px; }
 .modal-box.wide { width: min(1020px, 96vw); max-height: 94vh; overflow-y: auto; }
+/* Underside (back-photo) mode: a distinct fork of the trace step. */
+.underside-panel {
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: color-mix(in srgb, var(--accent, #3b82f6) 8%, transparent);
+}
+.tool-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 #layoutCanvas { width: 100%; border: 1px solid var(--border); border-radius: 8px; touch-action: none; background: var(--bg1); }
 .cad-views {
   display: grid;

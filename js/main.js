@@ -215,6 +215,7 @@ function goStep(n) {
   if (n === 2) {
     $('lensRow').hidden = state.reference !== 'rect';
     $('lensVal').textContent = state.lens.k1.toFixed(3);
+    updateTraceInfo(); // also refreshes the optional underside entry point
     traceEditor.draw();
   }
   if (n === 3) {
@@ -349,9 +350,8 @@ function doRectify() {
   }
   traceEditor.setRectified(res.canvas, res.pxPerMm);
   // A new front rectification invalidates the underside view (and possibly
-  // its alignment — the Auto button re-registers against the new trace).
-  state.back.showing = false;
-  backUISync();
+  // its alignment — re-enter and hit Auto to re-register against the trace).
+  if (state.back.showing) exitUnderside(); else backUISync();
   return true;
 }
 
@@ -359,6 +359,12 @@ function doRectify() {
 
 function retrace() {
   if (!state.rect || !state.diffMap) return;
+  // The underside view is registered against the current outline — silently
+  // re-deriving it there would invalidate the alignment.
+  if (state.back.showing) {
+    toast('Finish the underside view before re-detecting the outline (it is aligned to the current trace).');
+    return;
+  }
   const { pxPerMm } = state.rect;
   const { diff, w, h } = state.diffMap;
 
@@ -432,6 +438,7 @@ function buildMaskOverlay(mask, w, h) {
 
 function updateTraceInfo(msg) {
   const el = $('traceInfo');
+  updateUndersideAvailability();
   if (msg) { el.textContent = msg; return; }
   const { outer, holes, circles } = traceEditor.getTrace();
   if (!outer || outer.length < 3) { el.textContent = ''; return; }
@@ -673,11 +680,32 @@ function renderMeshInfo() {
 
 // ---------- back (underside) photo ----------
 
+// The underside is an optional fork of the trace step, never part of the
+// default flow: the entry point only appears once there's a trace to reuse,
+// and nothing asks for a second photo. (A single top-down photo can't tell
+// you whether an underside recess exists — both faces share one silhouette
+// — so there is nothing honest to auto-detect and prompt on.)
+function updateUndersideAvailability() {
+  const { outer } = traceEditor.getTrace();
+  const ready = !!state.rect && outer && outer.length >= 3;
+  $('undersideForkRow').hidden = !ready || state.back.showing;
+  $('undersideForkBtn').textContent = state.back.registered
+    ? '▽ Underside view' : '⤵ Add underside view…';
+}
+// In underside mode the outline is reused, not re-traced: lock every tool
+// that edits it, leaving section drawing and pan.
+const UNDERSIDE_TOOLS = new Set(['region', 'pan']);
+function applyUndersideLock(on) {
+  for (const b of document.querySelectorAll('.tool-btn')) {
+    b.disabled = on && !UNDERSIDE_TOOLS.has(b.dataset.tool);
+  }
+  traceEditor.lockOutline = on;
+  $('panel2Title').textContent = on ? 'Trace & holes — underside' : 'Trace & holes';
+}
 function backUISync() {
   const has = !!state.back.registered;
-  $('backViewBtn').hidden = !has;
-  $('backTools').hidden = !has;
-  $('backViewBtn').textContent = state.back.showing ? '🔄 Show front' : '🔄 Show underside';
+  $('undersidePanel').hidden = !(has && state.back.showing);
+  updateUndersideAvailability();
   if (has && state.back.align) {
     const mm = state.back.align.score / (state.rect ? state.rect.pxPerMm : 1);
     $('backScore').textContent = Number.isFinite(mm)
@@ -716,10 +744,37 @@ function backAutoAlign() {
   return true;
 }
 
-$('backAddBtn').addEventListener('click', () => {
+function enterUnderside() {
+  state.back.showing = true;
+  applyUndersideLock(true);
+  // Section drawing is the whole point of this mode.
+  document.querySelectorAll('.tool-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tool === 'region'));
+  traceEditor.setMode('region');
+  $('measurePanel').hidden = true;
+  $('constrainPanel').hidden = true;
+  $('labelPanel').hidden = true;
+  backApplyView();
+  backUISync();
+}
+function exitUnderside() {
+  state.back.showing = false;
+  applyUndersideLock(false);
+  document.querySelectorAll('.tool-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tool === 'edit'));
+  traceEditor.setMode('edit');
+  backApplyView();
+  backUISync();
+}
+$('undersideForkBtn').addEventListener('click', () => {
   if (!state.rect) { toast('Rectify the front photo first (step 1).'); return; }
+  const { outer } = traceEditor.getTrace();
+  if (!outer || outer.length < 3) { toast('Finish the outline first — the underside reuses it.'); return; }
+  if (state.back.registered) { enterUnderside(); return; }
   $('backFile').click();
 });
+$('undersideDoneBtn').addEventListener('click', exitUnderside);
+$('backReshootBtn').addEventListener('click', () => $('backFile').click());
 $('backFile').addEventListener('change', e => {
   const file = e.target.files && e.target.files[0];
   e.target.value = '';
@@ -738,18 +793,13 @@ $('backFile').addEventListener('change', e => {
     if (!res) { toast('Back photo rectification failed — retake.'); return; }
     state.back.rect = res;
     if (backAutoAlign()) {
-      state.back.showing = true;
       backRender();
-      toast('Back photo aligned — you are looking at the underside. Draw sections against it, or ▨ Suggest underside regions.', 6500);
+      enterUnderside();
+      toast('Aligned to your outline — this is the underside. Mark the areas that sit above the bed, then set their depth in step 3.', 6500);
     }
   };
   img.onerror = () => toast('Could not read that image.');
   img.src = URL.createObjectURL(file);
-});
-$('backViewBtn').addEventListener('click', () => {
-  state.back.showing = !state.back.showing;
-  backApplyView();
-  backUISync();
 });
 const backNudge = dRad => {
   if (!state.back.align) return;
@@ -762,9 +812,27 @@ $('backRotP').addEventListener('click', () => backNudge((2 * Math.PI) / 180));
 $('backRotM').addEventListener('click', () => backNudge((-2 * Math.PI) / 180));
 $('backReauto').addEventListener('click', () => { if (backAutoAlign()) backRender(); });
 $('backClearBtn').addEventListener('click', () => {
+  const unders = state.regions.filter(r => r.underside).length;
+  if (unders && !confirm(
+    `Discard the underside view and its ${unders} underside section${unders === 1 ? '' : 's'}?`)) return;
+  // Splice in place (the array is shared with the editor) and drop each
+  // region's loop refs, highest index first — same as Delete section.
+  for (let i = state.regions.length - 1; i >= 1; i--) {
+    if (!state.regions[i].underside) continue;
+    traceEditor._refsOp({ op: 'deleteLoop', loop: REGION_LOOP_BASE + i });
+    state.regions.splice(i, 1);
+  }
+  state.selRegion = 0;
   state.back = { rect: null, align: null, registered: null, showing: false };
+  applyUndersideLock(false);
+  document.querySelectorAll('.tool-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tool === 'edit'));
+  traceEditor.setMode('edit');
+  traceEditor.setSections(state.regions);
+  refreshModelFields();
   backApplyView();
   backUISync();
+  rebuildMesh();
 });
 $('suggestUndersideBtn').addEventListener('click', () => {
   if (!state.back.registered) { toast('Add a back photo first.'); return; }
@@ -2873,6 +2941,7 @@ document.title = `2.5D v${APP_VERSION} — photo to printable solid`;
 // Test hook (used by the headless test-suite; harmless in normal use).
 window.__app = {
   state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect, doRectify,
+  backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   get viewer() { return viewer; },
 };

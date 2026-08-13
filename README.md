@@ -351,19 +351,29 @@ booleans involved. Prints band-upright, plate vertical. That completes the
 holders roadmap (`docs/holders-prd.md`) — every phase shipped without a CSG
 kernel.
 
-**Back photo — see the underside (step 2).** Flip the object over on the
-same paper and **📷 Add back photo…**: the shot is corner-detected,
-rectified, **mirrored and auto-aligned** to your front trace (silhouette
-registration; nudge buttons and a re-Auto if a symmetric part lands wrong),
-and becomes a toggleable **underside underlay** in the workspace. Draw
-sections against what's really under there instead of guessing, or run
-**▨ Suggest underside regions** to auto-propose them. Sections created this
-way are **underside sections**: instead of extruding, they carve a
-bottom-face recess — you set the *off-bed depth* (how far that area floats
-above the bed) and the recess rides the same single-shell machinery as
-deboss labels, so the part stays one watertight mesh. Two flat photos still
-carry no depth — the back photo answers *where*, the depth stays yours.
-The back photo and its alignment save with the project.
+**Underside view — an optional fork after tracing (step 2).** Most objects
+sit flat, so nothing ever asks you for a second photo. Once your outline is
+finished, a **⤵ Add underside view…** button appears; take it only if the
+part has recesses or overhangs on its bottom. (A single top-down photo
+can't tell you whether it does — both faces share one silhouette — so
+there's nothing honest to auto-detect here; it's your call.)
+
+Taking the fork: flip the object over on the same paper, photograph it, and
+the shot is corner-detected, rectified, **mirrored and aligned to the
+outline you already traced** — the outline is *reused, never re-traced*, so
+underside mode locks outline editing and leaves you just the ▱ Section
+tool. Mark the areas that sit above the bed by hand, or let **▨ Suggest
+underside regions** propose them; nudge the alignment (**180° / ±2° /
+Auto**) if a symmetric part lands rotated. **✓ Done** returns to the top
+view.
+
+Sections created this way are **underside sections**: instead of extruding,
+they carve a bottom-face recess — you set the *off-bed depth* (how far that
+area floats above the bed) in step 3, and the recess rides the same
+single-shell machinery as deboss labels, so the part stays one watertight
+mesh. Two flat photos still carry no depth: the back photo answers *where*,
+the depth stays yours. The back photo and its alignment save with the
+project.
 
 **Suggest regions.** In step 2, **▨ Suggest regions** scans the photo for
 visually-distinct areas inside the object — a boss catching the light, a

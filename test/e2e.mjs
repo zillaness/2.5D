@@ -2789,6 +2789,69 @@ const undersideMesh = await page.evaluate(async () => {
     recessCeil: hasZ(2.5),  // bottom recess: ceiling at z = off-bed depth
   };
 });
+// The underside is opt-in: nothing in the default trace flow asks for a
+// second photo, and the fork only appears once there's an outline to reuse.
+const undersideUI = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(2);
+  await new Promise(r => setTimeout(r, 200));
+  // Earlier suites leave the trace cleared; give this one a plain outline
+  // (goStep can re-run detection, so seed it after the step switch).
+  app.traceEditor.setTrace(
+    [{ x: 20, y: 20 }, { x: 80, y: 20 }, { x: 80, y: 60 }, { x: 20, y: 60 }], []);
+  app.updateTraceInfo();
+  const forkVisible = !document.getElementById('undersideForkRow').hidden;
+  const panelVisible = !document.getElementById('undersidePanel').hidden;
+  const toolsEnabled = [...document.querySelectorAll('.tool-btn')].every(b => !b.disabled);
+  // Enter the fork with a back photo already registered (bypass the file
+  // picker by seeding state the way the loader does).
+  const front = app.state.rect.canvas;
+  const c = document.createElement('canvas');
+  c.width = front.width; c.height = front.height;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(front, 0, 0);
+  app.state.back.rect = { canvas: c, pxPerMm: app.state.rect.pxPerMm };
+  app.state.back.align = { rot: 0, cB: { x: 0, y: 0 }, cF: { x: 0, y: 0 }, scale: 1, score: 1 };
+  app.backRender();
+  document.getElementById('undersideForkBtn').click();
+  await new Promise(r => setTimeout(r, 150));
+  const inMode = {
+    panel: !document.getElementById('undersidePanel').hidden,
+    forkHidden: document.getElementById('undersideForkRow').hidden,
+    mode: app.traceEditor.mode,
+    locked: app.traceEditor.lockOutline === true,
+    editDisabled: document.querySelector('.tool-btn[data-tool="edit"]').disabled,
+    regionEnabled: !document.querySelector('.tool-btn[data-tool="region"]').disabled,
+    title: document.getElementById('panel2Title').textContent,
+  };
+  // Outline edits must be refused while locked.
+  app.traceEditor.setMode('edit');
+  const stillRegion = app.traceEditor.mode === 'region';
+  const outlineBefore = app.traceEditor.getTrace().outer.length;
+  document.getElementById('undersideDoneBtn').click();
+  await new Promise(r => setTimeout(r, 150));
+  const after = {
+    panelHidden: document.getElementById('undersidePanel').hidden,
+    unlocked: !app.traceEditor.lockOutline,
+    mode: app.traceEditor.mode,
+    outlineSame: app.traceEditor.getTrace().outer.length === outlineBefore,
+  };
+  return { forkVisible, panelVisible, toolsEnabled, inMode, stillRegion, after };
+});
+check('default trace flow never asks for a back photo (fork offered, panel closed)',
+  undersideUI.forkVisible && !undersideUI.panelVisible && undersideUI.toolsEnabled, '');
+check('entering the fork opens underside mode with the outline locked',
+  undersideUI.inMode.panel && undersideUI.inMode.forkHidden &&
+  undersideUI.inMode.mode === 'region' && undersideUI.inMode.locked &&
+  undersideUI.inMode.editDisabled && undersideUI.inMode.regionEnabled &&
+  /underside/.test(undersideUI.inMode.title),
+  undersideUI.inMode.title);
+check('outline-editing modes are refused while in underside mode',
+  undersideUI.stillRegion, `mode ${undersideUI.inMode.mode}`);
+check('Done returns to the top view with the same outline reused',
+  undersideUI.after.panelHidden && undersideUI.after.unlocked &&
+  undersideUI.after.mode === 'edit' && undersideUI.after.outlineSame, '');
+
 check('underside section carves a bottom recess in one watertight shell',
   undersideMesh.ok && undersideMesh.bad === 0 && undersideMesh.parts === 1 &&
   near(undersideMesh.sizeZ, 6, 1e-6) && undersideMesh.recessCeil,

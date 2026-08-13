@@ -165,6 +165,8 @@ export class TraceEditor {
   }
 
   setMode(mode) {
+    // Underside mode reuses the top trace: refuse any mode that edits it.
+    if (this.lockOutline && mode !== 'region' && mode !== 'pan') return;
     if (this.mode === 'region' && mode !== 'region') this._draftRegion = null;
     if (mode !== 'measure') this._pendingPick = null;
     if (mode !== 'constrain') this._picks = [];
