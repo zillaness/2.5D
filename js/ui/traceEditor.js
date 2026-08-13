@@ -1950,11 +1950,13 @@ export class TraceEditor {
       drawLoop(this.holes[h], h, '#ff7d5c', 'rgba(255, 125, 92, 0.12)');
     }
 
-    // Section footprints (extra thickness regions)
+    // Section footprints: cyan for extra-thickness regions on top, amber for
+    // undercuts (bottom-face recesses drawn against the underside view).
     for (let sc = 1; sc < this.sections.length; sc++) {
       const sec = this.sections[sc];
       if (!sec.pts || sec.pts.length < 3) continue;
-      drawLoop(sec.pts, REGION_LOOP_BASE + sc, '#3fc6d4', 'rgba(63, 198, 212, 0.10)');
+      if (sec.underside) drawLoop(sec.pts, REGION_LOOP_BASE + sc, '#f59e0b', 'rgba(245, 158, 11, 0.12)');
+      else drawLoop(sec.pts, REGION_LOOP_BASE + sc, '#3fc6d4', 'rgba(63, 198, 212, 0.10)');
       let cxm = 0, cym = 0;
       for (const p of sec.pts) { cxm += p.x; cym += p.y; }
       const ctr = this._mmToScreen({ x: cxm / sec.pts.length, y: cym / sec.pts.length });

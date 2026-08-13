@@ -123,17 +123,25 @@ const traceEditor = new TraceEditor($('traceCanvas'), {
     input.select();
   },
   onRegionDrawn: (pts) => {
+    // Drawn while the underside view is open = an undercut: it becomes a
+    // bottom-face recess (off-bed depth) rather than an extruded prism.
+    const under = state.back.showing;
+    const base = state.regions[0].thickness;
     state.regions.push({
-      name: `Section ${state.regions.length + 1}`,
+      name: under ? `Under ${state.regions.length}` : `Section ${state.regions.length + 1}`,
       pts,
-      thickness: state.regions[0].thickness,
+      thickness: under ? Math.round(Math.max(0.2, Math.min(base * 0.4, base - 0.5)) * 100) / 100 : base,
       zBase: 0,
       top: { mode: 'none', size: 1 },
       bottom: { mode: 'none', size: 1 },
+      ...(under ? { underside: true } : {}),
     });
     state.selRegion = state.regions.length - 1;
     refreshModelFields();
-    toast('Section added — set its thickness and floor offset in step 3 (Model & export).');
+    if (state.step === 3) rebuildMesh();
+    toast(under
+      ? 'Undercut added — set how far it sits off the bed (Off-bed depth) in step 3.'
+      : 'Section added — set its thickness and floor offset in step 3 (Model & export).');
   },
   onSectionsChanged: () => {
     if (state.selRegion >= state.regions.length) state.selRegion = 0;

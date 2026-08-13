@@ -362,10 +362,11 @@ Taking the fork: flip the object over on the same paper, photograph it, and
 the shot is corner-detected, rectified, **mirrored and aligned to the
 outline you already traced** — the outline is *reused, never re-traced*, so
 underside mode locks outline editing and leaves you just the ▱ Section
-tool. Mark the areas that sit above the bed by hand, or let **▨ Suggest
-underside regions** propose them; nudge the alignment (**180° / ±2° /
-Auto**) if a symmetric part lands rotated. **✓ Done** returns to the top
-view.
+tool. **Draw the undercuts** — any section you draw here is created as an
+undercut automatically (amber on the canvas, cyan being ordinary top-side
+sections) — or let **▨ Suggest underside regions** propose them; nudge the
+alignment (**180° / ±2° / Auto**) if a symmetric part lands rotated.
+**✓ Done** returns to the top view.
 
 Sections created this way are **underside sections**: instead of extruding,
 they carve a bottom-face recess — you set the *off-bed depth* (how far that

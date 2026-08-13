@@ -2828,6 +2828,24 @@ const undersideUI = await page.evaluate(async () => {
   app.traceEditor.setMode('edit');
   const stillRegion = app.traceEditor.mode === 'region';
   const outlineBefore = app.traceEditor.getTrace().outer.length;
+
+  // Drawing a section here must produce an UNDERCUT, not an extruded prism.
+  const regionsBefore = app.state.regions.length;
+  app.traceEditor._draftRegion = [
+    { x: 35, y: 30 }, { x: 65, y: 30 }, { x: 65, y: 50 }, { x: 35, y: 50 }];
+  app.traceEditor.commitDraftRegion();
+  await new Promise(r => setTimeout(r, 100));
+  const drawn = app.state.regions[app.state.regions.length - 1];
+  const undercut = {
+    added: app.state.regions.length === regionsBefore + 1,
+    flagged: drawn.underside === true,
+    named: /^Under /.test(drawn.name),
+    depthUnderBase: drawn.thickness > 0 && drawn.thickness < app.state.regions[0].thickness,
+    selected: app.state.selRegion === app.state.regions.length - 1,
+    // Step-3 fields must switch to off-bed-depth semantics for it.
+    label: document.querySelector('label[for="thickness"]').textContent,
+    floorLocked: document.getElementById('floorOffset').disabled,
+  };
   document.getElementById('undersideDoneBtn').click();
   await new Promise(r => setTimeout(r, 150));
   const after = {
@@ -2836,7 +2854,7 @@ const undersideUI = await page.evaluate(async () => {
     mode: app.traceEditor.mode,
     outlineSame: app.traceEditor.getTrace().outer.length === outlineBefore,
   };
-  return { forkVisible, panelVisible, toolsEnabled, inMode, stillRegion, after };
+  return { forkVisible, panelVisible, toolsEnabled, inMode, stillRegion, after, undercut };
 });
 check('default trace flow never asks for a back photo (fork offered, panel closed)',
   undersideUI.forkVisible && !undersideUI.panelVisible && undersideUI.toolsEnabled, '');
@@ -2848,6 +2866,14 @@ check('entering the fork opens underside mode with the outline locked',
   undersideUI.inMode.title);
 check('outline-editing modes are refused while in underside mode',
   undersideUI.stillRegion, `mode ${undersideUI.inMode.mode}`);
+check('a section drawn in underside mode becomes an undercut (bottom recess)',
+  undersideUI.undercut.added && undersideUI.undercut.flagged &&
+  undersideUI.undercut.named && undersideUI.undercut.depthUnderBase &&
+  undersideUI.undercut.selected,
+  `${undersideUI.undercut.label}, flagged ${undersideUI.undercut.flagged}`);
+check('step 3 switches that section to off-bed-depth semantics',
+  /Off-bed depth/.test(undersideUI.undercut.label) && undersideUI.undercut.floorLocked,
+  undersideUI.undercut.label);
 check('Done returns to the top view with the same outline reused',
   undersideUI.after.panelHidden && undersideUI.after.unlocked &&
   undersideUI.after.mode === 'edit' && undersideUI.after.outlineSame, '');
