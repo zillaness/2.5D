@@ -2,6 +2,7 @@
 // holes, (3) extrusion parameters + export.
 
 import { PAPER_SIZES, COIN_SIZES, DEFAULT_SIZE, DEFAULT_COIN, paperDims } from './paperSizes.js';
+import { GRID_PITCHES, gridPitchMm, gridDims, analyzeGrid } from './gridRef.js';
 import { rectify } from './homography.js';
 import { estimateDistortion } from './lens.js';
 import { detectPaperCorners } from './detectPaper.js';
@@ -45,7 +46,10 @@ const state = {
   image: null,
   fileName: 'object',
   corners: null,          // [{x,y} x4] source-image px, TL TR BR BL
-  reference: 'rect', // 'rect' (paper/card, perspective-corrected) | 'coin' (scale only)
+  // 'rect' (paper/card, perspective-corrected) | 'grid' (graph/dot paper,
+  // perspective-corrected off counted squares) | 'coin' (scale only)
+  reference: 'rect',
+  grid: { pitch: 'mm5', customMm: 5, nx: 10, ny: 10 },
   paper: { size: DEFAULT_SIZE, orientation: 'portrait', customW: 210, customH: 297 },
   captureFrac: 0, // 0 = reference-only crop; >0 extends the rectified area beyond it (× longer paper side)
   labels: [],     // emboss/deboss text on a face
@@ -185,6 +189,10 @@ function toast(msg, ms = 3200) {
 }
 
 function currentPaper() {
+  if (state.reference === 'grid') {
+    const g = state.grid;
+    return gridDims(gridPitchMm(g.pitch, g.customMm), g.nx, g.ny);
+  }
   const { size, orientation, customW, customH } = state.paper;
   return paperDims(size, orientation, customW, customH);
 }
@@ -275,6 +283,12 @@ function loadImageFromURL(url, done) {
     cornerEditor.setImage(img);
     if (state.reference === 'coin') {
       cornerEditor.setRefMode('coin');
+    } else if (state.reference === 'grid') {
+      // Nothing to auto-detect: the handles go on grid intersections you
+      // pick, not on the sheet's edges.
+      state.corners = defaultCorners();
+      cornerEditor.setCorners(state.corners);
+      syncGridFields();
     } else {
       autoDetect(false);
     }
@@ -357,6 +371,19 @@ function doRectify() {
     $('threshVal').textContent = state.seg.threshold;
   }
   traceEditor.setRectified(res.canvas, res.pxPerMm);
+  // Grid reference: the square count is hand-entered and sets the whole
+  // scale, so measure the printed pitch back out and say whether it agrees.
+  if (state.reference === 'grid') {
+    let chk = null;
+    try {
+      chk = analyzeGrid(res.canvas, res.pxPerMm,
+        gridPitchMm(state.grid.pitch, state.grid.customMm));
+    } catch (err) { console.error('analyzeGrid failed', err); }
+    const el = $('gridCheck');
+    el.textContent = chk ? chk.message
+      : 'Could not read the grid back from the photo — check the scale by hand (📏 Measure in step 2).';
+    el.className = chk && chk.ok ? 'hint' : 'warn';
+  }
   // A new front rectification invalidates the underside view (and possibly
   // its alignment — re-enter and hit Auto to re-register against the trace).
   if (state.back.showing) exitUnderside(); else backUISync();
@@ -1485,17 +1512,85 @@ $('coinCustomDia').addEventListener('change', e => {
   state.rectDirty = true;
 });
 
+function syncRefControls() {
+  const r = state.reference;
+  $('rectRefControls').hidden = r !== 'rect';
+  $('gridRefControls').hidden = r !== 'grid';
+  $('coinRefControls').hidden = r !== 'coin';
+  cornerEditor.setRefMode(r === 'coin' ? 'coin' : 'corners');
+  if (r === 'grid') syncGridFields();
+}
 $('refType').addEventListener('change', e => {
   state.reference = e.target.value;
-  const coin = state.reference === 'coin';
-  $('rectRefControls').hidden = coin;
-  $('coinRefControls').hidden = !coin;
-  $('panel1').querySelector('h2').textContent = coin ? 'Photo & reference' : 'Photo & reference';
-  cornerEditor.setRefMode(coin ? 'coin' : 'corners');
+  syncRefControls();
+  $('gridCheck').textContent = '';
   if (state.image) {
-    if (coin && !cornerEditor.getCoin()) cornerEditor.setRefMode('coin');
-    if (!coin && !state.corners) autoDetect(false);
+    if (state.reference === 'coin' && !cornerEditor.getCoin()) cornerEditor.setRefMode('coin');
+    // The grid reference is placed by hand on intersections — paper-edge
+    // detection would drag the handles onto the sheet instead.
+    if (state.reference === 'rect' && !state.corners) autoDetect(false);
+    if (state.reference === 'grid' && !state.corners) {
+      state.corners = defaultCorners();
+      cornerEditor.setCorners(state.corners);
+    }
   }
+  state.rectDirty = true;
+  updateStepButtons();
+});
+
+// ---------- graph / dot-grid reference ----------
+
+(() => {
+  const sel = $('gridPitch');
+  const groups = new Map();
+  for (const [key, val] of Object.entries(GRID_PITCHES)) {
+    const opt = document.createElement('option');
+    opt.value = key; opt.textContent = val.name;
+    if (val.group) {
+      let og = groups.get(val.group);
+      if (!og) { og = document.createElement('optgroup'); og.label = val.group; groups.set(val.group, og); sel.appendChild(og); }
+      og.appendChild(opt);
+    } else sel.appendChild(opt);
+  }
+  sel.value = state.grid.pitch;
+})();
+function syncGridFields() {
+  $('gridPitch').value = state.grid.pitch;
+  $('gridCustomRow').hidden = state.grid.pitch !== 'custom';
+  $('gridCustomMm').value = fmtDim(state.grid.customMm);
+  $('gridNX').value = String(state.grid.nx);
+  $('gridNY').value = String(state.grid.ny);
+  $('gridCapture').value = String(state.captureFrac || 0);
+  $('gridResetBtn').disabled = !state.image;
+}
+$('gridPitch').addEventListener('change', e => {
+  state.grid.pitch = e.target.value;
+  state.rectDirty = true;
+  syncGridFields();
+});
+$('gridCustomMm').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm > 0.2) state.grid.customMm = mm;
+  state.rectDirty = true;
+  syncGridFields();
+});
+for (const [id, key] of [['gridNX', 'nx'], ['gridNY', 'ny']]) {
+  $(id).addEventListener('change', e => {
+    const n = parseInt(e.target.value, 10);
+    if (n >= 1 && n <= 500) state.grid[key] = n;
+    state.rectDirty = true;
+    syncGridFields();
+  });
+}
+$('gridCapture').addEventListener('change', e => {
+  state.captureFrac = parseFloat(e.target.value) || 0;
+  $('captureArea').value = e.target.value;
+  state.rectDirty = true;
+});
+$('gridResetBtn').addEventListener('click', () => {
+  if (!state.image) return;
+  state.corners = defaultCorners();
+  cornerEditor.setCorners(state.corners);
   state.rectDirty = true;
 });
 
@@ -2384,6 +2479,7 @@ function serializeProject(includePhoto) {
     fileName: state.fileName,
     units: state.units,
     reference: state.reference,
+    grid: state.grid,
     paper: state.paper,
     captureFrac: state.captureFrac,
     labels: state.labels,
@@ -2442,12 +2538,12 @@ function loadProject(p) {
   }
   if (p.coin) { state.coin = { ...state.coin, ...p.coin }; $('coinSize').value = state.coin.size; }
   if (p.lens) { state.lens = { k1: p.lens.k1 || 0, k2: p.lens.k2 || 0 }; }
-  if (p.reference === 'rect' || p.reference === 'coin') {
+  if (p.grid) state.grid = { ...state.grid, ...p.grid };
+  syncGridFields();
+  if (p.reference === 'rect' || p.reference === 'coin' || p.reference === 'grid') {
     state.reference = p.reference;
     $('refType').value = p.reference;
-    $('rectRefControls').hidden = p.reference === 'coin';
-    $('coinRefControls').hidden = p.reference !== 'coin';
-    cornerEditor.setRefMode(p.reference === 'coin' ? 'coin' : 'corners');
+    syncRefControls();
   }
   if (p.seg) {
     state.seg = { ...state.seg, ...p.seg };

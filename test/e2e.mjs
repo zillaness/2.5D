@@ -2883,6 +2883,129 @@ check('underside section carves a bottom recess in one watertight shell',
   near(undersideMesh.sizeZ, 6, 1e-6) && undersideMesh.recessCeil,
   `${undersideMesh.bad} bad edges, ${undersideMesh.parts} parts, ceiling ${undersideMesh.recessCeil}`);
 
+
+// ---------- graph / dot-grid reference ----------
+
+const gridRef = await page.evaluate(async () => {
+  const { GRID_PITCHES, gridPitchMm, gridDims, analyzeGrid } = await import('/js/gridRef.js');
+  // Synthetic rectified sheet: 5 mm grid at 8 px/mm = 40 px pitch.
+  const ppm = 8, pitch = 5, W = 480, H = 360;
+  const mkGrid = (pitchPx, dots) => {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fbfbf7'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#9fb6d9';
+    for (let x = 0; x <= W; x += pitchPx) {
+      for (let y = 0; y <= H; y += pitchPx) {
+        if (dots) ctx.fillRect(x - 1, y - 1, 2, 2);
+      }
+      if (!dots) ctx.fillRect(x, 0, 1, H);
+    }
+    if (!dots) for (let y = 0; y <= H; y += pitchPx) ctx.fillRect(0, y, W, 1);
+    return c;
+  };
+  const lines = analyzeGrid(mkGrid(pitch * ppm, false), ppm, pitch);
+  const dots = analyzeGrid(mkGrid(pitch * ppm, true), ppm, pitch);
+  // A miscount: the user said 10 squares where there were really 9, so the
+  // rectified pitch comes out 10/9 too large. Must be flagged, not accepted.
+  const miscount = analyzeGrid(mkGrid(pitch * ppm * (10 / 9), false), ppm, pitch);
+  const blank = (() => {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fbfbf7'; ctx.fillRect(0, 0, W, H);
+    return c;
+  })();
+  return {
+    pitches: Object.keys(GRID_PITCHES).length,
+    inch4: gridPitchMm('in4'), mm10: gridPitchMm('mm10'), custom: gridPitchMm('custom', 3.7),
+    dims: gridDims(6.35, 8, 5),
+    lines: lines && { mm: lines.detectedMm, ok: lines.ok },
+    dots: dots && { mm: dots.detectedMm, ok: dots.ok },
+    miscount: miscount && { mm: miscount.detectedMm, ok: miscount.ok, ratio: miscount.ratio },
+    blank: analyzeGrid(blank, ppm, pitch),
+  };
+});
+
+console.log('\nGraph / dot-grid reference');
+check('pitch table covers metric + imperial (1/4 in = 6.35, 1 cm = 10, custom passthrough)',
+  gridRef.pitches >= 12 && near(gridRef.inch4, 6.35, 1e-9) &&
+  near(gridRef.mm10, 10, 1e-9) && near(gridRef.custom, 3.7, 1e-9),
+  `${gridRef.pitches} entries`);
+check('counted squares set the rectified size (8 × 5 at 1/4 in = 50.8 × 31.75 mm)',
+  near(gridRef.dims.w, 50.8, 1e-9) && near(gridRef.dims.h, 31.75, 1e-9),
+  `${gridRef.dims.w} × ${gridRef.dims.h}`);
+check('printed pitch is measured back out of a line grid (5 mm)',
+  gridRef.lines && gridRef.lines.ok && near(gridRef.lines.mm, 5, 0.25),
+  gridRef.lines ? `${gridRef.lines.mm.toFixed(2)} mm` : 'not detected');
+check('dot grids read the same as line grids',
+  gridRef.dots && gridRef.dots.ok && near(gridRef.dots.mm, 5, 0.25),
+  gridRef.dots ? `${gridRef.dots.mm.toFixed(2)} mm` : 'not detected');
+check('a miscounted span is caught (9 squares called 10 → flagged, not accepted)',
+  gridRef.miscount && !gridRef.miscount.ok && near(gridRef.miscount.ratio, 10 / 9, 0.05),
+  gridRef.miscount ? `${gridRef.miscount.mm.toFixed(2)} mm, ratio ${gridRef.miscount.ratio.toFixed(3)}` : 'not detected');
+check('blank paper reports no grid rather than inventing one',
+  gridRef.blank === null, String(gridRef.blank));
+
+
+// Full pipeline in grid mode: a synthetic photo of a 60 x 40 mm object on
+// 5 mm graph paper, handles on intersections 20 x 14 squares apart.
+const gridFlow = await page.evaluate(async () => {
+  const app = window.__app;
+  const ppm = 6, pitch = 5, nx = 20, ny = 14;      // 100 x 70 mm spanned
+  const W = nx * pitch * ppm, H = ny * pitch * ppm; // exact, shot square-on
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fcfcf8'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#a8bcdb';
+  for (let x = 0; x <= W; x += pitch * ppm) ctx.fillRect(x, 0, 1, H);
+  for (let y = 0; y <= H; y += pitch * ppm) ctx.fillRect(0, y, W, 1);
+  // 60 x 40 mm dark object, centred.
+  ctx.fillStyle = '#2b2b2b';
+  ctx.fillRect((W - 60 * ppm) / 2, (H - 40 * ppm) / 2, 60 * ppm, 40 * ppm);
+
+  app.state.reference = 'grid';
+  document.getElementById('refType').value = 'grid';
+  document.getElementById('refType').dispatchEvent(new Event('change'));
+  Object.assign(app.state.grid, { pitch: 'mm5', nx, ny });
+  app.state.captureFrac = 0;
+  await new Promise(res => app.loadImageFromURL(c.toDataURL('image/png'), res));
+  // Handles exactly on the spanned intersections (the outer grid lines).
+  app.state.corners = [
+    { x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: H }, { x: 0, y: H }];
+  app.cornerEditor.setCorners(app.state.corners);
+  app.state.rectDirty = true;
+  app.goStep(2);
+  await new Promise(r => setTimeout(r, 700));
+  const t = app.traceEditor.getTrace();
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const p of t.outer || []) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  return {
+    pxPerMm: app.state.rect ? app.state.rect.pxPerMm : 0,
+    rectMm: app.state.rect
+      ? { w: app.state.rect.canvas.width / app.state.rect.pxPerMm,
+          h: app.state.rect.canvas.height / app.state.rect.pxPerMm } : null,
+    traced: t.outer ? { w: maxX - minX, h: maxY - minY } : null,
+    checkText: document.getElementById('gridCheck').textContent,
+    controlsShown: !document.getElementById('gridRefControls').hidden &&
+      document.getElementById('rectRefControls').hidden,
+  };
+});
+check('grid mode shows its own controls and rectifies to counted squares (100 x 70 mm)',
+  gridFlow.controlsShown && gridFlow.rectMm &&
+  near(gridFlow.rectMm.w, 100, 0.6) && near(gridFlow.rectMm.h, 70, 0.6),
+  gridFlow.rectMm ? `${gridFlow.rectMm.w.toFixed(1)} x ${gridFlow.rectMm.h.toFixed(1)} mm` : 'no rect');
+check('object traces at true scale through a grid reference (60 x 40 mm)',
+  gridFlow.traced && near(gridFlow.traced.w, 60, 1.5) && near(gridFlow.traced.h, 40, 1.5),
+  gridFlow.traced ? `${gridFlow.traced.w.toFixed(1)} x ${gridFlow.traced.h.toFixed(1)} mm` : 'no trace');
+check('the square count is verified against the printed pitch after rectifying',
+  /checks out/.test(gridFlow.checkText), gridFlow.checkText.slice(0, 80));
+
 // ---------- theme: dark → light → auto (follow system) ----------
 console.log('\nTheme cycle');
 const themeCycle = await page.evaluate(() => {
@@ -2903,13 +3026,13 @@ check('cycle: dark (default) → light → auto, choice persisted',
   themeCycle.s2.icon === '🌗' && themeCycle.saved === 'auto',
   `${themeCycle.s0.icon}→${themeCycle.s1.icon}→${themeCycle.s2.icon}, saved ${themeCycle.saved}`);
 await page.emulateMedia({ colorScheme: 'light' });
-await new Promise(r => setTimeout(r, 150));
+await new Promise(r => setTimeout(r, 400));
 const autoLight = await page.evaluate(() => ({
   cls: document.documentElement.classList.contains('light'),
   mq: window.matchMedia('(prefers-color-scheme: light)').matches,
 }));
 await page.emulateMedia({ colorScheme: 'dark' });
-await new Promise(r => setTimeout(r, 150));
+await new Promise(r => setTimeout(r, 400));
 const autoDark = await page.evaluate(() => ({
   cls: document.documentElement.classList.contains('light'),
   mq: window.matchMedia('(prefers-color-scheme: light)').matches,

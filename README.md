@@ -69,6 +69,12 @@ the fully offline option.
   drag the four handles to fine-tune (a magnifier loupe appears while dragging,
   the yellow edge marks the top). A rectangle corrects perspective and skew
   exactly.
+- **Graph / dot-grid paper** — calibrate off the printed grid instead of the
+  sheet's edges. Pick the pitch (metric 1–10 mm or imperial 1/10–1 in, or a
+  custom one), put the four handles on grid intersections or dots, and say how
+  many squares they span. Corrects perspective exactly, and the sheet's edges
+  never have to be in frame — so it suits objects bigger than the paper, or
+  laid across two sheets. See "Graph paper & dot grids" below.
 - **Coin** — scale only. Drag a circle over a coin (US, Canadian, euro, UK, or
   Australian — grouped by country in the picker, round denominations only — or a
   custom diameter) and its edge handle to the rim. Shoot straight down,
@@ -404,6 +410,26 @@ header/metadata. The **💾 Project**
 button also has an **outline library** that saves drawer/toolbox/tray outlines
 to this browser for reuse (foundation for the upcoming foam/Gridfinity
 exports).
+
+**Graph paper & dot grids as the reference.** Pick **Graph / dot-grid
+paper** and calibrate off the printed grid instead of the sheet's edges:
+choose the pitch — **metric** (1, 2, 2.5, 4, 5, 10 mm) or **imperial**
+(1/10, 1/8, 1/5, 1/4, 1/2, 1 in), or a custom pitch — drop the four handles
+on four grid intersections (or dots) that make a rectangle, and say how many
+squares they span. Line grids and dot grids work identically.
+
+The point is that **the sheet's own edges never have to be in frame**, so
+this handles objects bigger than the paper, objects lying across two sheets
+taped together, or a shot cropped tight. Perspective is still corrected
+exactly, because four known-spaced points is all a homography needs.
+
+The one risk this reference has that a known-size sheet doesn't is
+**miscounting the squares** — the count sets the entire scale. So after
+rectifying, 2.5D measures the printed pitch back out of the photo and tells
+you whether it agrees: *"Grid checks out — printed pitch reads 4.98 mm"*, or
+a warning with the ratio when it doesn't (counting 9 squares as 10 shows up
+as a clean 111%). If the grid is too fine or washed out to read back, it
+says so rather than staying quiet.
 
 ## Tips for good photos
 
