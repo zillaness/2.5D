@@ -60,8 +60,10 @@ function findChromium() {
 }
 
 let failures = 0;
+let checks = 0;
 function check(name, ok, detail = '') {
   const mark = ok ? 'PASS' : 'FAIL';
+  checks++;
   if (!ok) failures++;
   console.log(`  [${mark}] ${name}${detail ? ' — ' + detail : ''}`);
 }
@@ -3444,5 +3446,8 @@ if (consoleErrors.length) failures++;
 await browser.close();
 server.close();
 
-console.log(failures === 0 ? '\nAll checks passed ✔' : `\n${failures} check(s) FAILED ✘`);
+// Print the total so commit messages can quote it instead of hand-counting;
+// two past commits stated a count that was one off the actual run.
+console.log(`\n${checks} checks run.`);
+console.log(failures === 0 ? `All ${checks} checks passed ✔` : `${failures} of ${checks} check(s) FAILED ✘`);
 process.exit(failures === 0 ? 0 : 1);
