@@ -22,13 +22,16 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 `isUsingOverage` is false.
 
 ## Ledger
-- 05:26 ✅ e2e suite self-reports its check total — committed (see below)
-- 05:26 ▶ NEXT: doc sweep for v1.23.0 (README + docs/holders-prd.md behind the shipped feature set)
+- 05:26 ✅ e2e suite self-reports its check total — committed c44ba94
+- 05:34 ✅ doc sweep: README roadmap rebuilt for v1.23.0, Tests section notes the
+  count line, holders-prd records the v1.18–v1.23 follow-on work — committed below
+- 05:34 ▶ NEXT: draft docs/nesting_prd_v1.0.md (DRAFT FOR SIGN-OFF, do not implement)
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done
-2. Doc sweep for v1.23.0: README and `docs/holders-prd.md` predate puzzle tabs,
-   bed tiling, grid/mat references and the back-photo fork.
+2. ~~Doc sweep for v1.23.0~~ done. Scope was smaller than the handoff implied:
+   the README *body* already documented puzzle tabs and bed tiling. Only the
+   Roadmap block was stale (it never absorbed the holders arc at all).
 3. `docs/nesting_prd_v1.0.md` — DRAFT FOR SIGN-OFF only. Sam has not approved
    building nesting.
 4. STL tiling of printed inserts with registration features — design only, stop
@@ -47,6 +50,13 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   that did not match the run. Those commits are pushed; correcting them means
   rewriting history on a shared branch, which was not done. Instead the suite
   now prints its own total so the number can be quoted rather than counted.
+
+## Needs Sam's call
+- **Frontmatter on README.md.** Sam's revision-control convention says every
+  markdown file carries YAML frontmatter, and his CutSheetCalculator README
+  does. This repo never has, and GitHub renders frontmatter as a table at the
+  top of the repo's front page. Conflict flagged, not resolved: no frontmatter
+  was added to README.md or docs/holders-prd.md.
 
 ## Handoff
 (filled at soft-stop or limit)

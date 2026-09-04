@@ -2,6 +2,24 @@
 
 Status: **complete — all phases shipped (v1.11.0–v1.17.0)** · 2026-07-27 · target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
+> **Follow-on work shipped after this PRD closed (v1.18.0–v1.23.0).** These were
+> separate requests, not phases of this document, and are recorded here so the
+> PRD is not read as the current state of the feature area:
+>
+> - **v1.18.0** — placeable finger notches everywhere; Gridfinity gains notches.
+> - **v1.19.x** — front + back photo fork: mirrored underside underlay, and
+>   sections drawn in underside mode become bottom-face undercuts.
+> - **v1.20.0–v1.21.0** — graph-paper, dot-grid and cutting-mat scale
+>   references with auto-detected square counts and a scale-bar override.
+> - **v1.22.0** — cut templates tile to the laser or printer bed, with seams
+>   placed to cross the fewest pockets and then to maximise clearance.
+> - **v1.23.0** — puzzle-tab interlocks on those seams, so two bed-sized foam
+>   tiles lock into one drawer insert.
+>
+> Still open in this feature area: nesting / auto-sort for drawer layouts
+> (see `docs/nesting_prd_v1.0.md`, awaiting sign-off) and STL tiling of
+> *printed* inserts with registration features.
+
 ## Problem
 
 2.5D turns one photo into one true-scale solid of the *object*. The natural

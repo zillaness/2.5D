@@ -546,49 +546,56 @@ npm test             # needs a Chromium; set CHROMIUM_PATH if not auto-found
 npm run build        # regenerate dist/2.5d-local.html
 ```
 
+The run ends with its own check total (`244 checks run. All 244 checks
+passed ✔`) so the number quoted in a commit message can be copied from the
+output rather than counted by hand.
 ## Roadmap
 
 ### Shipped
 
-Card/bill/coin references, **vector CAD import (DXF/SVG)** with a multi-view
-picker, heat-set inserts, DXF export, STL quality presets, hole drag rework
-(centre = move, rim = resize), point multi-select (Ctrl-click + marquee) with
-group move/delete, arc/line fitting and densify/reduce on a selected run,
-rotate view 90° (both the trace step and the corner-setting step), radial
+**Core pipeline.** Card/bill/coin references, **graph-paper, dot-grid and
+cutting-mat references** with auto-detected square counts and a scale-bar
+override, **vector CAD import (DXF/SVG)** with a multi-view picker, heat-set
+inserts, DXF export, STL quality presets, hole drag rework (centre = move,
+rim = resize), point multi-select (Ctrl-click + marquee) with group
+move/delete, arc/line fitting and densify/reduce on a selected run, rotate
+view 90° (both the trace step and the corner-setting step), radial
 lens-distortion correction, the container outline library, **in-app
 measurement tools** (point/edge distances, angles, face-to-face gaps, radii,
-part size) and **geometric constraints** (H/V, perpendicular, parallel, equal,
+part size), **geometric constraints** (H/V, perpendicular, parallel, equal,
 collinear, concentric, dimensioned length/angle/distance, anchors, with live
-ghost-preview solving), and **live tangent fillet arcs** (first-class arcs that
-re-derive themselves to stay tangent to their neighbouring edges as you edit,
-with an editable radius and a release-to-points escape hatch) are all **done**
-and in the app.
+ghost-preview solving), **live tangent fillet arcs**, **emboss / deboss
+labels**, and a **front + back photo fork** so undersides and overhangs
+become bottom-face undercuts.
+
+**Holders & organizers** (the whole `docs/holders-prd.md` arc, v1.11–v1.17,
+plus the follow-on work through v1.23): foam inserts with placeable finger
+notches, multi-tool drawer and toolbox layouts with per-tool pocket depths,
+Gridfinity bins and custom baseplates, wall-mount holsters, true-scale **cut
+template SVG** export, **bed tiling** with pocket-avoiding seams, and
+**puzzle-tab interlocks** so two bed-sized foam tiles lock into one drawer
+insert.
 
 *(PDF drawing import — "picture of a CAD drawing → CAD out" — moved to the
 separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- *(Labels shipped — see “Labels — emboss & deboss”.)* Open threads live in the
-  horizon / tabled lists below.
-
-<!-- superseded:
-- **Emboss / deboss labels** — engrave or raise text (a part number, a name) on
-  a face. The text→loops foundation is in (`js/text.js`: platform font →
-  marching-squares glyph loops, letter counters included). Remaining: the
-  mesh + UI. **Emboss** reuses `buildSolid` — resolve the glyph loops into
-  islands and extrude a raised prism per letter on the chosen face (a clean
-  union). **Deboss** needs material removed, which the union-based pipeline
-  doesn't do, so model it as a two-layer split of the face: the top `depth`
-  slice becomes *outline − glyphs* over a full lower layer, giving a recess the
-  shape of the text. Watch the image-y→model-y flip so text reads upright on the
-  printed face (verify on a rendered STL). Placement + depth + face + mirror
-  (for stamps) in the UI.
-
--->
+- **Nesting / auto-sort for drawer layouts** — pack tool outlines into a
+  drawer automatically instead of dragging each one. Would work on the true
+  offset outlines rather than bounding boxes, since interleaving a plier and
+  a screwdriver is the entire value of a foam insert, and would score against
+  the existing `layoutPockets` / `layoutConflicts` predicates so a nested
+  result is conflict-free by construction. **Awaiting sign-off** — see
+  `docs/nesting_prd_v1.0.md`.
+- **STL tiling of printed inserts** — cut templates already tile to the bed;
+  the STL still exports whole and only warns when it overruns. Printed tiles
+  need registration features (dowels or keys) rather than the laser-cut
+  puzzle tabs.
 
 ### Horizon
 
+- **3MF export** — colours and per-object metadata that STL cannot carry.
 - **Keys** — trace your own key's blade profile and pick a keyway/blank
   (Schlage C, Kwikset KW1/4, …), optionally auto-detecting the type. Keys are
   small, so the coin or card reference is the right scale.
@@ -598,13 +605,15 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Tabled (deprioritized for now)
 
-- *(Multi-tool drawer layout shipped — see "Multi-tool drawer layouts".)*
 - Photo/scan line-art vectorization (two-point scale) — only needed to recover
   geometry from a pure raster photo of a drawing; PDF (in the Blueprint fork)
   covers the common case.
-- *(Tool-foam insert shipped — see "Holders & organizers"; multi-tool layouts
-  are next, per `docs/holders-prd.md`.)*
-- *(Gridfinity bin shipped — see "Gridfinity bins".)*
-- *(Custom Gridfinity baseplates shipped — see "Custom Gridfinity baseplates".)*
 - Surface textures / knurling via a second detection threshold.
 - Photogrammetry — multi-photo full-3D reconstruction.
+
+### Known gaps
+
+- The grid and cutting-mat auto-count is validated against synthetic fixtures
+  only; it has not been checked against real photographs of real graph paper.
+- Puzzle-tab kerf compensation (the `fit` field) is verified in tests but has
+  not been cut on a real laser.
