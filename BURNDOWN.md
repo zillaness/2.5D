@@ -26,7 +26,8 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - 05:34 ✅ doc sweep: README roadmap rebuilt for v1.23.0, Tests section notes the
   count line, holders-prd records the v1.18–v1.23 follow-on work — committed below
 - 05:47 ✅ docs/nesting_prd_v1.0.md drafted (288 lines, DRAFT — not implemented) — committed below
-- 05:47 ▶ NEXT: STL tiling of printed inserts — design only, stop before implementing
+- 05:56 ✅ docs/printed_tile_registration_v1.0.md design note (130 lines) — committed below
+- 05:56 ⏸ STOP: queue exhausted. Everything remaining needs Sam's call.
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done
@@ -34,8 +35,8 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
    the README *body* already documented puzzle tabs and bed tiling. Only the
    Roadmap block was stale (it never absorbed the holders arc at all).
 3. ~~`docs/nesting_prd_v1.0.md`~~ drafted, awaiting sign-off. Not implemented.
-4. STL tiling of printed inserts with registration features — design only, stop
-   before implementing.
+4. ~~STL tiling of printed inserts~~ design note written, awaiting a decision on
+   the registration scheme before a PRD is worth writing.
 
 ## Blocked (do not attempt unattended)
 - Logo PNG swap — needs an asset from Sam.
@@ -52,6 +53,11 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   now prints its own total so the number can be quoted rather than counted.
 
 ## Needs Sam's call
+- **Registration scheme for printed tiles**, per
+  `docs/printed_tile_registration_v1.0.md`. Recommendation is a stepped
+  half-lap seam with puzzle tabs as the fallback under ~6 mm thickness. Dowel
+  pins are ruled out: `buildSolid` only cuts top/bottom faces, so a hole in a
+  seam wall has no path through the pipeline.
 - **Sign-off on `docs/nesting_prd_v1.0.md`.** Steps 1-4 of its plan are the
   feature; nothing was built. Its open questions 1-4 (rotation step, auto-run,
   default minWeb, whether comfortWeb is user-facing) each have a
@@ -66,7 +72,31 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   was added to README.md or docs/holders-prd.md.
 
 ## Handoff
-(filled at soft-stop or limit)
+
+**Done and pushed this run** (branch `claude/2.5d-photo-stl-s3-y0oodn`, from
+`44cbe75` v1.23.0):
+
+| commit | unit |
+|---|---|
+| `c44ba94` | e2e suite reports its own check total; this ledger created |
+| `29fff41` | README roadmap + Tests section and holders-prd brought to v1.23.0 |
+| `8ed1fb0` | `docs/nesting_prd_v1.0.md` drafted for sign-off |
+| (below)   | `docs/printed_tile_registration_v1.0.md` design note |
+
+No version bump, no deploy, no PR, nothing outward-facing. `js/` is untouched
+apart from the test harness counter. 244 checks pass, no console errors.
+
+**In flight:** nothing. Every unit is committed and pushed.
+
+**Next session starts by** getting answers to the "Needs Sam's call" list
+above. The nesting PRD's steps 1-4 are the largest ready-to-build item and
+are blocked only on sign-off.
+
+**Burn:** this session spent about \$0.64 of notional quota across all four
+units, working solo rather than through the Workflow tool. Calibration data
+for the 5-hour bucket is in the scratchpad, not committed, since burndown
+telemetry does not belong in a photo-to-STL repo. It is worth writing up as
+`reports/usage_mechanics_report_v1.0.md` somewhere more appropriate.
 
 ## CHANGELOG
 - v1.0 (2026-09-04): Initial ledger for the 2026-09-04 burndown.
