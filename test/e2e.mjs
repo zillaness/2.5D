@@ -3233,6 +3233,99 @@ check('scale bar sets scale from two points (300 px = 75 mm -> 4 px/mm) and trac
   `${barFlow.pxPerMm.toFixed(2)} px/mm, ${barFlow.traced ? barFlow.traced.w.toFixed(1) + ' x ' + barFlow.traced.h.toFixed(1) : 'no trace'}`);
 check('the bar is captioned with its length in the picture', /75/.test(barFlow.label), barFlow.label);
 
+
+// ---------- bed tiling for the cut template ----------
+
+const tiling = await page.evaluate(async () => {
+  const { splitTiles, roundedRect } = await import('/js/holders.js');
+  const { toTiledSVG } = await import('/js/exporters.js');
+  // A 550 x 380 drawer on a 300 x 200 bed -> 2 x 2 tiles. A pocket sits
+  // right across the naive midline (x 250..300) with clear foam either side
+  // at 220..250 and 300..330, so the x seam must dodge it; nothing dodges
+  // the y seam (a pocket spans y 150..230 across the whole window).
+  const slab = roundedRect(275, 190, 550, 380, 6);
+  const rect = (x0, y0, x1, y1) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+  const template = {
+    slab, origin: { x: 0, y: 0 }, w: 550, h: 380,
+    pockets: [
+      { pocket: rect(250, 40, 300, 120), pillars: [] },   // across naive x seam at 275
+      { pocket: rect(60, 150, 200, 230), pillars: [] },   // across every legal y seam (180..200)
+      { pocket: rect(380, 260, 500, 340), pillars: [] },
+    ],
+  };
+  const plan = splitTiles(template, 300, 200);
+  const fits = splitTiles({ ...template, w: 280, h: 190 }, 300, 200);
+  const svg = plan ? await toTiledSVG(plan.tiles, { name: 't' }).text() : '';
+  const totalArea = plan ? plan.tiles.reduce((a, t) => a + t.slabs.reduce((b, l) => {
+    let s = 0; for (let i = 0, n = l.length; i < n; i++) { const p = l[i], q = l[(i + 1) % n]; s += p.x * q.y - q.x * p.y; }
+    return b + Math.abs(s) / 2; }, 0), 0) : 0;
+  let slabArea = 0; for (let i = 0, n = slab.length; i < n; i++) { const p = slab[i], q = slab[(i + 1) % n]; slabArea += p.x * q.y - q.x * p.y; }
+  return {
+    plan: plan && { nx: plan.nx, ny: plan.ny, tiles: plan.tiles.length, seamsX: plan.seamsX, seamsY: plan.seamsY, crossings: plan.crossings },
+    maxW: plan ? Math.max(...plan.tiles.map(t => t.w)) : 0,
+    maxH: plan ? Math.max(...plan.tiles.map(t => t.h)) : 0,
+    areaRatio: totalArea / (Math.abs(slabArea) / 2),
+    fits,
+    svgTiles: (svg.match(/<path /g) || []).length,
+    svgLabels: (svg.match(/>A1 —|>A2 —|>B1 —|>B2 —/g) || []).length,
+    svgLayers: /id="cut"/.test(svg) && /id="marks"/.test(svg),
+  };
+});
+console.log('\nBed tiling (cut template)');
+check('550 x 380 drawer on a 300 x 200 bed splits into 2 x 2 tiles that each fit',
+  tiling.plan && tiling.plan.nx === 2 && tiling.plan.ny === 2 && tiling.plan.tiles === 4 &&
+  tiling.maxW <= 300 + 1e-6 && tiling.maxH <= 200 + 1e-6,
+  tiling.plan ? `${tiling.plan.nx} x ${tiling.plan.ny}, max tile ${tiling.maxW} x ${tiling.maxH}` : 'null');
+check('x seam dodges the pocket straddling the midline (lands in the clear 250..300 gap edges)',
+  tiling.plan && (tiling.plan.seamsX[0] <= 250 || tiling.plan.seamsX[0] >= 300),
+  tiling.plan ? `seam x=${tiling.plan.seamsX[0]}` : 'null');
+check('y seam has no clear line and reports exactly one pocket crossing',
+  tiling.plan && tiling.plan.crossings === 1, tiling.plan ? `${tiling.plan.crossings} crossings` : 'null');
+check('tiles cover the whole slab (area preserved)', near(tiling.areaRatio, 1, 0.01), `${tiling.areaRatio.toFixed(4)}`);
+check('a layout that already fits the bed is not split', tiling.fits === null, String(tiling.fits));
+check('tiled SVG carries one cut path per tile, A1..B2 labels, cut + marks layers',
+  tiling.svgTiles === 4 && tiling.svgLabels === 4 && tiling.svgLayers,
+  `${tiling.svgTiles} paths, ${tiling.svgLabels} labels`);
+
+// UI: bed preset drives the readout and the tiled export.
+await page.evaluate(() => window.__app.goStep(3));
+const tilingUI = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 550, h: 380, name: null };
+  app.state.layout.items.length = 0;
+  const outline = [{ x: 5, y: 5 }, { x: 85, y: 5 }, { x: 85, y: 55 }, { x: 5, y: 55 }];
+  app.state.layout.items.push(
+    { name: 'a', outer: outline, holes: [], circles: [], x: 120, y: 100, rot: 0, depth: 4, thickness: 5 },
+    { name: 'b', outer: outline, holes: [], circles: [], x: 400, y: 280, rot: 0, depth: 4, thickness: 5 });
+  const sel = document.getElementById('holderType');
+  sel.value = 'layout'; sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  const bed = document.getElementById('layBed');
+  bed.value = '300x200'; bed.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  return { info: document.getElementById('layBedInfo').textContent };
+});
+check('layout modal reports the tile count for the chosen bed',
+  /4 tiles \(2 × 2\)/.test(tilingUI.info), tilingUI.info.slice(0, 90));
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#layExportSvgBtn'),
+  ]);
+  const p = dl ? await dl.path().catch(() => null) : null;
+  const txt = p ? fs.readFileSync(p, 'utf8') : '';
+  check('Template SVG downloads as a tiled file when the layout exceeds the bed',
+    !!dl && /-drawer-tiles-2x2\.svg$/.test(dl.suggestedFilename()) && (txt.match(/<path /g) || []).length === 4,
+    dl ? dl.suggestedFilename() : 'no download');
+}
+await page.evaluate(async () => {
+  document.getElementById('layoutModal').hidden = true;
+  const bed = document.getElementById('layBed'); bed.value = 'none'; bed.dispatchEvent(new Event('change'));
+  window.__app.state.layout.items.length = 0;
+  const sel = document.getElementById('holderType'); sel.value = 'none'; sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 300));
+});
+
 // ---------- theme: dark → light → auto (follow system) ----------
 console.log('\nTheme cycle');
 const themeCycle = await page.evaluate(() => {

@@ -899,3 +899,105 @@ export function buildFoamInsert(trace, opts = {}) {
     },
   };
 }
+
+// ---------- tiling: split a layout template to a laser / print bed ----------
+//
+// A bench drawer is wider than any laser bed, so the cut template is split
+// into tiles that each fit bedW × bedH. Seams are straight (foam butts
+// together in the drawer) and placed, within the window that keeps every
+// tile on the bed, where they cross the fewest pockets — a pocket cut in
+// two across a seam still works, but a seam through clear foam is cleaner.
+
+function clipLoopsToRect(loops, x0, y0, x1, y1) {
+  const ClipperLib = CL();
+  const rect = [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+  const out = [];
+  for (const loop of loops) {
+    if (!loop || loop.length < 3) continue;
+    const clipper = new ClipperLib.Clipper();
+    clipper.AddPath(positivePath(toClipperPath(loop)), ClipperLib.PolyType.ptSubject, true);
+    clipper.AddPath(positivePath(toClipperPath(rect)), ClipperLib.PolyType.ptClip, true);
+    const sol = new ClipperLib.Paths();
+    clipper.Execute(ClipperLib.ClipType.ctIntersection, sol,
+      ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+    for (const p of sol) {
+      const ring = fromClipperPath(p);
+      if (ring.length >= 3 && Math.abs(signedArea(ring)) > 0.5) out.push(ring);
+    }
+  }
+  return out;
+}
+
+// Seam positions along one axis. L = extent, B = bed size, spans = pocket
+// [min,max] intervals on this axis. Each tile must be ≤ B; within that,
+// prefer seams crossing the fewest pockets, then the most clearance.
+function planSeams(L, B, spans) {
+  const n = Math.max(1, Math.ceil((L - 1e-6) / B));
+  const seams = [];
+  let prev = 0;
+  for (let k = 1; k < n; k++) {
+    const lo = Math.max(L - (n - k) * B, prev + 1);
+    const hi = Math.min(k * B, prev + B);
+    let best = null;
+    for (let s = Math.ceil(lo); s <= Math.floor(hi); s++) {
+      let crossings = 0, clearance = Infinity;
+      for (const [a, b] of spans) {
+        if (s > a + 0.5 && s < b - 0.5) crossings++;
+        clearance = Math.min(clearance, Math.abs(s - a), Math.abs(s - b));
+      }
+      if (!best || crossings < best.crossings ||
+          (crossings === best.crossings && clearance > best.clearance)) {
+        best = { s, crossings, clearance };
+      }
+    }
+    const s = best ? best.s : Math.min(hi, lo);
+    seams.push(s);
+    prev = s;
+  }
+  return { n, seams };
+}
+
+// template: as returned by buildLayoutInsert / buildFoamInsert (slab loop,
+// pockets [{pocket, pillars}] or a single pocket, origin, w, h).
+// Returns { tiles: [{ col, row, x0, y0, w, h, slabs, holes }], nx, ny,
+// seamsX, seamsY, crossings } with tile loops in TILE-LOCAL mm (origin at
+// the tile's top-left), or null when the layout already fits the bed.
+export function splitTiles(template, bedW, bedH) {
+  if (!template || !(bedW > 10) || !(bedH > 10)) return null;
+  const { origin, w, h } = template;
+  if (w <= bedW + 1e-6 && h <= bedH + 1e-6) return null;
+  const shift = pts => pts.map(p => ({ x: p.x - origin.x, y: p.y - origin.y }));
+  const slab = shift(template.slab);
+  const pockets = template.pockets
+    ? template.pockets.map(p => ({ pocket: shift(p.pocket), pillars: p.pillars.map(shift) }))
+    : [{ pocket: shift(template.pocket), pillars: (template.pillars || []).map(shift) }];
+
+  const spanOf = (loop, axis) => {
+    let lo = Infinity, hi = -Infinity;
+    for (const p of loop) { lo = Math.min(lo, p[axis]); hi = Math.max(hi, p[axis]); }
+    return [lo, hi];
+  };
+  const px = planSeams(w, bedW, pockets.map(p => spanOf(p.pocket, 'x')));
+  const py = planSeams(h, bedH, pockets.map(p => spanOf(p.pocket, 'y')));
+  const xs = [0, ...px.seams, w], ys = [0, ...py.seams, h];
+
+  const tiles = [];
+  let crossings = 0;
+  for (const s of px.seams) for (const p of pockets) { const [a, b] = spanOf(p.pocket, 'x'); if (s > a + 0.5 && s < b - 0.5) crossings++; }
+  for (const s of py.seams) for (const p of pockets) { const [a, b] = spanOf(p.pocket, 'y'); if (s > a + 0.5 && s < b - 0.5) crossings++; }
+  for (let row = 0; row < py.n; row++) {
+    for (let col = 0; col < px.n; col++) {
+      const x0 = xs[col], x1 = xs[col + 1], y0 = ys[row], y1 = ys[row + 1];
+      const local = pts => pts.map(p => ({ x: p.x - x0, y: p.y - y0 }));
+      const slabs = clipLoopsToRect([slab], x0, y0, x1, y1).map(local);
+      if (!slabs.length) continue; // an irregular drawer can leave an empty tile
+      const holes = [];
+      for (const p of pockets) {
+        holes.push(...clipLoopsToRect([p.pocket], x0, y0, x1, y1).map(local));
+        holes.push(...clipLoopsToRect(p.pillars, x0, y0, x1, y1).map(local));
+      }
+      tiles.push({ col, row, x0, y0, w: x1 - x0, h: y1 - y0, slabs, holes });
+    }
+  }
+  return { tiles, nx: px.n, ny: py.n, seamsX: px.seams, seamsY: py.seams, crossings };
+}

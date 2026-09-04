@@ -918,6 +918,37 @@
           <label for="layBorder">Border (mm)</label>
           <input type="text" inputmode="decimal" id="layBorder" value="5">
         </div>
+        <h3 style="margin:6px 0 0">Bed / sheet size</h3>
+        <div class="field">
+          <select id="layBed" title="Your laser or printer bed. A layout larger than it is exported as tiles that each fit, with seams steered away from pockets.">
+            <option value="none">No limit (one piece)</option>
+            <optgroup label="Laser beds">
+              <option value="300x200">300 × 200 mm (diode / K40)</option>
+              <option value="400x300">400 × 300 mm</option>
+              <option value="495x279">495 × 279 mm (Glowforge)</option>
+              <option value="600x400">600 × 400 mm</option>
+              <option value="900x600">900 × 600 mm</option>
+            </optgroup>
+            <optgroup label="Printer beds">
+              <option value="220x220">220 × 220 mm</option>
+              <option value="250x210">250 × 210 mm</option>
+              <option value="256x256">256 × 256 mm</option>
+              <option value="350x350">350 × 350 mm</option>
+            </optgroup>
+            <option value="custom">Custom…</option>
+          </select>
+        </div>
+        <div class="field-row" id="layBedCustom" hidden>
+          <div class="field">
+            <label for="layBedW">Bed width (mm)</label>
+            <input type="text" inputmode="decimal" id="layBedW" value="300">
+          </div>
+          <div class="field">
+            <label for="layBedH">Bed depth (mm)</label>
+            <input type="text" inputmode="decimal" id="layBedH" value="200">
+          </div>
+        </div>
+        <p class="hint" id="layBedInfo"></p>
         <div class="btn-row">
           <button id="layPreviewBtn" class="btn">👁 Preview in 3D</button>
         </div>

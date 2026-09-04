@@ -161,3 +161,57 @@ export function downloadBlob(blob, filename) {
     a.remove();
   }, 10_000);
 }
+
+// Tiled cut template: every tile of a bed-split layout in one SVG, laid out
+// in the same grid as the drawer with a gap, each labelled (row letter +
+// column number) and marked with its seam edges, so it reads as a map of
+// the drawer. Cut one tile per bed load by selecting it in the laser app.
+// Tiles are true scale; the label/seam marks sit on their own layer group.
+export function toTiledSVG(tiles, opts = {}) {
+  const { gap = 10, name = 'layout' } = opts;
+  const cols = Math.max(...tiles.map(t => t.col)) + 1;
+  const rows = Math.max(...tiles.map(t => t.row)) + 1;
+  const colW = new Array(cols).fill(0), rowH = new Array(rows).fill(0);
+  for (const t of tiles) {
+    colW[t.col] = Math.max(colW[t.col], t.w);
+    rowH[t.row] = Math.max(rowH[t.row], t.h);
+  }
+  const colX = [], rowY = [];
+  let acc = 0;
+  for (let c = 0; c < cols; c++) { colX[c] = acc; acc += colW[c] + gap; }
+  const totalW = acc - gap;
+  acc = 0;
+  for (let r = 0; r < rows; r++) { rowY[r] = acc; acc += rowH[r] + gap; }
+  const totalH = acc - gap;
+
+  const loopD = pts => pts.length < 2 ? '' :
+    'M ' + pts.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' L ') + ' Z';
+  const cut = [], marks = [];
+  for (const t of tiles) {
+    const ox = colX[t.col], oy = rowY[t.row];
+    const d = [...t.slabs, ...t.holes].map(loopD).join(' ');
+    cut.push(`  <path transform="translate(${ox.toFixed(3)},${oy.toFixed(3)})" d="${d}" ` +
+      `fill="#dfe6ee" fill-rule="evenodd" stroke="#111" stroke-width="0.2"/>`);
+    const label = `${String.fromCharCode(65 + t.row)}${t.col + 1}`;
+    marks.push(`  <text x="${(ox + 4).toFixed(3)}" y="${(oy + 8).toFixed(3)}" ` +
+      `font-family="system-ui, sans-serif" font-size="6" fill="#c33">${label} — ${t.w.toFixed(0)}×${t.h.toFixed(0)} mm</text>`);
+    // Dashed seam edges: which sides of this tile butt against a neighbour.
+    const seam = (x1, y1, x2, y2) => marks.push(
+      `  <line x1="${(ox + x1).toFixed(3)}" y1="${(oy + y1).toFixed(3)}" x2="${(ox + x2).toFixed(3)}" y2="${(oy + y2).toFixed(3)}" ` +
+      `stroke="#c33" stroke-width="0.3" stroke-dasharray="2 2"/>`);
+    if (t.col > 0) seam(0, 0, 0, t.h);
+    if (t.col < cols - 1) seam(t.w, 0, t.w, t.h);
+    if (t.row > 0) seam(0, 0, t.w, 0);
+    if (t.row < rows - 1) seam(0, t.h, t.w, t.h);
+  }
+  return new Blob([
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<!-- 2.5D v${APP_VERSION} — ${name}: ${tiles.length} tiles (${cols} × ${rows}), true scale mm. ` +
+    `Layer "cut" = outlines; layer "marks" = labels + seam edges (engrave or ignore). -->\n` +
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" ` +
+    `width="${totalW.toFixed(3)}mm" height="${totalH.toFixed(3)}mm" viewBox="0 0 ${totalW.toFixed(3)} ${totalH.toFixed(3)}">\n` +
+    `<g id="cut" inkscape:groupmode="layer" inkscape:label="cut">\n${cut.join('\n')}\n</g>\n` +
+    `<g id="marks" inkscape:groupmode="layer" inkscape:label="marks">\n${marks.join('\n')}\n</g>\n` +
+    `</svg>\n`,
+  ], { type: 'image/svg+xml' });
+}

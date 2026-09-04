@@ -326,6 +326,19 @@ STL, or export the whole layout as a true-scale template SVG for cutting
 foam. Layouts save with the project, geometry embedded, so they survive a
 different browser.
 
+**Bigger than your laser bed? It tiles.** A bench drawer is wider than any
+laser, so set your **bed / sheet size** in the layout editor (presets for
+common laser and printer beds, or custom) and the cut template exports as
+**tiles that each fit the bed**, in one SVG laid out like a map of the
+drawer — labelled A1, A2, B1… with dashed seam edges on a separate "marks"
+layer you can engrave or ignore. Seams are straight (foam butts together in
+the drawer) and are placed, within the window that keeps every tile on the
+bed, where they cross the fewest pockets; the readout tells you whether
+every seam found clear foam or how many had to pass through a pocket. Cut
+one tile per bed load. The STL still exports as one piece and warns when
+it's over the bed — splitting a *printed* insert with registration
+features is a separate job, not done yet.
+
 **Gridfinity bins.** Pick **Gridfinity bin** and the tool pockets into a
 spec-true bin on the 42 mm grid: footprint auto-snaps to the smallest
 N×M·42−0.5 that fits the pocket plus minimum wall, height in 7 mm units

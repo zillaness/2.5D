@@ -18,10 +18,11 @@ import {
 import { parseLength, formatLength, formatLengthLabelled } from './units.js';
 import { measureInfo, loopStats, REGION_LOOP_BASE } from './measure.js';
 import { suggestRegions } from './regions.js';
-import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
+import { toBinarySTL, toSVG, toDXF, toTiledSVG, downloadBlob } from './exporters.js';
 import {
   buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate,
-  buildLayoutGridBin, gridContainerLoop, buildHolster, roundedRect,
+  buildLayoutGridBin, gridContainerLoop, buildHolster, roundedRect, splitTiles,
+  layoutPockets,
 } from './holders.js';
 import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
@@ -81,6 +82,7 @@ const state = {
   layout: {
     container: { type: 'rect', w: 220, h: 140, r: 6, n: 3, m: 2, name: null, outer: null },
     items: [], clearance: 0.5, floor: 3, border: 5,
+    bed: { preset: 'none', w: 300, h: 200 }, // laser / printer bed for tiling
   },
   // Sections: [0] is the base (footprint = traced outline); extra sections
   // carry their own drawn footprint, thickness and floor offset (overhangs).
@@ -1335,7 +1337,34 @@ function updateLayoutInfo() {
   $('layoutWarn').textContent = bad
     ? `${bad} tool${bad === 1 ? '' : 's'} in red — overlapping another pocket or crossing the border. Drag to fix.`
     : '';
+  // Bed / tiling readout.
+  const bed = layBedDims();
+  const bw = maxX - minX, bh = maxY - minY;
+  const bedEl = $('layBedInfo');
+  if (!bed) {
+    bedEl.textContent = '';
+  } else if (bw <= bed.w + 1e-6 && bh <= bed.h + 1e-6) {
+    bedEl.textContent = `Fits the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed in one piece.`;
+    bedEl.className = 'hint';
+  } else {
+    const plan = splitTiles({
+      slab: loop, pockets: layoutPocketsForPlan(), origin: { x: minX, y: minY }, w: bw, h: bh,
+    }, bed.w, bed.h);
+    const tiles = plan ? plan.tiles.length : 0;
+    bedEl.textContent = plan
+      ? `Larger than the bed — the cut template exports as ${tiles} tiles (${plan.nx} × ${plan.ny})` +
+        (plan.crossings ? `, ${plan.crossings} seam${plan.crossings === 1 ? '' : 's'} through a pocket (no clear line available)` : ', seams clear of every pocket') +
+        (grid ? '. STL tiling isn\'t available yet — the bin exports whole.' : '.')
+      : '';
+    bedEl.className = 'hint';
+  }
   if (state.holder.type === 'layout') rebuildHolder();
+}
+// Pocket geometry for the tiling plan (same clearance/pillars as the build).
+function layoutPocketsForPlan() {
+  return layoutPockets(state.layout.items, state.layout.clearance)
+    .filter(p => p.pocket)
+    .map(p => ({ pocket: p.pocket, pillars: p.pillars }));
 }
 function syncLaySelPanel(i) {
   const it = state.layout.items[i];
@@ -1351,6 +1380,7 @@ function syncLaySelPanel(i) {
 function openLayoutModal() {
   refreshLaySelects();
   syncLayoutFields();
+  syncBedFields();
   syncLaySelPanel(layoutEditor.sel);
   $('layoutModal').hidden = false;
   refreshLayoutEditor();
@@ -1399,6 +1429,40 @@ for (const [id, key, min] of [['layClearance', 'clearance', 0], ['layFloor', 'fl
     if (mm !== null && mm >= min) state.layout[key] = mm;
     syncLayoutFields();
     refreshLayoutEditor();
+  });
+}
+// Bed size for tiling; null when unlimited.
+function layBedDims() {
+  const b = state.layout.bed;
+  if (!b || b.preset === 'none') return null;
+  if (b.preset === 'custom') return b.w > 10 && b.h > 10 ? { w: b.w, h: b.h } : null;
+  const m = /^(\d+)x(\d+)$/.exec(b.preset);
+  return m ? { w: +m[1], h: +m[2] } : null;
+}
+function syncBedFields() {
+  const b = state.layout.bed;
+  $('layBed').value = b.preset;
+  $('layBedCustom').hidden = b.preset !== 'custom';
+  $('layBedW').value = fmtDim(b.w);
+  $('layBedH').value = fmtDim(b.h);
+}
+// Tiling summary for the current layout (null = fits, or no bed set).
+function layTilePlan(res) {
+  const bed = layBedDims();
+  if (!bed || !res || !res.template) return null;
+  return splitTiles(res.template, bed.w, bed.h);
+}
+$('layBed').addEventListener('change', e => {
+  state.layout.bed.preset = e.target.value;
+  syncBedFields();
+  updateLayoutInfo();
+});
+for (const [id, key] of [['layBedW', 'w'], ['layBedH', 'h']]) {
+  $(id).addEventListener('change', e => {
+    const mm = parseDim(e.target.value);
+    if (mm > 10) state.layout.bed[key] = mm;
+    syncBedFields();
+    updateLayoutInfo();
   });
 }
 $('layAddBtn').addEventListener('click', () => {
@@ -1505,6 +1569,10 @@ $('layExportBtn').addEventListener('click', () => {
   const res = buildLayoutNow();
   if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the insert.'); return; }
   const grid = state.layout.container.type === 'grid';
+  const bed = layBedDims();
+  if (bed && res.stats && res.stats.slab && (res.stats.slab.w > bed.w + 1e-6 || res.stats.slab.h > bed.h + 1e-6)) {
+    toast(`Heads up: this is ${fmtDim(res.stats.slab.w)} × ${fmtDim(res.stats.slab.h)}, larger than the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed. The STL exports whole — STL tiling isn't available yet; the cut template splits into tiles.`, 7000);
+  }
   const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} ${grid ? 'gridfinity' : 'drawer'}`);
   deliverExport(blob, `${state.fileName}-${grid ? 'bin' : 'drawer'}-2p5d.stl`);
 });
@@ -1512,6 +1580,13 @@ $('layExportSvgBtn').addEventListener('click', () => {
   const res = buildLayoutNow();
   if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return; }
   if (!res.template) { toast('Template SVG is for flat drawer inserts (foam cutting) — export the bin as STL.'); return; }
+  const plan = layTilePlan(res);
+  if (plan) {
+    deliverExport(toTiledSVG(plan.tiles, { name: state.fileName }),
+      `${state.fileName}-drawer-tiles-${plan.nx}x${plan.ny}.svg`);
+    toast(`Exported ${plan.tiles.length} tiles for the ${fmtDim(layBedDims().w)} × ${fmtDim(layBedDims().h)} bed — cut one per bed load (labels A1, A2… mark the drawer position).`, 6500);
+    return;
+  }
   const T = res.template;
   const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
   const holes = T.pockets.flatMap(p => [shift(p.pocket), ...p.pillars.map(shift)]);
@@ -2702,6 +2777,7 @@ function loadProject(p) {
       clearance: p.layout.clearance ?? state.layout.clearance,
       floor: p.layout.floor ?? state.layout.floor,
       border: p.layout.border ?? state.layout.border,
+      bed: { ...state.layout.bed, ...(p.layout.bed || {}) },
     };
   }
   syncHolderPanel();
