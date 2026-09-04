@@ -3006,6 +3006,92 @@ check('object traces at true scale through a grid reference (60 x 40 mm)',
 check('the square count is verified against the printed pitch after rectifying',
   /checks out/.test(gridFlow.checkText), gridFlow.checkText.slice(0, 80));
 
+
+// Cutting mats: dark surface, light rulings, two pitches at once.
+const mat = await page.evaluate(async () => {
+  const { analyzeGrid, gridPitchMm } = await import('/js/gridRef.js');
+  const ppm = 4, W = 560, H = 400;
+  // Imperial mat: 1 in bold majors (101.6 px) with 1/2 in minors (50.8 px).
+  const mkMat = (minorMm, majorMm, minorAlpha) => {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#2f5d3a'; ctx.fillRect(0, 0, W, H);            // green mat
+    const line = (x, y, w, h, a) => { ctx.fillStyle = `rgba(225,232,220,${a})`; ctx.fillRect(x, y, w, h); };
+    if (minorMm) {
+      for (let x = 0; x <= W; x += minorMm * ppm) line(x, 0, 1, H, minorAlpha);
+      for (let y = 0; y <= H; y += minorMm * ppm) line(0, y, W, 1, minorAlpha);
+    }
+    for (let x = 0; x <= W; x += majorMm * ppm) line(x - 1, 0, 2, H, 1);
+    for (let y = 0; y <= H; y += majorMm * ppm) line(0, y - 1, W, 2, 1);
+    return c;
+  };
+  const counted1in = analyzeGrid(mkMat(12.7, 25.4, 0.9), ppm, gridPitchMm('mat_in1'));   // reads minors
+  const countedHalf = analyzeGrid(mkMat(null, 25.4, 0), ppm, gridPitchMm('mat_inh'));    // majors only visible
+  const metric = analyzeGrid(mkMat(10, 50, 0.9), ppm, gridPitchMm('mat_cm1'));
+  // A real miscount on a mat must still be caught: 9 majors called 10.
+  const miscount = analyzeGrid(mkMat(12.7 * 10 / 9, 25.4 * 10 / 9, 0.9), ppm, 25.4);
+  return {
+    c1: counted1in && { ok: counted1in.ok, mm: counted1in.detectedMm, msg: counted1in.message },
+    ch: countedHalf && { ok: countedHalf.ok, mm: countedHalf.detectedMm, msg: countedHalf.message },
+    metric: metric && { ok: metric.ok, mm: metric.detectedMm },
+    mis: miscount && { ok: miscount.ok, ratio: miscount.ratio },
+  };
+});
+check('cutting mat: counting 1 in squares while the photo reads the 1/2 in minors is accepted',
+  mat.c1 && mat.c1.ok && near(mat.c1.mm, 12.7, 0.6) && /finer/.test(mat.c1.msg),
+  mat.c1 ? `${mat.c1.mm.toFixed(2)} mm — ${mat.c1.msg.slice(0, 60)}` : 'not detected');
+check('cutting mat: counting 1/2 in squares while only 1 in majors read back is accepted',
+  mat.ch && mat.ch.ok && near(mat.ch.mm, 25.4, 1.2) && /bolder/.test(mat.ch.msg),
+  mat.ch ? `${mat.ch.mm.toFixed(2)} mm` : 'not detected');
+check('metric mat (1 cm under bold 5 cm) reads 1 cm on a dark surface',
+  mat.metric && mat.metric.ok && near(mat.metric.mm, 10, 0.5),
+  mat.metric ? `${mat.metric.mm.toFixed(2)} mm` : 'not detected');
+check('a genuine miscount on a mat is still flagged (not excused as a ruling family)',
+  mat.mis && !mat.mis.ok, mat.mis ? `ratio ${mat.mis.ratio.toFixed(3)}` : 'not detected');
+
+// Full pipeline on a dark mat with a LIGHT object (the case a mat is good for).
+const matFlow = await page.evaluate(async () => {
+  const app = window.__app;
+  const ppm = 5, pitch = 25.4, nx = 6, ny = 4;
+  const W = Math.round(nx * pitch * ppm), H = Math.round(ny * pitch * ppm);
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#2f5d3a'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(225,232,220,0.9)';
+  for (let x = 0; x <= W; x += pitch * ppm / 2) ctx.fillRect(x, 0, 1, H);
+  for (let y = 0; y <= H; y += pitch * ppm / 2) ctx.fillRect(0, y, W, 1);
+  ctx.fillStyle = '#f2ece0';                                      // 60 x 40 mm light object
+  ctx.fillRect((W - 60 * ppm) / 2, (H - 40 * ppm) / 2, 60 * ppm, 40 * ppm);
+  app.state.reference = 'grid';
+  document.getElementById('refType').value = 'grid';
+  document.getElementById('refType').dispatchEvent(new Event('change'));
+  Object.assign(app.state.grid, { pitch: 'mat_in1', nx, ny });
+  app.state.captureFrac = 0;
+  await new Promise(res => app.loadImageFromURL(c.toDataURL('image/png'), res));
+  app.state.corners = [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: H }, { x: 0, y: H }];
+  app.cornerEditor.setCorners(app.state.corners);
+  app.state.rectDirty = true;
+  app.goStep(2);
+  await new Promise(r => setTimeout(r, 700));
+  const t = app.traceEditor.getTrace();
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const p of t.outer || []) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  return {
+    traced: t.outer && t.outer.length >= 3 ? { w: maxX - minX, h: maxY - minY } : null,
+    checkText: document.getElementById('gridCheck').textContent,
+  };
+});
+check('light object on a dark cutting mat traces at true scale (60 x 40 mm)',
+  matFlow.traced && near(matFlow.traced.w, 60, 1.5) && near(matFlow.traced.h, 40, 1.5),
+  matFlow.traced ? `${matFlow.traced.w.toFixed(1)} x ${matFlow.traced.h.toFixed(1)} mm` : 'no trace');
+check('mat pitch check accepts the 1/2 in minors under counted 1 in squares end to end',
+  /checks out/.test(matFlow.checkText), matFlow.checkText.slice(0, 90));
+
 // ---------- theme: dark → light → auto (follow system) ----------
 console.log('\nTheme cycle');
 const themeCycle = await page.evaluate(() => {

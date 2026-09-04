@@ -69,12 +69,13 @@ the fully offline option.
   drag the four handles to fine-tune (a magnifier loupe appears while dragging,
   the yellow edge marks the top). A rectangle corrects perspective and skew
   exactly.
-- **Graph / dot-grid paper** — calibrate off the printed grid instead of the
-  sheet's edges. Pick the pitch (metric 1–10 mm or imperial 1/10–1 in, or a
-  custom one), put the four handles on grid intersections or dots, and say how
-  many squares they span. Corrects perspective exactly, and the sheet's edges
-  never have to be in frame — so it suits objects bigger than the paper, or
-  laid across two sheets. See "Graph paper & dot grids" below.
+- **Graph paper / dot grid / cutting mat** — calibrate off a printed grid
+  instead of the sheet's edges. Pick the pitch (metric 1–10 mm, imperial
+  1/10–1 in, cutting-mat presets, or a custom one), put the four handles on
+  grid intersections or dots, and say how many squares they span. Corrects
+  perspective exactly, and the sheet's edges never have to be in frame — so it
+  suits objects bigger than the paper, or laid across two sheets. See "Graph
+  paper, dot grids & cutting mats" below.
 - **Coin** — scale only. Drag a circle over a coin (US, Canadian, euro, UK, or
   Australian — grouped by country in the picker, round denominations only — or a
   custom diameter) and its edge handle to the rim. Shoot straight down,
@@ -411,12 +412,23 @@ button also has an **outline library** that saves drawer/toolbox/tray outlines
 to this browser for reuse (foundation for the upcoming foam/Gridfinity
 exports).
 
-**Graph paper & dot grids as the reference.** Pick **Graph / dot-grid
-paper** and calibrate off the printed grid instead of the sheet's edges:
-choose the pitch — **metric** (1, 2, 2.5, 4, 5, 10 mm) or **imperial**
-(1/10, 1/8, 1/5, 1/4, 1/2, 1 in), or a custom pitch — drop the four handles
-on four grid intersections (or dots) that make a rectangle, and say how many
-squares they span. Line grids and dot grids work identically.
+**Graph paper, dot grids & cutting mats as the reference.** Pick **Graph
+paper / dot grid / cutting mat** and calibrate off the printed grid instead
+of the sheet's edges: choose the pitch — **metric** (1, 2, 2.5, 4, 5, 10 mm),
+**imperial** (1/10, 1/8, 1/5, 1/4, 1/2, 1 in), a **cutting-mat** preset, or a
+custom pitch — drop the four handles on four grid intersections (or dots)
+that make a rectangle, and say how many squares they span. Line grids and
+dot grids work identically.
+
+**Cutting mats** deserve a word, because for most makers they're the best
+reference in the house: big, dead flat, and already on the bench. They print
+*two* pitches at once — 1 in majors over ½ in (or ⅛ in) minors, or 1 cm under
+bold 5 cm — so count whichever squares you can see clearly; when the photo
+reads back the *other* ruling of the same family, the check recognises it as
+consistent rather than flagging a miscount (and a real off-by-one still gets
+caught, since 9-for-10 lands on a ratio no ruling family produces). Their
+dark surface segments a light object beautifully and a dark object poorly —
+that's contrast physics, not a setting.
 
 The point is that **the sheet's own edges never have to be in frame**, so
 this handles objects bigger than the paper, objects lying across two sheets

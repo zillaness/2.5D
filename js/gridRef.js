@@ -26,6 +26,14 @@ export const GRID_PITCHES = {
   in4:   { group: 'Imperial', name: '1/4 in (quad rule / dot grid)', mm: 6.35 },
   in2:   { group: 'Imperial', name: '1/2 in', mm: 12.7 },
   in1:   { group: 'Imperial', name: '1 in', mm: 25.4 },
+  // Self-healing cutting mats: dark with light rulings, and usually TWO
+  // pitches at once (1 in majors with ½ or ⅛ in minors; 1 cm with bold 5 cm).
+  // Count whichever squares you can see clearly — the check below accepts a
+  // reading on the other ruling as consistent.
+  mat_in1:  { group: 'Cutting mat', name: 'Imperial mat — 1 in squares', mm: 25.4 },
+  mat_inh:  { group: 'Cutting mat', name: 'Imperial mat — ½ in squares', mm: 12.7 },
+  mat_cm1:  { group: 'Cutting mat', name: 'Metric mat — 1 cm squares', mm: 10 },
+  mat_cm5:  { group: 'Cutting mat', name: 'Metric mat — 5 cm bold squares', mm: 50 },
   custom:{ name: 'Custom pitch…', mm: 5 },
 };
 
@@ -139,10 +147,26 @@ export function analyzeGrid(canvas, pxPerMm, expectedPitchMm) {
   const strength = Math.max(...found.map(r => r.strength));
   const detectedMm = lag / pxPerMm;
   const ratio = detectedMm / expectedPitchMm;
-  const ok = Math.abs(ratio - 1) <= 0.06;
+  const tol = 0.06;
+  const near1 = Math.abs(ratio - 1) <= tol;
+  // Rulings come in families: a cutting mat prints ½ in or ⅛ in minors under
+  // 1 in majors, a metric mat 1 cm under bold 5 cm. If the photo reads back a
+  // clean small-integer multiple or fraction of what was counted, that is
+  // the OTHER ruling of the same grid, not a miscount — a miscount by one
+  // square lands on ratios like 1.11 or 0.91 that no ruling family produces.
+  const family = [2, 4, 5, 8, 10];
+  const sub = family.find(k => Math.abs(ratio * k - 1) <= tol * k);   // finer ruling read
+  const sup = family.find(k => Math.abs(ratio / k - 1) <= tol);       // coarser ruling read
+  const ok = near1 || !!sub || !!sup;
   let message;
-  if (ok) {
+  if (near1) {
     message = `Grid checks out — printed pitch reads ${detectedMm.toFixed(2)} mm.`;
+  } else if (sub) {
+    message = `Grid checks out — the photo reads the finer ${detectedMm.toFixed(2)} mm ruling, ` +
+      `${sub} per ${expectedPitchMm} mm square you counted.`;
+  } else if (sup) {
+    message = `Grid checks out — the photo reads the bolder ${detectedMm.toFixed(1)} mm ruling, ` +
+      `one per ${sup} of the ${expectedPitchMm} mm squares you counted.`;
   } else {
     // A miscount shows up as a clean ratio: n counted vs n·ratio actual.
     message = `Grid pitch reads ${detectedMm.toFixed(2)} mm, not ${expectedPitchMm} mm ` +
