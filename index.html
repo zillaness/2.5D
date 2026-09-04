@@ -948,6 +948,38 @@
             <input type="text" inputmode="decimal" id="layBedH" value="200">
           </div>
         </div>
+        <div class="field" style="margin-top:6px">
+          <label><input type="checkbox" id="layTabs"> Puzzle tabs on the seams</label>
+        </div>
+        <div id="layTabFields" hidden>
+          <div class="field-row">
+            <div class="field">
+              <label for="layTabHead">Head ⌀ (mm)</label>
+              <input type="text" inputmode="decimal" id="layTabHead" value="12">
+            </div>
+            <div class="field">
+              <label for="layTabNeck">Neck (mm)</label>
+              <input type="text" inputmode="decimal" id="layTabNeck" value="7">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="layTabDepth">Reach (mm)</label>
+              <input type="text" inputmode="decimal" id="layTabDepth" value="12" title="How far the knob protrudes past the seam">
+            </div>
+            <div class="field">
+              <label for="layTabSpacing">Every (mm)</label>
+              <input type="text" inputmode="decimal" id="layTabSpacing" value="80" title="Target spacing along a seam; tabs shift to dodge pockets">
+            </div>
+          </div>
+          <div class="field">
+            <label for="layTabFit">Fit (mm, − tighter / + looser)</label>
+            <input type="text" inputmode="decimal" id="layTabFit" value="0" title="Grows or shrinks the socket. Laser kerf loosens a knob-in-socket fit by about twice the kerf — try −0.2 to compensate on foam.">
+          </div>
+          <p class="hint">A jigsaw knob on one tile, the matching socket on its
+          neighbour, so cut foam locks together instead of just butting.
+          Tabs keep clear of seam ends and of pockets within reach.</p>
+        </div>
         <p class="hint" id="layBedInfo"></p>
         <div class="btn-row">
           <button id="layPreviewBtn" class="btn">👁 Preview in 3D</button>

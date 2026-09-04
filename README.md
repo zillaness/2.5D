@@ -335,9 +335,23 @@ layer you can engrave or ignore. Seams are straight (foam butts together in
 the drawer) and are placed, within the window that keeps every tile on the
 bed, where they cross the fewest pockets; the readout tells you whether
 every seam found clear foam or how many had to pass through a pocket. Cut
-one tile per bed load. The STL still exports as one piece and warns when
-it's over the bed — splitting a *printed* insert with registration
-features is a separate job, not done yet.
+one tile per bed load.
+
+**Puzzle tabs.** Tick **Puzzle tabs on the seams** and each seam gets
+jigsaw knobs on one tile with the matching sockets on its neighbour, so cut
+foam locks together instead of just butting. Head diameter, neck, reach,
+spacing and **fit** are yours: fit 0 is the exact negative; a laser kerf
+loosens a knob-in-socket fit by roughly twice the kerf, so **−0.2** or so
+gives foam a snug interference fit. Tabs keep clear of seam ends (where
+seams cross) and of any pocket within reach, shifting along the seam to
+find room; the readout counts the tabs and says if a seam segment was too
+crowded for one. Tiles that give a knob are planned with the reach already
+deducted (the last tile in a row or column only receives sockets, so it
+keeps the full bed), which means every tile *with* its knobs still fits.
+
+The STL still exports as one piece and warns when it's over the bed —
+splitting a *printed* insert with registration features is a separate job,
+not done yet.
 
 **Gridfinity bins.** Pick **Gridfinity bin** and the tool pockets into a
 spec-true bin on the 42 mm grid: footprint auto-snaps to the smallest

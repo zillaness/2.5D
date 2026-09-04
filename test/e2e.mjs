@@ -3326,6 +3326,83 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 300));
 });
 
+
+// ---------- puzzle tabs on tile seams ----------
+
+const puzzle = await page.evaluate(async () => {
+  const { splitTiles, roundedRect } = await import('/js/holders.js');
+  const slab = roundedRect(275, 190, 550, 380, 6);
+  const rect = (x0, y0, x1, y1) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+  const template = {
+    slab, origin: { x: 0, y: 0 }, w: 550, h: 380,
+    pockets: [
+      { pocket: rect(60, 40, 200, 120), pillars: [] },
+      { pocket: rect(380, 260, 500, 340), pillars: [] },
+    ],
+  };
+  const tabs = { enabled: true, head: 12, neck: 7, depth: 12, spacing: 80, fit: 0 };
+  const plan = splitTiles(template, 300, 200, { tabs });
+  if (!plan) return { plan: null };
+  const area = loops => loops.reduce((acc, l) => {
+    let s = 0; for (let i = 0, n = l.length; i < n; i++) { const p = l[i], q = l[(i + 1) % n]; s += p.x * q.y - q.x * p.y; }
+    return acc + Math.abs(s) / 2; }, 0);
+  const inside = (pt, loop) => {
+    let ins = false;
+    for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+      const a = loop[i], b = loop[j];
+      if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < (b.x - a.x) * (pt.y - a.y) / (b.y - a.y) + a.x) ins = !ins;
+    }
+    return ins;
+  };
+  const byCell = Object.fromEntries(plan.tiles.map(t => [`${t.col},${t.row}`, t]));
+  const A1 = byCell['0,0'], A2 = byCell['1,0'];
+  const sx = plan.seamsX[0];
+  // A1 (giver) extends past the seam by the reach; A2's socket bites its
+  // left edge. Probe the first knob: a point 6 mm past the seam at the
+  // knob's centre must be inside A1's slab and outside A2's.
+  let knobCentre = null;
+  for (const l of A1.slabs) for (const p of l) {
+    if (p.x > A1.w - 0.5 && p.x > sx - A1.x0 + 8) { knobCentre = knobCentre || p; }
+  }
+  const probeA1 = knobCentre ? { x: sx - A1.x0 + 6, y: knobCentre.y } : null;
+  const probeA2 = knobCentre ? { x: sx - A2.x0 + 6, y: knobCentre.y + (A1.y0 - A2.y0) } : null;
+  const inA1 = probeA1 && A1.slabs.some(l => inside(probeA1, l));
+  const inA2 = probeA2 && A2.slabs.some(l => inside(probeA2, l));
+  // Tight fit: socket shrinks, so the pair's total area goes UP by the
+  // ring between knob and shrunken socket; fit 0 keeps it exactly even.
+  const planTight = splitTiles(template, 300, 200, { tabs: { ...tabs, fit: -0.3 } });
+  const slabArea = area([slab]);
+  const total = plan.tiles.reduce((a, t) => a + area(t.slabs), 0);
+  const totalTight = planTight.tiles.reduce((a, t) => a + area(t.slabs), 0);
+  const noTabs = splitTiles(template, 300, 200);
+  return {
+    plan: { tabCount: plan.tabCount, tabless: plan.tabless, nx: plan.nx, ny: plan.ny },
+    maxW: Math.max(...plan.tiles.map(t => t.w)), maxH: Math.max(...plan.tiles.map(t => t.h)),
+    A1w: A1.w, cellW: sx - A1.x0,
+    inA1, inA2,
+    areaRatio: total / slabArea, tightRatio: totalTight / slabArea,
+    noTabWidth: Math.max(...noTabs.tiles.map(t => t.w)),
+    noTabSeams: [noTabs.seamsX[0], noTabs.seamsY[0]], noTabGrid: [noTabs.nx, noTabs.ny],
+  };
+});
+console.log('\nPuzzle tabs on seams');
+check('tabs are placed on every internal seam segment (2 x 2 tiles -> 4 seam segments)',
+  puzzle.plan && puzzle.plan.tabCount >= 4 && puzzle.plan.tabless === 0,
+  puzzle.plan ? `${puzzle.plan.tabCount} tabs, ${puzzle.plan.tabless} tabless` : 'null');
+check('the giving tile grows by the knob reach and still fits the bed',
+  puzzle.plan && near(puzzle.A1w, puzzle.cellW + 12, 0.05) && puzzle.maxW <= 300 + 1e-6 && puzzle.maxH <= 200 + 1e-6,
+  `A1 ${puzzle.A1w?.toFixed(1)} = cell ${puzzle.cellW?.toFixed(1)} + 12; max ${puzzle.maxW?.toFixed(1)} x ${puzzle.maxH?.toFixed(1)}`);
+check('knob is solid on the giver and a matching socket on the receiver',
+  puzzle.inA1 === true && puzzle.inA2 === false, `A1 ${puzzle.inA1}, A2 ${puzzle.inA2}`);
+check('fit 0 keeps total area exactly; a tight fit (−0.3) adds interference',
+  near(puzzle.areaRatio, 1, 0.002) && puzzle.tightRatio > puzzle.areaRatio + 0.0002,
+  `${puzzle.areaRatio?.toFixed(5)} vs tight ${puzzle.tightRatio?.toFixed(5)}`);
+check('only the giving tiles shrink for tabs: both plans stay 2 x 2, the no-tab seams sit at the clearance optimum (290 x 190)',
+  puzzle.plan && puzzle.plan.nx === 2 && puzzle.plan.ny === 2 &&
+  puzzle.noTabGrid[0] === 2 && puzzle.noTabGrid[1] === 2 &&
+  puzzle.noTabSeams[0] === 290 && puzzle.noTabSeams[1] === 190 && puzzle.noTabWidth <= 300 + 1e-6,
+  `tabs ${puzzle.plan?.nx}x${puzzle.plan?.ny}, none ${puzzle.noTabGrid?.join('x')} seams ${puzzle.noTabSeams?.join(',')} max w ${puzzle.noTabWidth?.toFixed(1)}`);
+
 // ---------- theme: dark → light → auto (follow system) ----------
 console.log('\nTheme cycle');
 const themeCycle = await page.evaluate(() => {

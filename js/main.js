@@ -82,7 +82,10 @@ const state = {
   layout: {
     container: { type: 'rect', w: 220, h: 140, r: 6, n: 3, m: 2, name: null, outer: null },
     items: [], clearance: 0.5, floor: 3, border: 5,
-    bed: { preset: 'none', w: 300, h: 200 }, // laser / printer bed for tiling
+    bed: { // laser / printer bed for tiling, and puzzle tabs on the seams
+      preset: 'none', w: 300, h: 200,
+      tabs: { enabled: false, head: 12, neck: 7, depth: 12, spacing: 80, fit: 0 },
+    },
   },
   // Sections: [0] is the base (footprint = traced outline); extra sections
   // carry their own drawn footprint, thickness and floor offset (overhangs).
@@ -1349,13 +1352,17 @@ function updateLayoutInfo() {
   } else {
     const plan = splitTiles({
       slab: loop, pockets: layoutPocketsForPlan(), origin: { x: minX, y: minY }, w: bw, h: bh,
-    }, bed.w, bed.h);
+    }, bed.w, bed.h, layTileOpts());
     const tiles = plan ? plan.tiles.length : 0;
     bedEl.textContent = plan
       ? `Larger than the bed — the cut template exports as ${tiles} tiles (${plan.nx} × ${plan.ny})` +
         (plan.crossings ? `, ${plan.crossings} seam${plan.crossings === 1 ? '' : 's'} through a pocket (no clear line available)` : ', seams clear of every pocket') +
+        (plan.tabs ? `, ${plan.tabCount} puzzle tab${plan.tabCount === 1 ? '' : 's'}` +
+          (plan.tabless ? ` (${plan.tabless} seam segment${plan.tabless === 1 ? '' : 's'} too crowded for one)` : '') : '') +
         (grid ? '. STL tiling isn\'t available yet — the bin exports whole.' : '.')
-      : '';
+      : (state.layout.bed.tabs.enabled
+          ? 'Larger than the bed, but the puzzle tabs\' reach leaves no room to tile it — shrink the reach or pick a bigger bed.'
+          : '');
     bedEl.className = 'hint';
   }
   if (state.holder.type === 'layout') rebuildHolder();
@@ -1445,12 +1452,42 @@ function syncBedFields() {
   $('layBedCustom').hidden = b.preset !== 'custom';
   $('layBedW').value = fmtDim(b.w);
   $('layBedH').value = fmtDim(b.h);
+  const t = b.tabs;
+  $('layTabs').checked = !!t.enabled;
+  $('layTabFields').hidden = !t.enabled;
+  $('layTabHead').value = fmtDim(t.head);
+  $('layTabNeck').value = fmtDim(t.neck);
+  $('layTabDepth').value = fmtDim(t.depth);
+  $('layTabSpacing').value = fmtDim(t.spacing);
+  $('layTabFit').value = fmtDim(t.fit);
 }
+function layTileOpts() { return { tabs: state.layout.bed.tabs }; }
 // Tiling summary for the current layout (null = fits, or no bed set).
 function layTilePlan(res) {
   const bed = layBedDims();
   if (!bed || !res || !res.template) return null;
-  return splitTiles(res.template, bed.w, bed.h);
+  return splitTiles(res.template, bed.w, bed.h, layTileOpts());
+}
+$('layTabs').addEventListener('change', e => {
+  state.layout.bed.tabs.enabled = e.target.checked;
+  syncBedFields();
+  updateLayoutInfo();
+});
+for (const [id, key, min] of [
+  ['layTabHead', 'head', 3], ['layTabNeck', 'neck', 2], ['layTabDepth', 'depth', 3],
+  ['layTabSpacing', 'spacing', 20], ['layTabFit', 'fit', -5],
+]) {
+  $(id).addEventListener('change', e => {
+    const mm = parseDim(e.target.value);
+    if (mm !== null && mm >= min) {
+      const t = state.layout.bed.tabs;
+      t[key] = mm;
+      if (t.neck > t.head - 1) t.neck = Math.max(2, t.head - 1);   // a neck wider than the head is no knob
+      if (t.depth < t.head / 2 + 2) t.depth = t.head / 2 + 2;      // the head must clear the seam
+    }
+    syncBedFields();
+    updateLayoutInfo();
+  });
 }
 $('layBed').addEventListener('change', e => {
   state.layout.bed.preset = e.target.value;
@@ -2777,7 +2814,10 @@ function loadProject(p) {
       clearance: p.layout.clearance ?? state.layout.clearance,
       floor: p.layout.floor ?? state.layout.floor,
       border: p.layout.border ?? state.layout.border,
-      bed: { ...state.layout.bed, ...(p.layout.bed || {}) },
+      bed: {
+        ...state.layout.bed, ...(p.layout.bed || {}),
+        tabs: { ...state.layout.bed.tabs, ...((p.layout.bed && p.layout.bed.tabs) || {}) },
+      },
     };
   }
   syncHolderPanel();

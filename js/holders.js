@@ -928,15 +928,76 @@ function clipLoopsToRect(loops, x0, y0, x1, y1) {
   return out;
 }
 
-// Seam positions along one axis. L = extent, B = bed size, spans = pocket
-// [min,max] intervals on this axis. Each tile must be ≤ B; within that,
-// prefer seams crossing the fewest pockets, then the most clearance.
-function planSeams(L, B, spans) {
-  const n = Math.max(1, Math.ceil((L - 1e-6) / B));
+// subjects − clips → outer loops (a seam socket is a bite at a tile's
+// edge, so it never makes a hole; any that appear are returned separately).
+function differenceLoops(subjects, clips) {
+  const ClipperLib = CL();
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPaths(subjects.map(l => positivePath(toClipperPath(l))), ClipperLib.PolyType.ptSubject, true);
+  clipper.AddPaths(clips.map(l => positivePath(toClipperPath(l))), ClipperLib.PolyType.ptClip, true);
+  const tree = new ClipperLib.PolyTree();
+  clipper.Execute(ClipperLib.ClipType.ctDifference, tree,
+    ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+  const outers = [], holes = [];
+  for (const e of ClipperLib.JS.PolyTreeToExPolygons(tree)) {
+    const o = fromClipperPath(e.outer);
+    if (o.length >= 3 && Math.abs(signedArea(o)) > 0.5) outers.push(o);
+    for (const h of e.holes) { const hl = fromClipperPath(h); if (hl.length >= 3) holes.push(hl); }
+  }
+  return { outers, holes };
+}
+
+// Jigsaw knob protruding from a seam: a neck rectangle rooted 0.5 mm inside
+// the giving tile plus a round head, unioned. `s` = seam coordinate, `t` =
+// centre along the seam, axis 'x' (knob protrudes +x) or 'y' (+y).
+function knobLoop(axis, s, t, tabs) {
+  const { head, neck, depth } = tabs;
+  const r = head / 2, cx = s + depth - r;
+  const rect = axis === 'x'
+    ? [{ x: s - 0.5, y: t - neck / 2 }, { x: cx, y: t - neck / 2 }, { x: cx, y: t + neck / 2 }, { x: s - 0.5, y: t + neck / 2 }]
+    : [{ x: t - neck / 2, y: s - 0.5 }, { x: t + neck / 2, y: s - 0.5 }, { x: t + neck / 2, y: cx }, { x: t - neck / 2, y: cx }];
+  const circle = axis === 'x' ? circleToPolygon(cx, t, head, 48) : circleToPolygon(t, cx, head, 48);
+  return unionLoops([rect, circle])[0] || rect;
+}
+
+// Tab centres along one seam segment [a, b], kept clear of the segment's
+// ends (where seams cross or meet the edge) and of pockets that come within
+// the tab's reach of the seam. `near` = [lo, hi] along-seam spans of such
+// pockets. Returns centres (possibly empty).
+function planTabs(a, b, tabs, near) {
+  const L = b - a;
+  const m = tabs.head / 2 + 3;
+  if (L - 2 * m < tabs.head) return [];
+  const n = Math.max(1, Math.floor(L / tabs.spacing));
+  const half = tabs.head / 2 + 2;
+  const clear = t => t >= a + m && t <= b - m && !near.some(([lo, hi]) => t + half > lo && t - half < hi);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const t0 = a + (L / (n + 1)) * (i + 1);
+    let pick = null;
+    for (let d = 0; d <= tabs.spacing / 2 && pick === null; d += 2) {
+      if (clear(t0 + d)) pick = t0 + d;
+      else if (d > 0 && clear(t0 - d)) pick = t0 - d;
+    }
+    if (pick !== null && !out.some(t => Math.abs(t - pick) < tabs.head + 4)) out.push(pick);
+  }
+  return out;
+}
+
+// Seam positions along one axis. L = extent, B = bed size for every tile
+// but the last, lastB = bed size for the last tile (with puzzle tabs the
+// giving tiles carry a knob, so they get B − depth while the final tile,
+// which only receives, keeps the full bed), spans = pocket [min,max]
+// intervals on this axis. Within those limits prefer seams crossing the
+// fewest pockets, then the most clearance; cells thinner than minCell are
+// avoided so a knob can never reach across a whole tile.
+function planSeams(L, B, spans, lastB = B, minCell = 1) {
+  let n = 1;
+  while ((n - 1) * B + lastB < L - 1e-6) n++;
   const seams = [];
   let prev = 0;
   for (let k = 1; k < n; k++) {
-    const lo = Math.max(L - (n - k) * B, prev + 1);
+    const lo = Math.max(L - (n - 1 - k) * B - lastB, prev + 1);
     const hi = Math.min(k * B, prev + B);
     let best = null;
     for (let s = Math.ceil(lo); s <= Math.floor(hi); s++) {
@@ -945,9 +1006,11 @@ function planSeams(L, B, spans) {
         if (s > a + 0.5 && s < b - 0.5) crossings++;
         clearance = Math.min(clearance, Math.abs(s - a), Math.abs(s - b));
       }
-      if (!best || crossings < best.crossings ||
-          (crossings === best.crossings && clearance > best.clearance)) {
-        best = { s, crossings, clearance };
+      const thin = (s - prev < minCell || L - s < minCell) ? 1 : 0;
+      if (!best || thin < best.thin ||
+          (thin === best.thin && (crossings < best.crossings ||
+          (crossings === best.crossings && clearance > best.clearance)))) {
+        best = { s, thin, crossings, clearance };
       }
     }
     const s = best ? best.s : Math.min(hi, lo);
@@ -962,10 +1025,22 @@ function planSeams(L, B, spans) {
 // Returns { tiles: [{ col, row, x0, y0, w, h, slabs, holes }], nx, ny,
 // seamsX, seamsY, crossings } with tile loops in TILE-LOCAL mm (origin at
 // the tile's top-left), or null when the layout already fits the bed.
-export function splitTiles(template, bedW, bedH) {
+export function splitTiles(template, bedW, bedH, opts = {}) {
   if (!template || !(bedW > 10) || !(bedH > 10)) return null;
   const { origin, w, h } = template;
   if (w <= bedW + 1e-6 && h <= bedH + 1e-6) return null;
+  // Puzzle tabs: { head, neck, depth, spacing, fit } — a knob on the
+  // lower-index tile, the matching socket on its neighbour. The planning
+  // bed shrinks by the protrusion so a tile WITH its knobs still fits.
+  const tabs = opts.tabs && opts.tabs.enabled
+    ? { head: 12, neck: 7, depth: 12, spacing: 80, fit: 0, ...opts.tabs } : null;
+  // Giving tiles (every tile but the last along an axis) carry a knob, so
+  // they plan against bed − depth; the last tile only receives sockets and
+  // keeps the full bed.
+  const giverW = tabs ? bedW - tabs.depth : bedW;
+  const giverH = tabs ? bedH - tabs.depth : bedH;
+  if (!(giverW > 10) || !(giverH > 10)) return null;
+  const minCell = tabs ? tabs.depth + tabs.head + 6 : 1;
   const shift = pts => pts.map(p => ({ x: p.x - origin.x, y: p.y - origin.y }));
   const slab = shift(template.slab);
   const pockets = template.pockets
@@ -977,27 +1052,78 @@ export function splitTiles(template, bedW, bedH) {
     for (const p of loop) { lo = Math.min(lo, p[axis]); hi = Math.max(hi, p[axis]); }
     return [lo, hi];
   };
-  const px = planSeams(w, bedW, pockets.map(p => spanOf(p.pocket, 'x')));
-  const py = planSeams(h, bedH, pockets.map(p => spanOf(p.pocket, 'y')));
+  const px = planSeams(w, giverW, pockets.map(p => spanOf(p.pocket, 'x')), bedW, minCell);
+  const py = planSeams(h, giverH, pockets.map(p => spanOf(p.pocket, 'y')), bedH, minCell);
   const xs = [0, ...px.seams, w], ys = [0, ...py.seams, h];
 
   const tiles = [];
   let crossings = 0;
   for (const s of px.seams) for (const p of pockets) { const [a, b] = spanOf(p.pocket, 'x'); if (s > a + 0.5 && s < b - 0.5) crossings++; }
   for (const s of py.seams) for (const p of pockets) { const [a, b] = spanOf(p.pocket, 'y'); if (s > a + 0.5 && s < b - 0.5) crossings++; }
+  // Tiles in template-global coords first (tabs are applied across cells),
+  // localised at the end.
+  const byCell = new Map();
   for (let row = 0; row < py.n; row++) {
     for (let col = 0; col < px.n; col++) {
       const x0 = xs[col], x1 = xs[col + 1], y0 = ys[row], y1 = ys[row + 1];
-      const local = pts => pts.map(p => ({ x: p.x - x0, y: p.y - y0 }));
-      const slabs = clipLoopsToRect([slab], x0, y0, x1, y1).map(local);
+      const slabs = clipLoopsToRect([slab], x0, y0, x1, y1);
       if (!slabs.length) continue; // an irregular drawer can leave an empty tile
       const holes = [];
       for (const p of pockets) {
-        holes.push(...clipLoopsToRect([p.pocket], x0, y0, x1, y1).map(local));
-        holes.push(...clipLoopsToRect(p.pillars, x0, y0, x1, y1).map(local));
+        holes.push(...clipLoopsToRect([p.pocket], x0, y0, x1, y1));
+        holes.push(...clipLoopsToRect(p.pillars, x0, y0, x1, y1));
       }
-      tiles.push({ col, row, x0, y0, w: x1 - x0, h: y1 - y0, slabs, holes });
+      const t = { col, row, x0, y0, x1, y1, slabs, holes };
+      tiles.push(t);
+      byCell.set(`${col},${row}`, t);
     }
   }
-  return { tiles, nx: px.n, ny: py.n, seamsX: px.seams, seamsY: py.seams, crossings };
+
+  // Puzzle tabs along every internal seam segment.
+  let tabCount = 0, tabless = 0;
+  if (tabs) {
+    const reach = tabs.depth + tabs.head / 2 + 2;
+    const addTabs = (axis, s, a, b, A, B) => {
+      if (!A || !B) return;
+      // Pockets that come within reach of this seam on either side.
+      const near = [];
+      for (const p of pockets) {
+        const perp = spanOf(p.pocket, axis), along = spanOf(p.pocket, axis === 'x' ? 'y' : 'x');
+        if (perp[0] < s + reach && perp[1] > s - reach) near.push(along);
+      }
+      const centres = planTabs(a, b, tabs, near);
+      if (!centres.length) { tabless++; return; }
+      for (const t of centres) {
+        const knob = knobLoop(axis, s, t, tabs);
+        const socket = tabs.fit !== 0 ? (offsetLoop(knob, tabs.fit)[0] || knob) : knob;
+        A.slabs = unionLoops([...A.slabs, knob]);
+        const d = differenceLoops(B.slabs, [socket]);
+        B.slabs = d.outers;
+        B.holes.push(...d.holes);
+        tabCount++;
+      }
+    };
+    for (let k = 0; k < px.seams.length; k++) {
+      for (let row = 0; row < py.n; row++) {
+        addTabs('x', px.seams[k], ys[row], ys[row + 1], byCell.get(`${k},${row}`), byCell.get(`${k + 1},${row}`));
+      }
+    }
+    for (let k = 0; k < py.seams.length; k++) {
+      for (let col = 0; col < px.n; col++) {
+        addTabs('y', py.seams[k], xs[col], xs[col + 1], byCell.get(`${col},${k}`), byCell.get(`${col},${k + 1}`));
+      }
+    }
+  }
+
+  for (const t of tiles) {
+    const local = pts => pts.map(p => ({ x: p.x - t.x0, y: p.y - t.y0 }));
+    t.slabs = t.slabs.map(local);
+    t.holes = t.holes.map(local);
+    // Extent including any knobs (what has to fit the bed).
+    let mx = 0, my = 0;
+    for (const l of t.slabs) for (const p of l) { mx = Math.max(mx, p.x); my = Math.max(my, p.y); }
+    t.w = mx; t.h = my;
+    delete t.x1; delete t.y1;
+  }
+  return { tiles, nx: px.n, ny: py.n, seamsX: px.seams, seamsY: py.seams, crossings, tabs: !!tabs, tabCount, tabless };
 }
