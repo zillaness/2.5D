@@ -25,15 +25,15 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - 05:26 ✅ e2e suite self-reports its check total — committed c44ba94
 - 05:34 ✅ doc sweep: README roadmap rebuilt for v1.23.0, Tests section notes the
   count line, holders-prd records the v1.18–v1.23 follow-on work — committed below
-- 05:34 ▶ NEXT: draft docs/nesting_prd_v1.0.md (DRAFT FOR SIGN-OFF, do not implement)
+- 05:47 ✅ docs/nesting_prd_v1.0.md drafted (288 lines, DRAFT — not implemented) — committed below
+- 05:47 ▶ NEXT: STL tiling of printed inserts — design only, stop before implementing
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done
 2. ~~Doc sweep for v1.23.0~~ done. Scope was smaller than the handoff implied:
    the README *body* already documented puzzle tabs and bed tiling. Only the
    Roadmap block was stale (it never absorbed the holders arc at all).
-3. `docs/nesting_prd_v1.0.md` — DRAFT FOR SIGN-OFF only. Sam has not approved
-   building nesting.
+3. ~~`docs/nesting_prd_v1.0.md`~~ drafted, awaiting sign-off. Not implemented.
 4. STL tiling of printed inserts with registration features — design only, stop
    before implementing.
 
@@ -52,6 +52,13 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   now prints its own total so the number can be quoted rather than counted.
 
 ## Needs Sam's call
+- **Sign-off on `docs/nesting_prd_v1.0.md`.** Steps 1-4 of its plan are the
+  feature; nothing was built. Its open questions 1-4 (rotation step, auto-run,
+  default minWeb, whether comfortWeb is user-facing) each have a
+  recommendation and need a yes or a redirect.
+- **Em dashes in repo docs.** Sam's style guide bans them; every existing doc
+  in this repo uses them heavily. The new PRD matches the repo, not the style
+  guide. Say if that is backwards.
 - **Frontmatter on README.md.** Sam's revision-control convention says every
   markdown file carries YAML frontmatter, and his CutSheetCalculator README
   does. This repo never has, and GitHub renders frontmatter as a table at the
