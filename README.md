@@ -71,11 +71,15 @@ the fully offline option.
   exactly.
 - **Graph paper / dot grid / cutting mat** — calibrate off a printed grid
   instead of the sheet's edges. Pick the pitch (metric 1–10 mm, imperial
-  1/10–1 in, cutting-mat presets, or a custom one), put the four handles on
-  grid intersections or dots, and say how many squares they span. Corrects
-  perspective exactly, and the sheet's edges never have to be in frame — so it
-  suits objects bigger than the paper, or laid across two sheets. See "Graph
-  paper, dot grids & cutting mats" below.
+  1/10–1 in, cutting-mat presets, or a custom one) and put the four handles on
+  grid intersections or dots — **the squares they span are counted for you**
+  (type the counts to override). Corrects perspective exactly, and the sheet's
+  edges never have to be in frame — so it suits objects bigger than the paper,
+  or laid across two sheets. See "Graph paper, dot grids & cutting mats" below.
+- **Scale bar** — the universal manual override: drag a bar's two ends onto
+  any two points a known distance apart (the 0 and 30 cm marks on a mat's
+  ruler, a tape measure, a part you've measured) and type the distance
+  (mm or inches). Scale only, like the coin, so shoot straight down.
 - **Coin** — scale only. Drag a circle over a coin (US, Canadian, euro, UK, or
   Australian — grouped by country in the picker, round denominations only — or a
   custom diameter) and its edge handle to the rim. Shoot straight down,
@@ -435,10 +439,23 @@ this handles objects bigger than the paper, objects lying across two sheets
 taped together, or a shot cropped tight. Perspective is still corrected
 exactly, because four known-spaced points is all a homography needs.
 
-The one risk this reference has that a known-size sheet doesn't is
-**miscounting the squares** — the count sets the entire scale. So after
-rectifying, 2.5D measures the printed pitch back out of the photo and tells
-you whether it agrees: *"Grid checks out — printed pitch reads 4.98 mm"*, or
+**You don't count the squares — the app does.** When you continue to the
+trace, it rectifies at a provisional count, reads the grid's period straight
+off the image, and derives how many squares the handles actually span (a
+pure ratio, so the provisional guess drops out). Handles on real
+intersections give whole numbers; if the reading isn't whole it says so and
+suggests nudging the handles. On a cutting mat with bold majors over fine
+minors it counts in the bold ruling — the one you'd name. Typing a count by
+hand overrides the auto-count for that handle placement, and **⟲ Auto-count
+squares** re-reads on demand.
+
+For a cutting mat, put the handles on the *printed grid's outer corners* —
+those are sharp and exactly the labelled size — rather than the mat's
+physical edge, which is rounded and varies by brand.
+
+Independently of the count, after rectifying, 2.5D measures the printed
+pitch back out of the photo and tells you whether it agrees with the pitch
+you chose: *"Grid checks out — printed pitch reads 4.98 mm"*, or
 a warning with the ratio when it doesn't (counting 9 squares as 10 shows up
 as a clean 111%). If the grid is too fine or washed out to read back, it
 says so rather than staying quiet.

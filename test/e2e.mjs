@@ -3092,6 +3092,147 @@ check('light object on a dark cutting mat traces at true scale (60 x 40 mm)',
 check('mat pitch check accepts the 1/2 in minors under counted 1 in squares end to end',
   /checks out/.test(matFlow.checkText), matFlow.checkText.slice(0, 90));
 
+
+// ---------- grid auto-count + scale-bar reference ----------
+
+const autoGrid = await page.evaluate(async () => {
+  const { autoCount } = await import('/js/gridRef.js');
+  // A "provisional rectification": 20 x 14 real squares of 40 px, but the
+  // caller believed 10 x 10 — the count must come out 20 x 14 regardless.
+  const mk = (W, H, pitchPx, opts = {}) => {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = opts.dark ? '#2f5d3a' : '#fbfbf7'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = opts.dark ? '#b9d8c0' : '#9fb6d9';
+    for (let x = 0; x <= W; x += pitchPx) ctx.fillRect(x, 0, 1, H);
+    for (let y = 0; y <= H; y += pitchPx) ctx.fillRect(0, y, W, 1);
+    if (opts.boldEvery) { // bolder majors every k minors (cutting-mat style)
+      for (let x = 0; x <= W; x += pitchPx * opts.boldEvery) ctx.fillRect(x - 1, 0, 3, H);
+      for (let y = 0; y <= H; y += pitchPx * opts.boldEvery) ctx.fillRect(0, y - 1, W, 3);
+    }
+    return c;
+  };
+  const plain = autoCount(mk(800, 560, 40), 8, 5, 10, 10);
+  // Cutting mat: 1/2 in minors (20 px) under bold 1 in majors (40 px); the
+  // user named the 1 in pitch, handles span 20 x 14 majors.
+  const mat = autoCount(mk(800, 560, 20, { dark: true, boldEvery: 2 }), 40 / 25.4, 25.4, 10, 10);
+  // Handles NOT on intersections: 20.75 squares across -> not whole.
+  const off = autoCount(mk(830, 560, 40), 8, 5, 10, 10);
+  return {
+    plain: plain && { nx: plain.nx, ny: plain.ny, ok: plain.ok, k: plain.k },
+    mat: mat && { nx: mat.nx, ny: mat.ny, ok: mat.ok, k: mat.k },
+    off: off && { rawX: off.rawX, ok: off.ok },
+  };
+});
+console.log('\nGrid auto-count + scale bar');
+check('auto-count reads 20 x 14 squares off the image regardless of the provisional guess',
+  autoGrid.plain && autoGrid.plain.nx === 20 && autoGrid.plain.ny === 14 && autoGrid.plain.ok,
+  autoGrid.plain ? `${autoGrid.plain.nx} x ${autoGrid.plain.ny}` : 'null');
+// Either route is correct: bold majors read as the fundamental (k=1), or
+// minors as fundamental with the majors recognised as a k=2 bold ruling.
+check('cutting mat: bold 1 in majors over 1/2 in minors count in the named (major) pitch',
+  autoGrid.mat && [1, 2].includes(autoGrid.mat.k) && autoGrid.mat.nx === 20 && autoGrid.mat.ny === 14 && autoGrid.mat.ok,
+  autoGrid.mat ? `${autoGrid.mat.nx} x ${autoGrid.mat.ny}, k=${autoGrid.mat.k}` : 'null');
+check('handles off the intersections give a non-integer count and are flagged',
+  autoGrid.off && !autoGrid.off.ok && near(autoGrid.off.rawX, 20.75, 0.2),
+  autoGrid.off ? `raw ${autoGrid.off.rawX.toFixed(2)}` : 'null');
+
+// Full flow: counts left at the 10 x 10 default; continuing must auto-count
+// to 20 x 14 and trace the 60 x 40 mm object at true scale.
+const autoFlow = await page.evaluate(async () => {
+  const app = window.__app;
+  const ppm = 6, pitch = 5, nx = 20, ny = 14;
+  const W = nx * pitch * ppm, H = ny * pitch * ppm;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fcfcf8'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#a8bcdb';
+  for (let x = 0; x <= W; x += pitch * ppm) ctx.fillRect(x, 0, 1, H);
+  for (let y = 0; y <= H; y += pitch * ppm) ctx.fillRect(0, y, W, 1);
+  ctx.fillStyle = '#2b2b2b';
+  ctx.fillRect((W - 60 * ppm) / 2, (H - 40 * ppm) / 2, 60 * ppm, 40 * ppm);
+  app.state.reference = 'grid';
+  document.getElementById('refType').value = 'grid';
+  document.getElementById('refType').dispatchEvent(new Event('change'));
+  Object.assign(app.state.grid, { pitch: 'mm5', nx: 10, ny: 10, autoSig: null });
+  app.state.captureFrac = 0;
+  await new Promise(res => app.loadImageFromURL(c.toDataURL('image/png'), res));
+  app.state.corners = [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: H }, { x: 0, y: H }];
+  app.cornerEditor.setCorners(app.state.corners);
+  app.state.rectDirty = true;
+  app.goStep(2);
+  await new Promise(r => setTimeout(r, 700));
+  const autoMsg = document.getElementById('gridAutoMsg').textContent; // before the override rewrites it
+  const t = app.traceEditor.getTrace();
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const p of t.outer || []) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  // Manual override must survive the next rectification.
+  app.goStep(1);
+  document.getElementById('gridNX').value = '19';
+  document.getElementById('gridNX').dispatchEvent(new Event('change'));
+  app.state.rectDirty = true;
+  app.goStep(2);
+  await new Promise(r => setTimeout(r, 500));
+  return {
+    nx: app.state.grid.nx, ny: app.state.grid.ny,
+    msg: autoMsg,
+    traced: t.outer ? { w: maxX - minX, h: maxY - minY } : null,
+    afterOverride: app.state.grid.nx,
+  };
+});
+check('continuing auto-counts 20 x 14 and traces the object at true scale (60 x 40 mm)',
+  autoFlow.traced && near(autoFlow.traced.w, 60, 1.5) && near(autoFlow.traced.h, 40, 1.5) &&
+  /Counted 20 × 14/.test(autoFlow.msg),
+  autoFlow.traced ? `${autoFlow.traced.w.toFixed(1)} x ${autoFlow.traced.h.toFixed(1)} mm; ${autoFlow.msg.slice(0, 40)}` : 'no trace');
+check('a typed count is honoured as the override for that placement',
+  autoFlow.afterOverride === 19, `nx ${autoFlow.afterOverride}`);
+
+// Scale bar: two points 75 mm apart placed 300 px apart -> 4 px/mm.
+const barFlow = await page.evaluate(async () => {
+  const app = window.__app;
+  const W = 640, H = 480;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, W, H); // flat bg degenerates Otsu
+  g.addColorStop(0, '#efece3'); g.addColorStop(1, '#f6f3ea');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#222';
+  ctx.fillRect(200, 140, 240, 160); // 60 x 40 mm at 4 px/mm
+  app.state.reference = 'bar';
+  document.getElementById('refType').value = 'bar';
+  document.getElementById('refType').dispatchEvent(new Event('change'));
+  await new Promise(res => app.loadImageFromURL(c.toDataURL('image/png'), res));
+  app.cornerEditor.setBar({ ax: 100, ay: 420, bx: 400, by: 420 });
+  document.getElementById('barLength').value = '75';
+  document.getElementById('barLength').dispatchEvent(new Event('change'));
+  app.state.rectDirty = true;
+  app.goStep(2);
+  await new Promise(r => setTimeout(r, 600));
+  const t = app.traceEditor.getTrace();
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const p of t.outer || []) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  return {
+    controls: !document.getElementById('barRefControls').hidden,
+    pxPerMm: app.state.rect ? app.state.rect.pxPerMm : 0,
+    traced: t.outer ? { w: maxX - minX, h: maxY - minY } : null,
+    label: app.cornerEditor.barLabel,
+  };
+});
+check('scale bar sets scale from two points (300 px = 75 mm -> 4 px/mm) and traces true size',
+  barFlow.controls && near(barFlow.pxPerMm, 4, 0.05) && barFlow.traced &&
+  near(barFlow.traced.w, 60, 1.5) && near(barFlow.traced.h, 40, 1.5),
+  `${barFlow.pxPerMm.toFixed(2)} px/mm, ${barFlow.traced ? barFlow.traced.w.toFixed(1) + ' x ' + barFlow.traced.h.toFixed(1) : 'no trace'}`);
+check('the bar is captioned with its length in the picture', /75/.test(barFlow.label), barFlow.label);
+
 // ---------- theme: dark → light → auto (follow system) ----------
 console.log('\nTheme cycle');
 const themeCycle = await page.evaluate(() => {

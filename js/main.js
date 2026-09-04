@@ -2,7 +2,7 @@
 // holes, (3) extrusion parameters + export.
 
 import { PAPER_SIZES, COIN_SIZES, DEFAULT_SIZE, DEFAULT_COIN, paperDims } from './paperSizes.js';
-import { GRID_PITCHES, gridPitchMm, gridDims, analyzeGrid } from './gridRef.js';
+import { GRID_PITCHES, gridPitchMm, gridDims, analyzeGrid, autoCount } from './gridRef.js';
 import { rectify } from './homography.js';
 import { estimateDistortion } from './lens.js';
 import { detectPaperCorners } from './detectPaper.js';
@@ -49,7 +49,8 @@ const state = {
   // 'rect' (paper/card, perspective-corrected) | 'grid' (graph/dot paper,
   // perspective-corrected off counted squares) | 'coin' (scale only)
   reference: 'rect',
-  grid: { pitch: 'mm5', customMm: 5, nx: 10, ny: 10 },
+  grid: { pitch: 'mm5', customMm: 5, nx: 10, ny: 10, autoSig: null, lastAuto: null },
+  bar: { lengthMm: 100 }, // scale-bar reference: two points this far apart
   paper: { size: DEFAULT_SIZE, orientation: 'portrait', customW: 210, customH: 297 },
   captureFrac: 0, // 0 = reference-only crop; >0 extends the rectified area beyond it (× longer paper side)
   labels: [],     // emboss/deboss text on a face
@@ -281,8 +282,9 @@ function loadImageFromURL(url, done) {
     $('dropHint').hidden = true;
     $('rotatePhotoRow').hidden = false;
     cornerEditor.setImage(img);
-    if (state.reference === 'coin') {
-      cornerEditor.setRefMode('coin');
+    if (state.reference === 'coin' || state.reference === 'bar') {
+      cornerEditor.setRefMode(state.reference);
+      if (state.reference === 'bar') syncBarFields();
     } else if (state.reference === 'grid') {
       // Nothing to auto-detect: the handles go on grid intersections you
       // pick, not on the sheet's edges.
@@ -349,9 +351,80 @@ function rectifyCoin() {
   return true;
 }
 
+// Grid reference auto-count: rectify at the provisional counts, read the
+// true counts back from the periodicity, adopt them. Keyed on a signature
+// of handles + pitch so it runs once per placement and never overrides a
+// count the user typed by hand for that same placement.
+function gridAutoSig() {
+  return JSON.stringify([state.corners, state.grid.pitch, state.grid.customMm]);
+}
+function runGridAutoCount(force = false) {
+  if (state.reference !== 'grid' || !state.image || !state.corners) return null;
+  const sig = gridAutoSig();
+  if (!force && state.grid.autoSig === sig) return state.grid.lastAuto;
+  const pitch = gridPitchMm(state.grid.pitch, state.grid.customMm);
+  // Provisional rectification sized from the handle quad's OWN pixel
+  // extent, not from a guessed count: aspect-true and at source resolution,
+  // so the rulings are not resampled into an aliased beat that reads as a
+  // harmonic. (The millimetres here are placeholders; autoCount works on
+  // pure pixel ratios.)
+  const C = state.corners;
+  const seg = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+  const qW = (seg(C[0], C[1]) + seg(C[3], C[2])) / 2;
+  const qH = (seg(C[0], C[3]) + seg(C[1], C[2])) / 2;
+  const P0 = 8; // rectify's px/mm cap → output px ≈ quad px
+  const prov = rectify(state.image, state.corners, qW / P0, qH / P0,
+    { k1: state.lens.k1, k2: state.lens.k2, marginMm: 0, maxLongSidePx: 3200 });
+  let ac = null;
+  if (prov) {
+    try { ac = autoCount(prov.canvas, prov.pxPerMm, pitch, state.grid.nx, state.grid.ny); }
+    catch (err) { console.error('autoCount failed', err); }
+  }
+  state.grid.autoSig = sig;
+  state.grid.lastAuto = ac;
+  if (ac) {
+    state.grid.nx = ac.nx; state.grid.ny = ac.ny;
+    state.rectDirty = true;
+  }
+  const el = $('gridAutoMsg');
+  el.textContent = ac ? ac.message
+    : 'Could not read a grid between the handles — type the square counts instead.';
+  el.className = ac && ac.ok ? 'hint' : 'warn';
+  syncGridFields();
+  return ac;
+}
+
+function rectifyBar() {
+  const img = state.image;
+  const bar = cornerEditor.getBar();
+  const lengthMm = state.bar.lengthMm;
+  if (!bar || !(lengthMm > 0)) { toast('Place the scale bar and give its length first.'); return false; }
+  const px = Math.hypot(bar.bx - bar.ax, bar.by - bar.ay);
+  if (px < 10) { toast('Drag the scale bar\'s ends apart — it is too short to set a scale.'); return false; }
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  const scale = Math.min(1, 1600 / Math.max(iw, ih));
+  const w = Math.round(iw * scale), h = Math.round(ih * scale);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').drawImage(img, 0, 0, w, h);
+  const pxPerMm = (px * scale) / lengthMm;
+  state.rect = { canvas: c, pxPerMm };
+  state.rectDirty = false;
+  state.diffMap = computeDiffMap(c);
+  if (state.seg.autoThreshold) {
+    state.seg.threshold = otsuThreshold(state.diffMap.diff);
+    $('threshSlider').value = state.seg.threshold;
+    $('threshVal').textContent = state.seg.threshold;
+  }
+  traceEditor.setRectified(c, pxPerMm);
+  return true;
+}
+
 function doRectify() {
   if (!state.image) return false;
   if (state.reference === 'coin') return rectifyCoin();
+  if (state.reference === 'bar') return rectifyBar();
+  if (state.reference === 'grid') runGridAutoCount();
   const { w, h } = currentPaper();
   const marginMm = (state.captureFrac || 0) * Math.max(w, h);
   const res = rectify(state.image, state.corners, w, h,
@@ -1517,8 +1590,10 @@ function syncRefControls() {
   $('rectRefControls').hidden = r !== 'rect';
   $('gridRefControls').hidden = r !== 'grid';
   $('coinRefControls').hidden = r !== 'coin';
-  cornerEditor.setRefMode(r === 'coin' ? 'coin' : 'corners');
+  $('barRefControls').hidden = r !== 'bar';
+  cornerEditor.setRefMode(r === 'coin' ? 'coin' : r === 'bar' ? 'bar' : 'corners');
   if (r === 'grid') syncGridFields();
+  if (r === 'bar') syncBarFields();
 }
 $('refType').addEventListener('change', e => {
   state.reference = e.target.value;
@@ -1526,6 +1601,7 @@ $('refType').addEventListener('change', e => {
   $('gridCheck').textContent = '';
   if (state.image) {
     if (state.reference === 'coin' && !cornerEditor.getCoin()) cornerEditor.setRefMode('coin');
+    if (state.reference === 'bar' && !cornerEditor.getBar()) cornerEditor.setRefMode('bar');
     // The grid reference is placed by hand on intersections — paper-edge
     // detection would drag the handles onto the sheet instead.
     if (state.reference === 'rect' && !state.corners) autoDetect(false);
@@ -1578,10 +1654,34 @@ for (const [id, key] of [['gridNX', 'nx'], ['gridNY', 'ny']]) {
   $(id).addEventListener('change', e => {
     const n = parseInt(e.target.value, 10);
     if (n >= 1 && n <= 500) state.grid[key] = n;
+    // A typed count is the manual override: pin it for this placement so
+    // the next rectification doesn't auto-count over it.
+    state.grid.autoSig = gridAutoSig();
+    state.grid.lastAuto = null;
+    $('gridAutoMsg').textContent = `Using your count: ${state.grid.nx} × ${state.grid.ny}.`;
+    $('gridAutoMsg').className = 'hint';
     state.rectDirty = true;
     syncGridFields();
   });
 }
+$('gridAutoBtn').addEventListener('click', () => {
+  if (!state.image) { toast('Load a photo first.'); return; }
+  const ac = runGridAutoCount(true);
+  if (ac && ac.ok) toast(`Auto-counted ${ac.nx} × ${ac.ny} squares.`);
+});
+
+// ---------- scale-bar reference ----------
+
+function syncBarFields() {
+  $('barLength').value = fmtDim(state.bar.lengthMm);
+  cornerEditor.setBarLabel(fmtDimL(state.bar.lengthMm));
+}
+$('barLength').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm > 0) state.bar.lengthMm = mm;
+  state.rectDirty = true;
+  syncBarFields();
+});
 $('gridCapture').addEventListener('change', e => {
   state.captureFrac = parseFloat(e.target.value) || 0;
   $('captureArea').value = e.target.value;
@@ -1615,6 +1715,12 @@ function rotatePhoto(dir) {
   if (state.reference === 'coin') {
     const coin = cornerEditor.getCoin();
     if (coin) { const m = map({ x: coin.cx, y: coin.cy }); cornerEditor.setCoin({ cx: m.x, cy: m.y, r: coin.r }); }
+  } else if (state.reference === 'bar') {
+    const bar = cornerEditor.getBar();
+    if (bar) {
+      const a = map({ x: bar.ax, y: bar.ay }), b = map({ x: bar.bx, y: bar.by });
+      cornerEditor.setBar({ ax: a.x, ay: a.y, bx: b.x, by: b.y });
+    }
   } else if (state.corners) {
     state.corners = state.corners.map(map);
     cornerEditor.setCorners(state.corners);
@@ -2479,7 +2585,8 @@ function serializeProject(includePhoto) {
     fileName: state.fileName,
     units: state.units,
     reference: state.reference,
-    grid: state.grid,
+    grid: { pitch: state.grid.pitch, customMm: state.grid.customMm, nx: state.grid.nx, ny: state.grid.ny },
+    bar: { lengthMm: state.bar.lengthMm, geom: cornerEditor.getBar() },
     paper: state.paper,
     captureFrac: state.captureFrac,
     labels: state.labels,
@@ -2538,9 +2645,13 @@ function loadProject(p) {
   }
   if (p.coin) { state.coin = { ...state.coin, ...p.coin }; $('coinSize').value = state.coin.size; }
   if (p.lens) { state.lens = { k1: p.lens.k1 || 0, k2: p.lens.k2 || 0 }; }
-  if (p.grid) state.grid = { ...state.grid, ...p.grid };
+  if (p.grid) state.grid = { ...state.grid, ...p.grid, autoSig: null, lastAuto: null };
   syncGridFields();
-  if (p.reference === 'rect' || p.reference === 'coin' || p.reference === 'grid') {
+  if (p.bar) {
+    if (p.bar.lengthMm > 0) state.bar.lengthMm = p.bar.lengthMm;
+    if (p.bar.geom) cornerEditor.setBar(structuredClone(p.bar.geom));
+  }
+  if (['rect', 'coin', 'grid', 'bar'].includes(p.reference)) {
     state.reference = p.reference;
     $('refType').value = p.reference;
     syncRefControls();

@@ -13,7 +13,10 @@ export class CornerEditor {
     this.vp = new Viewport(canvas);
     this.image = null;      // HTMLImageElement
     this.corners = null;    // [{x,y} x4] in image px, TL TR BR BL
-    this.refMode = 'corners'; // 'corners' (rectangle) | 'coin' (scale only)
+    this.refMode = 'corners'; // 'corners' (rectangle) | 'coin' (scale only) | 'bar' (scale only)
+    this.bar = null;          // { ax, ay, bx, by } image px — two points a known distance apart
+    this.barDrag = null;      // 'a' | 'b' | 'mid'
+    this.barLabel = '';       // caption drawn at the bar's midpoint (set by the app)
     this.coin = null;       // { cx, cy, r } in image px
     this.coinDrag = null;   // 'center' | 'radius'
     this.dragIdx = -1;
@@ -58,11 +61,35 @@ export class CornerEditor {
       const iw = this.image.naturalWidth, ih = this.image.naturalHeight;
       this.coin = { cx: iw / 2, cy: ih / 2, r: Math.min(iw, ih) / 8 };
     }
+    if (mode === 'bar' && !this.bar && this.image) {
+      const iw = this.image.naturalWidth, ih = this.image.naturalHeight;
+      this.bar = { ax: iw * 0.3, ay: ih * 0.5, bx: iw * 0.7, by: ih * 0.5 };
+    }
     this.draw();
   }
 
   setCoin(coin) { this.coin = coin; this.draw(); }
   getCoin() { return this.coin; }
+
+  setBar(bar) { this.bar = bar; this.draw(); }
+  getBar() { return this.bar; }
+  setBarLabel(text) { this.barLabel = text || ''; this.draw(); }
+
+  _hitBar(sp) {
+    if (!this.bar) return null;
+    const a = this.vp.toScreen({ x: this.bar.ax, y: this.bar.ay });
+    const b = this.vp.toScreen({ x: this.bar.bx, y: this.bar.by });
+    if (Math.hypot(a.x - sp.x, a.y - sp.y) <= HANDLE_R + 6) return 'a';
+    if (Math.hypot(b.x - sp.x, b.y - sp.y) <= HANDLE_R + 6) return 'b';
+    // Anywhere along the line drags the whole bar.
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    if (len2 > 0) {
+      const t = Math.max(0, Math.min(1, ((sp.x - a.x) * dx + (sp.y - a.y) * dy) / len2));
+      const px = a.x + dx * t, py = a.y + dy * t;
+      if (Math.hypot(px - sp.x, py - sp.y) <= 8) return 'mid';
+    }
+    return null;
+  }
 
   _hitCorner(sp) {
     if (!this.corners) return -1;
@@ -99,6 +126,12 @@ export class CornerEditor {
       this.panning = true;
       return;
     }
+    if (this.refMode === 'bar') {
+      const hit = this._hitBar(sp);
+      if (hit) { this.barDrag = hit; this._barLastWp = this.vp.toWorld(sp); return; }
+      this.panning = true;
+      return;
+    }
     const hit = this._hitCorner(sp);
     if (hit >= 0) {
       this.dragIdx = hit;
@@ -124,6 +157,18 @@ export class CornerEditor {
       this.draw();
       return;
     }
+    if (this.barDrag) {
+      const wp = this.vp.toWorld(sp);
+      if (this.barDrag === 'a') { this.bar.ax = wp.x; this.bar.ay = wp.y; }
+      else if (this.barDrag === 'b') { this.bar.bx = wp.x; this.bar.by = wp.y; }
+      else {
+        const dx = wp.x - this._barLastWp.x, dy = wp.y - this._barLastWp.y;
+        this.bar.ax += dx; this.bar.ay += dy; this.bar.bx += dx; this.bar.by += dy;
+        this._barLastWp = wp;
+      }
+      this.draw();
+      return;
+    }
     if (this.dragIdx >= 0) {
       const wp = this.vp.toWorld(sp);
       const iw = this.image.naturalWidth || this.image.width;
@@ -137,14 +182,16 @@ export class CornerEditor {
     }
     // Hover feedback
     if (this.refMode === 'coin') this.canvas.style.cursor = this._hitCoin(sp) ? 'grab' : 'default';
+    if (this.refMode === 'bar') this.canvas.style.cursor = this._hitBar(sp) ? 'grab' : 'default';
     else this.canvas.style.cursor = this._hitCorner(sp) >= 0 ? 'grab' : 'default';
     this.draw();
   }
 
   _up(e) {
-    if ((this.dragIdx >= 0 || this.coinDrag) && this.onChange) this.onChange();
+    if ((this.dragIdx >= 0 || this.coinDrag || this.barDrag) && this.onChange) this.onChange();
     this.dragIdx = -1;
     this.coinDrag = null;
+    this.barDrag = null;
     this.panning = false;
     this.lastPos = null;
     this.draw();
@@ -165,6 +212,7 @@ export class CornerEditor {
     ctx.restore();
 
     if (this.refMode === 'coin') { this._drawCoin(ctx, vw, vh); return; }
+    if (this.refMode === 'bar') { this._drawBar(ctx, vw, vh); return; }
 
     if (!this.corners) return;
     const pts = this.corners.map(c => this.vp.toScreen(c));
@@ -207,6 +255,46 @@ export class CornerEditor {
     // Loupe while dragging
     if (this.dragIdx >= 0 && this.pointer) {
       this._drawLoupe(ctx, this.corners[this.dragIdx], vw, vh);
+    }
+  }
+
+  _drawBar(ctx, vw, vh) {
+    if (!this.bar) return;
+    const a = this.vp.toScreen({ x: this.bar.ax, y: this.bar.ay });
+    const b = this.vp.toScreen({ x: this.bar.bx, y: this.bar.by });
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = '#ffd257';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    // End ticks so the endpoints read as "measure from here to here".
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len * 9, ny = dx / len * 9;
+    for (const p of [a, b]) {
+      ctx.beginPath();
+      ctx.moveTo(p.x - nx, p.y - ny); ctx.lineTo(p.x + nx, p.y + ny);
+      ctx.stroke();
+    }
+    for (const [p, key] of [[a, 'a'], [b, 'b']]) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, HANDLE_R, 0, Math.PI * 2);
+      ctx.fillStyle = this.barDrag === key ? '#ffd257' : 'rgba(20,26,33,0.85)';
+      ctx.fill();
+      ctx.strokeStyle = '#ffd257'; ctx.lineWidth = 2; ctx.stroke();
+    }
+    if (this.barLabel) {
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      const tw = ctx.measureText(this.barLabel).width + 12;
+      ctx.fillStyle = 'rgba(20,26,33,0.85)';
+      ctx.fillRect(mx - tw / 2, my - 22, tw, 18);
+      ctx.fillStyle = '#ffd257';
+      ctx.fillText(this.barLabel, mx, my - 9);
+    }
+    if (this.barDrag === 'a' || this.barDrag === 'b') {
+      const wp = this.barDrag === 'a' ? { x: this.bar.ax, y: this.bar.ay } : { x: this.bar.bx, y: this.bar.by };
+      this._drawLoupe(ctx, wp, vw, vh);
     }
   }
 

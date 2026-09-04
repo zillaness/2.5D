@@ -117,7 +117,27 @@ function dominantPeriod(sig, minLag, maxLag) {
   const shift = denom !== 0 ? (0.5 * (a - c)) / denom : 0;
   const lag = fund + (Math.abs(shift) < 1 ? shift : 0);
   const strength = corr[fund] / (energy / n);
-  return { lag, strength };
+  // Also hand back the strongest peak: on a cutting mat the bold majors
+  // correlate harder than the fine minors, and autoCount needs to know
+  // which ruling the user's chosen pitch refers to.
+  return { lag, strength, peakLag: best.lag, peakStrength: best.val / (energy / n) };
+}
+
+// Per-axis grid measurement of a canvas: fundamental period (px), and the
+// bold coarser ruling if one stands out as a clean small-integer multiple.
+export function measureGrid(canvas, minLag, maxLag) {
+  const { cols, rows } = profiles(canvas);
+  const axis = sig => {
+    const r = dominantPeriod(sig, minLag, maxLag);
+    if (!r || r.strength <= 0.08) return null;
+    let bold = null;
+    const ratio = r.peakLag / r.lag;
+    for (const k of [2, 4, 5, 8, 10]) {
+      if (Math.abs(ratio - k) <= 0.08 * k && r.peakStrength > r.strength * 1.05) { bold = { k, lag: r.peakLag }; break; }
+    }
+    return { lag: r.lag, strength: r.strength, bold };
+  };
+  return { x: axis(cols), y: axis(rows) };
 }
 
 // Measure the printed grid pitch back out of a rectified canvas and compare
@@ -174,4 +194,46 @@ export function analyzeGrid(canvas, pxPerMm, expectedPitchMm) {
       `or pick a different pitch. Everything scales with this.`;
   }
   return { detectedMm, ratio, ok, strength, message };
+}
+
+// Auto-count: how many squares do the four handles span? The user only
+// names the pitch; the counts come from the image.
+//
+// The canvas is a rectification at PROVISIONAL counts (nxA × nyA). Its
+// width is nxA·pitch·ppm px, and the true squares across is simply
+// width / measured-period — a pure ratio, so the provisional guess drops
+// out. If a bold coarser ruling is present (mat majors over minors, bold
+// 5 cm over 1 cm) the chosen pitch is taken to be THAT ruling, since that
+// is the one people name; otherwise the finest one. Handles on real
+// intersections give near-integer counts — the residual is the confidence.
+export function autoCount(canvas, pxPerMm, pitchMm, nxA, nyA) {
+  if (!canvas || !(pitchMm > 0)) return null;
+  // The provisional canvas's millimetres are placeholders, so the search
+  // band is geometric: a ruling is at least a few px, and the handles must
+  // span at least three squares along the shorter side for a grid reference
+  // to be worth anything.
+  const minLag = 4;
+  const maxLag = Math.max(minLag + 2, Math.floor(Math.min(canvas.width, canvas.height) / 3));
+  const m = measureGrid(canvas, minLag, maxLag);
+  if (!m.x && !m.y) return null;
+  const ax = m.x || m.y, ay = m.y || m.x;
+  // One grid, one finest period: share the finer reading across both axes
+  // when only one axis resolved, and agree on the bold factor.
+  const k = (ax.bold && ax.bold.k) || (ay.bold && ay.bold.k) || 1;
+  const fineX = canvas.width / ax.lag, fineY = canvas.height / ay.lag;
+  const rawX = fineX / k, rawY = fineY / k;
+  const nx = Math.max(1, Math.round(rawX)), ny = Math.max(1, Math.round(rawY));
+  const residual = Math.max(Math.abs(rawX - nx), Math.abs(rawY - ny));
+  const ok = residual <= 0.15;
+  const fineMm = pitchMm / k;
+  let message;
+  if (ok) {
+    message = k > 1
+      ? `Counted ${nx} × ${ny} squares of ${pitchMm} mm (the bold ruling; ${k} finer ${fineMm.toFixed(2)} mm rulings each).`
+      : `Counted ${nx} × ${ny} squares of ${pitchMm} mm.`;
+  } else {
+    message = `Read ≈${rawX.toFixed(1)} × ${rawY.toFixed(1)} squares — not whole numbers, so the handles ` +
+      `probably aren't on intersections (or the pitch is wrong). Using ${nx} × ${ny}; nudge the handles and re-run, or type the counts.`;
+  }
+  return { nx, ny, rawX, rawY, k, fineMm, residual, ok, message, provisional: { nxA, nyA } };
 }

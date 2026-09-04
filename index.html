@@ -52,7 +52,8 @@
         <label for="refType">Reference</label>
         <select id="refType">
           <option value="rect">Rectangle — paper / card (corrects perspective)</option>
-          <option value="grid">Graph paper / dot grid / cutting mat — count squares (corrects perspective)</option>
+          <option value="grid">Graph paper / dot grid / cutting mat — auto-counts squares (corrects perspective)</option>
+          <option value="bar">Scale bar — two points a known distance apart (scale only)</option>
           <option value="coin">Coin — scale only (shoot straight down)</option>
         </select>
       </div>
@@ -112,14 +113,18 @@
             <input type="text" inputmode="decimal" id="gridCustomMm" value="5">
           </div>
         </div>
+        <div class="btn-row">
+          <button id="gridAutoBtn" class="btn small" title="Read how many squares the handles span straight off the photo">⟲ Auto-count squares</button>
+        </div>
+        <p class="hint" id="gridAutoMsg">Squares are counted automatically when you continue — type them below to override.</p>
         <div class="field-row">
           <div class="field">
             <label for="gridNX">Squares across</label>
-            <input type="text" inputmode="numeric" id="gridNX" value="10" title="How many squares the handles span left-to-right">
+            <input type="text" inputmode="numeric" id="gridNX" value="10" title="How many squares the handles span left-to-right (auto-counted; type to override)">
           </div>
           <div class="field">
             <label for="gridNY">Squares down</label>
-            <input type="text" inputmode="numeric" id="gridNY" value="10" title="How many squares the handles span top-to-bottom">
+            <input type="text" inputmode="numeric" id="gridNY" value="10" title="How many squares the handles span top-to-bottom (auto-counted; type to override)">
           </div>
         </div>
         <div class="field">
@@ -134,7 +139,10 @@
           <button id="gridResetBtn" class="btn ghost" disabled>Reset handles</button>
         </div>
         <p class="hint">Drag the four handles onto four grid intersections (or
-        dots) that make a rectangle, and say how many squares they span. The
+        dots) that make a rectangle — the squares they span are counted for
+        you (or type the counts to override). On a cutting mat, put them on
+        the printed grid's outer corners: those are sharp and exactly the
+        labelled size, unlike the mat's rounded edge. The
         <b style="color:#ffd257">yellow edge</b> is the <b>top</b>. The sheet's
         own edges never need to be in frame, so this suits objects bigger than
         the paper — or two sheets taped together. A <b>cutting mat</b> works
@@ -143,6 +151,18 @@
         carefully: the count sets the scale, and 2.5D re-measures the printed
         pitch afterwards to check you.</p>
         <p class="hint" id="gridCheck"></p>
+      </div>
+
+      <div id="barRefControls" hidden>
+        <div class="field">
+          <label for="barLength">Distance between the two ends</label>
+          <input type="text" inputmode="decimal" id="barLength" value="100" title="Millimetres, or type inches: 12 in, 4.5&quot;">
+        </div>
+        <p class="hint">Drag the bar's two ends onto two points a known
+        distance apart — the 0 and 30 cm marks on a mat's ruler, a tape
+        measure, a part you've already measured. Sets scale only (no
+        perspective correction), so shoot straight down. The universal
+        manual override when nothing else in the frame is a known size.</p>
       </div>
 
       <div id="coinRefControls" hidden>
