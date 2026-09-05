@@ -1186,6 +1186,10 @@ export function splitTiles(template, bedW, bedH, opts = {}) {
   if (!(giverW > 10) || !(giverH > 10)) return null;
   const minCell = tabs ? tabs.depth + tabs.head + 6 : 1;
   const shift = pts => pts.map(p => ({ x: p.x - origin.x, y: p.y - origin.y }));
+  // Engrave artwork (label glyph loops, LAYOUT mm) rides along and is clipped
+  // to each tile like the slab is, so a label straddling a seam engraves half
+  // on each piece and reads correctly once the tiles are butted together.
+  const engrave = (opts.labels || []).map(shift);
   const slab = shift(template.slab);
   const pockets = template.pockets
     ? template.pockets.map(p => ({ pocket: shift(p.pocket), pillars: p.pillars.map(shift) }))
@@ -1217,7 +1221,8 @@ export function splitTiles(template, bedW, bedH, opts = {}) {
         holes.push(...clipLoopsToRect([p.pocket], x0, y0, x1, y1));
         holes.push(...clipLoopsToRect(p.pillars, x0, y0, x1, y1));
       }
-      const t = { col, row, x0, y0, x1, y1, slabs, holes };
+      const marks = clipLoopsToRect(engrave, x0, y0, x1, y1);
+      const t = { col, row, x0, y0, x1, y1, slabs, holes, marks };
       tiles.push(t);
       byCell.set(`${col},${row}`, t);
     }
@@ -1263,7 +1268,9 @@ export function splitTiles(template, bedW, bedH, opts = {}) {
     const local = pts => pts.map(p => ({ x: p.x - t.x0, y: p.y - t.y0 }));
     t.slabs = t.slabs.map(local);
     t.holes = t.holes.map(local);
-    // Extent including any knobs (what has to fit the bed).
+    t.marks = t.marks.map(local);
+    // Extent including any knobs (what has to fit the bed). Slabs only:
+    // engraved marks are surface work and never widen a tile.
     let mx = 0, my = 0;
     for (const l of t.slabs) for (const p of l) { mx = Math.max(mx, p.x); my = Math.max(my, p.y); }
     t.w = mx; t.h = my;

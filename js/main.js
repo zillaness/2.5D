@@ -22,7 +22,7 @@ import { toBinarySTL, toSVG, toDXF, toTiledSVG, downloadBlob } from './exporters
 import {
   buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate,
   buildLayoutGridBin, gridContainerLoop, buildHolster, roundedRect, splitTiles,
-  layoutPockets,
+  layoutPockets, layoutLabelGeometry, layoutLabelConflicts,
 } from './holders.js';
 import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
@@ -85,6 +85,15 @@ const state = {
     bed: { // laser / printer bed for tiling, and puzzle tabs on the seams
       preset: 'none', w: 300, h: 200,
       tabs: { enabled: false, head: 12, neck: 7, depth: 12, spacing: 80, fit: 0 },
+    },
+    // Tool labels. Off by default: an unlabelled layout must export exactly
+    // what it exports today. `process` drives the minimum legible cap height,
+    // which is a property of the machine, not a style preference.
+    labels: {
+      enabled: false, height: 6, margin: 2, follow: false,
+      process: 'laser', bitDia: 3.175, nozzle: 0.4,
+      font: 'bold sans-serif', mode: 'deboss', depth: 0.6,
+      extra: [],   // free-floating layout labels ("TOP DRAWER", "FRONT")
     },
   },
   // Sections: [0] is the base (footprint = traced outline); extra sections
@@ -1367,6 +1376,16 @@ function updateLayoutInfo() {
   }
   if (state.holder.type === 'layout') rebuildHolder();
 }
+// Placed label geometry for the current layout, in layout mm. Empty when
+// labelling is off, so every downstream path no-ops for an unlabelled layout.
+function layPlacedLabels(pockets) {
+  const L = state.layout;
+  return layoutLabelGeometry(L.items, pockets || layoutPockets(L.items, L.clearance), L.labels);
+}
+// Flat list of glyph loops for the exporters.
+function layLabelLoops() {
+  return layPlacedLabels().flatMap(L => L.loops);
+}
 // Pocket geometry for the tiling plan (same clearance/pillars as the build).
 function layoutPocketsForPlan() {
   return layoutPockets(state.layout.items, state.layout.clearance)
@@ -1463,7 +1482,9 @@ function syncBedFields() {
   $('layTabSpacing').value = fmtDim(t.spacing);
   $('layTabFit').value = fmtDim(t.fit);
 }
-function layTileOpts() { return { tabs: state.layout.bed.tabs }; }
+function layTileOpts() {
+  return { tabs: state.layout.bed.tabs, labels: layLabelLoops() };
+}
 // Tiling summary for the current layout (null = fits, or no bed set).
 function layTilePlan(res) {
   const bed = layBedDims();
@@ -1642,7 +1663,8 @@ $('layExportSvgBtn').addEventListener('click', () => {
   const T = res.template;
   const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
   const holes = T.pockets.flatMap(p => [shift(p.pocket), ...p.pillars.map(shift)]);
-  const blob = toSVG(shift(T.slab), holes, T.w, T.h, {});
+  const blob = toSVG(shift(T.slab), holes, T.w, T.h,
+    { engrave: layLabelLoops().map(shift) });
   deliverExport(blob, `${state.fileName}-drawer-template.svg`);
 });
 

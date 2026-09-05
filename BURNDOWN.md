@@ -32,7 +32,10 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - (later) ✅ labelling PRD v1.0 drafted — committed below
 - ✅ Sam signed off on both PRDs; implementation started
 - ✅ labelling step 1: item.label plumbing (field, UI, reset, persistence) — committed below
-- ▶ NEXT: labelling step 2, layoutLabelGeometry() in js/holders.js
+- ✅ labelling step 2: layoutLabelGeometry() — placed glyph loops in layout mm
+- ✅ labelling step 3: layoutLabelConflicts() + per-process minimum cap height
+- ✅ labelling step 4: engrave layer in both SVG export paths — committed below
+- ▶ NEXT: labelling step 5, adapter into buildSolid's labels for printed inserts
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done

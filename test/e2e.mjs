@@ -3495,6 +3495,72 @@ check('6 mm caps pass on a laser and fail on a 1/8 in router; 14 mm passes both'
   !labConf.bigOnRouter.includes('tooSmall'),
   `laser [${labConf.onLaser}] router [${labConf.onRouter}] big [${labConf.bigOnRouter}]`);
 
+// ---------- labels reach the cut files on their own engrave layer ----------
+
+const labSvg = await page.evaluate(async () => {
+  const { splitTiles, layoutLabelGeometry, layoutPockets, roundedRect } = await import('/js/holders.js');
+  const { toTiledSVG, toSVG } = await import('/js/exporters.js');
+  const rect = (x0, y0, x1, y1) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+  const items = [
+    { name: '13 mm', outer: rect(0, 0, 60, 20), holes: [], circles: [], x: 120, y: 90, rot: 0 },
+    { name: '15 mm', outer: rect(0, 0, 60, 20), holes: [], circles: [], x: 400, y: 280, rot: 0 },
+  ];
+  const pockets = layoutPockets(items, 0.5);
+  const template = {
+    slab: roundedRect(275, 190, 550, 380, 6),
+    pockets: pockets.map(p => ({ pocket: p.pocket, pillars: p.pillars })),
+    origin: { x: 0, y: 0 }, w: 550, h: 380,
+  };
+  const shift = pts => pts;
+  const loops = layoutLabelGeometry(items, pockets, { enabled: true, height: 8 }).flatMap(L => L.loops);
+
+  const bare = splitTiles(template, 300, 200, {});
+  const withL = splitTiles(template, 300, 200, { labels: loops });
+  const bareSvg = await toTiledSVG(bare.tiles, { name: 't' }).text();
+  const labSvgTxt = await toTiledSVG(withL.tiles, { name: 't' }).text();
+
+  // Tiles must not grow because something was engraved on them.
+  const sameExtents = bare.tiles.every((t, i) =>
+    Math.abs(t.w - withL.tiles[i].w) < 1e-6 && Math.abs(t.h - withL.tiles[i].h) < 1e-6);
+
+  // A label straddling a seam lands on both tiles.
+  const wide = layoutLabelGeometry(
+    [{ name: 'SPANS THE SEAM HERE', outer: rect(0, 0, 200, 20), holes: [], circles: [], x: 275, y: 250, rot: 0 }],
+    layoutPockets([{ name: 'SPANS THE SEAM HERE', outer: rect(0, 0, 200, 20), holes: [], circles: [], x: 275, y: 250, rot: 0 }], 0.5),
+    { enabled: true, height: 10 }).flatMap(L => L.loops);
+  const split = splitTiles(template, 300, 200, { labels: wide });
+  const tilesWithMarks = split.tiles.filter(t => t.marks.length).length;
+
+  // Plain (non-tiled) template SVG.
+  const plainBare = await toSVG(template.slab, [], 550, 380, {}).text();
+  const plainLab = await toSVG(template.slab, [], 550, 380, { engrave: loops }).text();
+
+  return {
+    bareHasEngrave: /id="engrave"/.test(bareSvg),
+    labHasEngrave: /id="engrave"/.test(labSvgTxt),
+    labHasPathData: /id="engrave"[\s\S]*?<path [^>]*d="M [\d.]/.test(labSvgTxt),
+    plainHasPathData: /id="engrave"[\s\S]*?<path [^>]*d="M [\d.]/.test(plainLab),
+    usesText: /<text[^>]*>[^<]*13 mm/.test(labSvgTxt),
+    sameExtents, tilesWithMarks,
+    plainBareHasEngrave: /id="engrave"/.test(plainBare),
+    plainLabHasEngrave: /id="engrave"/.test(plainLab),
+    bareLen: bareSvg.length,
+  };
+});
+check('an unlabelled cut template has no engrave layer at all',
+  !labSvg.bareHasEngrave && !labSvg.plainBareHasEngrave,
+  `tiled ${labSvg.bareHasEngrave}, plain ${labSvg.plainBareHasEngrave}`);
+check('a labelled cut template gains an engrave layer in both export paths',
+  labSvg.labHasEngrave && labSvg.plainLabHasEngrave,
+  `tiled ${labSvg.labHasEngrave}, plain ${labSvg.plainLabHasEngrave}`);
+check('labels are emitted as path outlines, not <text> (machine needs no font)',
+  labSvg.labHasPathData && labSvg.plainHasPathData && !labSvg.usesText,
+  `tiled paths ${labSvg.labHasPathData}, plain paths ${labSvg.plainHasPathData}, text ${labSvg.usesText}`);
+check('engraving never changes a tile\'s extents',
+  labSvg.sameExtents, `${labSvg.sameExtents}`);
+check('a label straddling a seam is split across both tiles',
+  labSvg.tilesWithMarks >= 2, `${labSvg.tilesWithMarks} tiles carry marks`);
+
 // ---------- puzzle tabs on tile seams ----------
 
 const puzzle = await page.evaluate(async () => {

@@ -87,19 +87,36 @@ function svgCirclePath(c) {
 // cutting or importing the profile into CAD. opts: { outerArcs, holeArcs,
 // circles } enables true arc/circle output (see above).
 export function toSVG(outline, holes, paperW, paperH, opts = {}) {
-  const { outerArcs = null, holeArcs = null, circles = [] } = opts;
+  const { outerArcs = null, holeArcs = null, circles = [], engrave = [] } = opts;
   const parts = [svgLoopPath(outline, outerArcs)];
   holes.forEach((h, i) => parts.push(svgLoopPath(h, holeArcs && holeArcs[i])));
   for (const c of circles) parts.push(svgCirclePath(c));
   const d = parts.join(' ');
+  // Engrave artwork (label glyphs) rides on its own layer so a laser or router
+  // can mark it and skip it independently of the cut. Absent entirely when
+  // there is nothing to engrave, so unlabelled exports are unchanged.
+  const eng = engrave.length ? engraveLayer(engrave) : '';
   return new Blob([
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<!-- 2.5D v${APP_VERSION} -->\n` +
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${paperW}mm" height="${paperH}mm" ` +
+    `<!-- 2.5D v${APP_VERSION}${eng ? ' — layer "engrave" = label artwork, mark it or ignore it' : ''} -->\n` +
+    `<svg xmlns="http://www.w3.org/2000/svg"${eng ? ' xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"' : ''} ` +
+    `width="${paperW}mm" height="${paperH}mm" ` +
     `viewBox="0 0 ${paperW} ${paperH}">\n` +
     `  <path d="${d}" fill="#dfe6ee" fill-rule="evenodd" stroke="#111" stroke-width="0.2"/>\n` +
+    eng +
     `</svg>\n`,
   ], { type: 'image/svg+xml' });
+}
+
+// Label glyphs as filled outlines, never <text>: the machine then needs no
+// font installed, and what you saw in the app is what gets marked.
+function engraveLayer(loops, indent = '  ') {
+  const d = loops.filter(l => l && l.length > 1).map(l =>
+    'M ' + l.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' L ') + ' Z').join(' ');
+  if (!d) return '';
+  return `${indent}<g id="engrave" inkscape:groupmode="layer" inkscape:label="engrave">\n` +
+    `${indent}  <path d="${d}" fill="#1a7f4b" fill-rule="evenodd" stroke="none"/>\n` +
+    `${indent}</g>\n`;
 }
 
 // DXF (AutoCAD R12 / AC1009) of the trace. Loops are closed polylines (arc
@@ -186,9 +203,15 @@ export function toTiledSVG(tiles, opts = {}) {
 
   const loopD = pts => pts.length < 2 ? '' :
     'M ' + pts.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' L ') + ' Z';
-  const cut = [], marks = [];
+  const cut = [], marks = [], engrave = [];
   for (const t of tiles) {
     const ox = colX[t.col], oy = rowY[t.row];
+    for (const l of (t.marks || [])) {
+      if (!l || l.length < 2) continue;
+      engrave.push(`  <path transform="translate(${ox.toFixed(3)},${oy.toFixed(3)})" ` +
+        `d="M ${l.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' L ')} Z" ` +
+        `fill="#1a7f4b" fill-rule="evenodd" stroke="none"/>`);
+    }
     const d = [...t.slabs, ...t.holes].map(loopD).join(' ');
     cut.push(`  <path transform="translate(${ox.toFixed(3)},${oy.toFixed(3)})" d="${d}" ` +
       `fill="#dfe6ee" fill-rule="evenodd" stroke="#111" stroke-width="0.2"/>`);
@@ -207,11 +230,15 @@ export function toTiledSVG(tiles, opts = {}) {
   return new Blob([
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<!-- 2.5D v${APP_VERSION} — ${name}: ${tiles.length} tiles (${cols} × ${rows}), true scale mm. ` +
-    `Layer "cut" = outlines; layer "marks" = labels + seam edges (engrave or ignore). -->\n` +
+    `Layer "cut" = outlines; layer "marks" = tile IDs + seam edges (reference only); ` +
+    `layer "engrave" = label artwork as outlines, no font needed. -->\n` +
     `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" ` +
     `width="${totalW.toFixed(3)}mm" height="${totalH.toFixed(3)}mm" viewBox="0 0 ${totalW.toFixed(3)} ${totalH.toFixed(3)}">\n` +
     `<g id="cut" inkscape:groupmode="layer" inkscape:label="cut">\n${cut.join('\n')}\n</g>\n` +
     `<g id="marks" inkscape:groupmode="layer" inkscape:label="marks">\n${marks.join('\n')}\n</g>\n` +
+    (engrave.length
+      ? `<g id="engrave" inkscape:groupmode="layer" inkscape:label="engrave">\n${engrave.join('\n')}\n</g>\n`
+      : '') +
     `</svg>\n`,
   ], { type: 'image/svg+xml' });
 }
