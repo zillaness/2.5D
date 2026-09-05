@@ -187,6 +187,15 @@ const bboxOf = pts => {
 
 // ---------- multi-tool layout (drawer / toolbox inserts) ----------
 
+// The text engraved or embossed for a placed item. `label` overrides the
+// library entry's `name` for THIS placement only; an absent or empty label
+// falls back to the name, so a layout is labelled usefully with no typing.
+export function itemLabelText(item) {
+  const t = String((item && item.label) || '').trim();
+  return t || String((item && item.name) || '').trim();
+}
+
+
 // Place a library loop: rotate about the reference loop's bbox centre (the
 // tool OUTLINE — pass it explicitly when placing the tool's holes, so they
 // keep their offset within the tool), then move that centre to (x, y).

@@ -1378,6 +1378,8 @@ function syncLaySelPanel(i) {
   $('laySelPanel').hidden = !it;
   if (!it) return;
   $('laySelName').textContent = `Selected: ${it.name}`;
+  $('laySelLabel').value = it.label || '';
+  $('laySelLabel').placeholder = `(uses “${it.name}”)`;
   $('laySelDepth').value = it.depth ? fmtDim(it.depth) : '';
   $('laySelDepth').placeholder = `auto (${fmtDim(it.thickness || state.regions[0].thickness)})`;
   $('laySelRot').value = (it.rot || 0).toFixed(0);
@@ -1548,6 +1550,19 @@ $('layRemoveBtn').addEventListener('click', () => {
   syncLaySelPanel(-1);
   refreshLayoutEditor();
 });
+// A placement's label defaults to the library entry's name. It is stored
+// separately (and only when it differs) so renaming the label in one drawer
+// never renames that tool in every other layout that uses it.
+function setItemLabel(text) {
+  const it = state.layout.items[layoutEditor.sel];
+  if (!it) return;
+  const t = String(text || '').trim();
+  if (!t || t === it.name) delete it.label; else it.label = t;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+}
+$('laySelLabel').addEventListener('change', e => setItemLabel(e.target.value));
+$('laySelLabelReset').addEventListener('click', () => setItemLabel(''));
 $('laySelDepth').addEventListener('change', e => {
   const it = state.layout.items[layoutEditor.sel];
   if (!it) return;
@@ -3274,5 +3289,6 @@ window.__app = {
   state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect, doRectify,
   backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
+  layoutEditor, syncLaySelPanel, refreshLayoutEditor,
   get viewer() { return viewer; },
 };

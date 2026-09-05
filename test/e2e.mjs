@@ -2288,6 +2288,50 @@ check('layout modal opens, adds the live trace, previews in 3D',
   layoutUI.modalOpen && layoutUI.items === 1 && layoutUI.modalClosed &&
   layoutUI.previewActive && /Drawer insert/.test(layoutUI.info),
   layoutUI.info.split('\n')[0] || `modal ${layoutUI.modalOpen}, items ${layoutUI.items}`);
+
+// Per-placement label text: defaults to the library name, editable without
+// touching the name, resettable, and not stored when it matches the name.
+const layLabel = await page.evaluate(async () => {
+  const { itemLabelText } = await import('/js/holders.js');
+  const st = window.__app.state;
+  const it = st.layout.items[0];
+  document.getElementById('layoutModal').hidden = false;
+  window.__app.layoutEditor.sel = 0;
+  window.__app.syncLaySelPanel(0);
+  const input = document.getElementById('laySelLabel');
+  const beforeVal = input.value, beforePh = input.placeholder;
+  const seeded = itemLabelText(it);
+
+  input.value = '13 mm';
+  input.dispatchEvent(new Event('change'));
+  const edited = { label: it.label, name: it.name, text: itemLabelText(it) };
+
+  // Typing the name back drops the override rather than storing a duplicate.
+  input.value = it.name;
+  input.dispatchEvent(new Event('change'));
+  const sameAsName = 'label' in it;
+
+  input.value = 'Torque wrench';
+  input.dispatchEvent(new Event('change'));
+  document.getElementById('laySelLabelReset').click();
+  const afterReset = { has: 'label' in it, text: itemLabelText(it) };
+
+  document.getElementById('layoutModal').hidden = true;
+  return { beforeVal, beforePh, seeded, edited, sameAsName, afterReset };
+});
+check('label seeds from the tool name with no typing',
+  layLabel.seeded === layLabel.edited.name && layLabel.beforeVal === '' &&
+  /uses/.test(layLabel.beforePh),
+  `seeded "${layLabel.seeded}", placeholder "${layLabel.beforePh}"`);
+check('editing the label leaves the tool name untouched',
+  layLabel.edited.label === '13 mm' && layLabel.edited.text === '13 mm' &&
+  layLabel.edited.name !== '13 mm',
+  `label "${layLabel.edited.label}", name "${layLabel.edited.name}"`);
+check('a label equal to the name is not stored as an override',
+  layLabel.sameAsName === false, `stored ${layLabel.sameAsName}`);
+check('reset drops the override and falls back to the name',
+  layLabel.afterReset.has === false && layLabel.afterReset.text === layLabel.edited.name,
+  `has ${layLabel.afterReset.has}, text "${layLabel.afterReset.text}"`);
 {
   const [dl] = await Promise.all([
     page.waitForEvent('download', { timeout: 10000 }).catch(() => null),

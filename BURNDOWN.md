@@ -30,7 +30,9 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - 05:56 ⏸ queue exhausted; resumed on Sam's direction
 - (later) ✅ nesting PRD v1.1: packing profiles, custom profiles, label-aware webs — f719de3
 - (later) ✅ labelling PRD v1.0 drafted — committed below
-- ▶ NEXT: nothing. Both PRDs await sign-off; Sam asked for no implementation yet.
+- ✅ Sam signed off on both PRDs; implementation started
+- ✅ labelling step 1: item.label plumbing (field, UI, reset, persistence) — committed below
+- ▶ NEXT: labelling step 2, layoutLabelGeometry() in js/holders.js
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done
