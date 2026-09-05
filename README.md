@@ -586,15 +586,25 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
   offset outlines rather than bounding boxes, since interleaving a plier and
   a screwdriver is the entire value of a foam insert, and would score against
   the existing `layoutPockets` / `layoutConflicts` predicates so a nested
-  result is conflict-free by construction. **Awaiting sign-off** — see
-  `docs/nesting_prd_v1.0.md`.
-- **STL tiling of printed inserts** — cut templates already tile to the bed;
-  the STL still exports whole and only warns when it overruns. Printed tiles
-  need registration features (dowels or keys) rather than the laser-cut
-  puzzle tabs.
+  result is conflict-free by construction. Packing is driven by named
+  **profiles** (a dense one for a travelling toolbox, an access-oriented one
+  for a shop drawer), with every value exposed and custom profiles saveable,
+  and it reserves room for tool labels so text size widens the foam web
+  instead of being clipped. **Awaiting sign-off** — see
+  `docs/nesting_prd_v1.1.md`.
+- **Tool labels on inserts** — engrave or emboss each tool's name into the
+  insert, seeded from the trace name and editable per placement. The
+  text-to-glyph and label-carving machinery already exists from the
+  emboss/deboss feature; what is missing is wiring it into the layout path.
+  See `docs/printed_tile_registration_v1.0.md` for why joining pieces is a
+  2D concern here.
 
 ### Horizon
 
+- **STL tiling of printed inserts** — deprioritized. Cut templates tile; the
+  STL still exports whole and only warns when it overruns the bed. Joining
+  large pieces is a laser and router concern in practice, and the printed
+  case is better served by Gridfinity, which never needs big pieces joined.
 - **3MF export** — colours and per-object metadata that STL cannot carry.
 - **Keys** — trace your own key's blade profile and pick a keyway/blank
   (Schlage C, Kwikset KW1/4, …), optionally auto-detecting the type. Keys are

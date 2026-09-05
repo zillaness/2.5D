@@ -53,15 +53,19 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   now prints its own total so the number can be quoted rather than counted.
 
 ## Needs Sam's call
-- **Registration scheme for printed tiles**, per
-  `docs/printed_tile_registration_v1.0.md`. Recommendation is a stepped
-  half-lap seam with puzzle tabs as the fallback under ~6 mm thickness. Dowel
-  pins are ruled out: `buildSolid` only cuts top/bottom faces, so a hole in a
-  seam wall has no path through the pipeline.
-- **Sign-off on `docs/nesting_prd_v1.0.md`.** Steps 1-4 of its plan are the
-  feature; nothing was built. Its open questions 1-4 (rotation step, auto-run,
-  default minWeb, whether comfortWeb is user-facing) each have a
-  recommendation and need a yes or a redirect.
+- ~~Registration scheme for printed tiles~~ **deprioritized 2026-09-05.**
+  Joining big pieces is a laser/router concern; Gridfinity covers the printed
+  case. The fit-sign flip finding (laser removes material, printer adds it)
+  still matters if it is ever revived.
+- **Tool labelling on inserts.** Machinery exists (`js/text.js` +
+  `buildSolid`'s `opts.labels`); `buildLayoutInsert` never passes labels and
+  `item.name` is read-only in the layout editor (`js/main.js:1380` writes it
+  into a `<p class="hint">`). Needs its own PRD.
+- **Sign-off on `docs/nesting_prd_v1.1.md`.** Steps 1-4 of its plan are the
+  feature; nothing was built. Open questions carry recommendations: rotation
+  step per profile, explicit button rather than auto-run, default webs (8 mm
+  Access / 4 mm Dense, both unvalidated against a real cut), localStorage-only
+  custom profiles, and what to show when a saved project matches no profile.
 - **Em dashes in repo docs.** Sam's style guide bans them; every existing doc
   in this repo uses them heavily. The new PRD matches the repo, not the style
   guide. Say if that is backwards.

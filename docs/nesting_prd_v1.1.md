@@ -1,9 +1,9 @@
 ---
-file: nesting_prd_v1.0.md
-version: 1.0
+file: nesting_prd_v1.1.md
+version: 1.1
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-04
+last_updated: 2026-09-05
 description: PRD for automatic nesting / auto-sort of tool outlines in 2.5D drawer and toolbox layouts.
 ai_update: Update last_updated and version. Rename file to match. Append changelog at bottom.
 ---
@@ -69,14 +69,22 @@ matter in a drawer, and leave CutSheetCalculator as the density specialist.
    hand tools in a 550 × 380 mm drawer, the nested arrangement fits at least
    as many tools as a careful manual arrangement, in no more than the same
    bounding area. Measured once by hand, then frozen as a test fixture.
-3. **Reachable.** Every item's finger notch, where one is defined, still
-   opens onto clear foam rather than being sealed against the container wall
-   or an adjacent pocket. Concretely: the notch circle must retain at least
-   `notchClear` mm (default 8) of free foam measured outward from its centre.
+3. **Reachable, when the profile asks for it.** Under an access-oriented
+   profile, every item's finger notch still opens onto clear foam rather than
+   being sealed against the container wall or an adjacent pocket. Concretely:
+   the notch circle must retain at least `notchClear` mm of free foam measured
+   outward from its centre. Under a density profile this is a warning, not a
+   rejection, because a travel toolbox legitimately trades access away.
 4. **Non-destructive.** Nesting is a single undoable action. The prior
    arrangement is restored exactly on undo, including rotations.
 5. **Respects pins.** Any item the user has pinned keeps its exact `x`, `y`,
    `rot`, and the nester packs around it.
+5b. **Profiles are honest.** Switching profile changes only the values it
+   seeds. Every value stays visible and editable afterward, and the UI shows
+   when the current settings no longer match the profile they came from.
+5c. **Labels never silently shrink the web.** If a label needs more room than
+   the current minimum web allows, the effective web is raised and the change
+   is surfaced, or the label is refused. It is never clipped or overlapped.
 6. **Does not freeze the tab.** 30 items complete in under 2 s on a mid-range
    laptop, or the run yields to the event loop with a progress indication.
 7. **Honest about failure.** If not everything fits, the nester places what it
@@ -101,6 +109,10 @@ matter in a drawer, and leave CutSheetCalculator as the density specialist.
 - **Finger-notch reach** as a placement constraint, not just a post-hoc check.
 - Optional **seam corridors** when a bed size is set, so `splitTiles` has
   somewhere clean to put a seam.
+- **Packing profiles**: two built-in presets, every value individually
+  exposed, and user-saved custom profiles persisted to localStorage.
+- **Label-aware packing**: reserving label footprints and raising the
+  effective web from text size, per the section above.
 - Deterministic output: same input, same result, every time.
 
 ### Out
@@ -111,6 +123,12 @@ matter in a drawer, and leave CutSheetCalculator as the density specialist.
 - Changing the pocket geometry itself. The nester moves and rotates items; it
   never reshapes a pocket, adds a notch, or alters clearance.
 - Automatic depth assignment. Pocket depth stays per-item and manual.
+- The label *rendering* itself. Turning a name into glyph loops and carving or
+  engraving it is the existing `js/text.js` plus `buildSolid` label path, and
+  is specified separately. This document only covers the space a label
+  occupies during packing.
+- Syncing profiles between devices. localStorage is per-browser, same as the
+  container library, and that is accepted.
 
 ## Constraints
 
@@ -119,8 +137,10 @@ Inherited, non-negotiable:
 - Single-file, fully client-side, no server, no user-facing build step.
 - No 3D CSG kernel. Footprint only.
 - Save-format keys stay stable (`app:'2.5D'`, `LIB_KEY`, `-2p5d.stl`, STL
-  header `"2.5D v"`). New fields are additive only. Nesting parameters and the
-  per-item pin/rotation policy are new additive fields.
+  header `"2.5D v"`). New fields are additive only. Nesting parameters, the
+  per-item pin/rotation policy and the per-item label settings are new
+  additive fields. The custom-profile store is a **new** key
+  (`2p5d.packprofiles.v1`), not a change to an existing one.
 - Watertight by construction downstream. Nesting does not touch mesh
   generation; it only changes `x`, `y`, `rot` on items that
   `buildLayoutInsert` already consumes.
@@ -198,18 +218,74 @@ Full annealing is explicitly not proposed. The marginal density is not worth
 the complexity or the runtime in a browser tab, and density is not the
 objective anyway.
 
-### Objective: reachability over density
+### Packing profiles
 
-The score above is pure bottom-left packing, which maximises density. For a
-drawer that is the wrong target on its own. The proposed objective adds a
-**spread term**: among arrangements that fit, prefer the one that maximises
-the minimum free-foam distance between pockets, up to a cap of `comfortWeb`
-(default 12 mm), after which extra spacing stops earning anything.
+Density is not one objective with a knob on it. A travelling toolbox and a
+shop drawer want different things in more than one parameter at once, and a
+single slider cannot express that:
 
-In practice: pack tight enough to fit, then relax into whatever room is left
-rather than leaving one large void at the far end. This is the concrete
-meaning of "reachability beats density" and it is the main thing that
-distinguishes this from a sheet nester.
+- A **travelling toolbox** wants maximum density. Tight webs, rotation free,
+  no space reserved for labels. Everything must fit in a box that gets
+  carried, and the tools are held in place by the lid anyway.
+- A **tool chest or drawer** wants access. Wide webs so fingers fit, rotation
+  restricted so labels stay readable from the front of the drawer, and label
+  space reserved as part of each item's footprint rather than borrowed from
+  the web afterward.
+
+So the objective is selected by a **packing profile**, which is a named bundle
+of the individual settings:
+
+| Setting | Dense | Access | Meaning |
+|---|---|---|---|
+| `minWeb` | 4 mm | 8 mm | Least foam permitted between two pockets, and between a pocket and the border inset |
+| `comfortWeb` | 0 | 12 mm | Spacing past which extra room stops earning score. 0 disables the spread term entirely |
+| `rotationStep` | 15° | 90° | Candidate angles. 90° keeps tools square to the drawer so labels read |
+| `rotationFree` | yes | no | Whether items may take any step angle or only 0/180 |
+| `notchPolicy` | warn | require | Whether a sealed finger notch rejects a placement or merely warns |
+| `labelSpace` | none | reserve | Whether a label's footprint is packed as part of the item |
+| `restarts` | 20 | 20 | Bounded random restarts |
+
+Both are **presets, not modes**. Selecting one seeds every value; all of them
+stay exposed and individually editable afterward. Editing any value marks the
+layout as using a **modified** profile, shown as `Access (modified)`, so it is
+never ambiguous whether the named profile is still in force.
+
+**Custom profiles** can be saved by name. Storage follows the container
+library's existing pattern exactly: a versioned localStorage key
+(`2p5d.packprofiles.v1`) holding a JSON array, behind the same write probe and
+try/catch, so a browser with storage blocked still works for the session and
+simply cannot persist. Built-in profiles are not editable or deletable; a
+custom profile that shadows a built-in name is refused.
+
+**A project stores resolved values, never a profile reference.** This matters.
+If a project pointed at a profile by name, editing that profile would silently
+change the geometry of every saved insert that used it, and a drawer cut six
+months ago would come back with different webs. So the project save carries
+the actual numbers, plus the profile name as provenance only, plus whether it
+was modified. Reopening a project never re-resolves anything.
+
+### Labels, and how they consume packing space
+
+Labelling is optional and off by default. When it is on, a label is not
+decoration applied afterward; it is space that has to exist in the layout, so
+the nester has to know about it before it places anything.
+
+- A label's footprint is its glyph bounding box from `labelBounds`, grown by a
+  margin, positioned relative to its pocket (beside it, or above it, per a
+  per-item setting).
+- Under `labelSpace: reserve`, that footprint is unioned into the item's
+  packed shape. Under `labelSpace: none`, labels are not packed and may be
+  refused later if there is no room.
+- **Text size drives the minimum web.** A label placed in a web needs
+  `textHeight + 2·textMargin` of clear foam. The effective web is therefore
+  `max(minWeb, textHeight + 2·textMargin)` wherever a label sits, computed per
+  gap rather than globally, so one large label does not inflate the whole
+  layout. The UI shows the raised value and why it was raised.
+- Rotation interacts: under a profile that allows free rotation, a label
+  either rotates with its tool and becomes unreadable, or stays horizontal and
+  needs a different amount of room depending on the tool's angle. The access
+  profile sidesteps this by restricting rotation to 90° steps; the dense
+  profile sidesteps it by not reserving label space at all.
 
 ### Interaction with `splitTiles`
 
@@ -248,33 +324,50 @@ Each step ends green and committed.
 3. **Notch reach + minimum web tests.** Including the adversarial case: a
    notch that would be sealed by a later placement.
 4. **Reference fixture.** The 12-tool drawer from success criterion 2.
-5. **UI**: Nest button, parameters (`minWeb`, `comfortWeb`, rotation step,
-   restarts), per-item pin and rotation-lock controls, progress for large
-   sets, and undo.
-6. **Persistence**: additive save fields for the new per-item and per-layout
-   parameters.
-7. **Seam corridors**, behind a checkbox, last, once everything above is
+5. **Profiles as data**, before any UI: the two built-in presets as plain
+   objects, the resolution rules, and the "modified" comparison. Tested by
+   asserting that selecting a profile then nesting is identical to setting
+   its values by hand then nesting.
+6. **Label footprints in the packer**: `labelSpace: reserve` unions the label
+   box into the packed shape, plus the per-gap effective-web rule. Tested
+   with a label large enough to force the web open, asserting the gap
+   actually widens rather than the label overlapping.
+7. **UI**: Nest button, a profile picker with every value exposed and
+   editable beneath it, per-item pin / rotation-lock / label controls,
+   progress for large sets, and undo.
+8. **Persistence**: additive project fields for the resolved values plus
+   profile provenance, and the `2p5d.packprofiles.v1` custom-profile store
+   with the container library's write-probe and try/catch treatment.
+9. **Seam corridors**, behind a checkbox, last, once everything above is
    green.
 
-Steps 1 to 4 are the feature. Steps 5 to 7 are what makes it usable.
+Steps 1 to 4 are the feature. Steps 5 to 9 are what makes it usable.
 
 ## Open questions (recommendation first)
 
-1. **Rotation step: 15° or free?** Recommend **15°**, matching the editor's
-   Shift-snap, because a foam insert with tools at 7° looks like a mistake
-   and costs runtime for density nobody wants. Free rotation is a later
-   toggle if it is ever missed.
+1. **Rotation step per profile.** Recommend **15°** for dense, matching the
+   editor's Shift-snap, and **90°** for access so labels stay readable from
+   the front of the drawer. Free continuous rotation is not proposed: a foam
+   insert with tools at 7° looks like a mistake and costs runtime for density
+   nobody wants.
 2. **Should nesting run automatically when an item is added?** Recommend
    **no**. It is an explicit button. Auto-nesting on every add would relocate
    tools the user just positioned, which is exactly the frustration the
    feature is supposed to remove.
-3. **What is the default `minWeb`?** Recommend **8 mm** for foam. Thin webs
-   tear when a tool is pulled out. This wants a real cut to confirm, and
-   should be listed as unvalidated until then.
-4. **Does `comfortWeb` belong in the UI at all, or is one sensible default
-   enough?** Recommend shipping it as a hidden constant first and only
-   exposing it if the default proves wrong in practice.
-5. **Toolbox layouts with multiple compartments.** Out of scope for v1, but
+3. **What are the default webs?** Recommend **8 mm** for Access and **4 mm**
+   for Dense. Thin webs tear when a tool is pulled out and 4 mm is near the
+   floor for most foam. Both numbers want a real cut to confirm and are
+   unvalidated until then. Both are exposed and editable regardless, so a
+   wrong default costs a field edit rather than a rebuild.
+4. **Should a custom profile be exportable as a file, or is localStorage
+   enough?** Recommend **localStorage only** for v1, matching the container
+   library. A profile is half a dozen numbers; retyping it on a second
+   machine is cheaper than building an import/export path and versioning it.
+5. **What happens when a saved project's values match no known profile?**
+   Recommend showing it as `Custom` with the values intact, and offering a
+   one-click "save these as a profile". Never silently snap it to the nearest
+   built-in.
+6. **Toolbox layouts with multiple compartments.** Out of scope for v1, but
    the API should take a container *loop*, not a rectangle, so a compartmented
    tray is a later container change rather than a nester rewrite. Already
    reflected in the signature above.
@@ -286,3 +379,13 @@ been implemented.
 
 ## CHANGELOG
 - v1.0 (2026-09-04): Initial draft for sign-off.
+- v1.1 (2026-09-05): Replaced the single density-versus-spread objective with
+  named packing profiles (Dense / Access), every value individually exposed
+  and editable, plus user-saved custom profiles in a new
+  `2p5d.packprofiles.v1` store. Established that a project saves resolved
+  values with the profile name as provenance only, so editing a profile can
+  never retroactively change a saved insert. Added label-aware packing:
+  optional label footprints reserved during placement, and a per-gap
+  effective web of `max(minWeb, textHeight + 2*textMargin)` so text size
+  raises the web instead of being clipped. Notch reachability became
+  profile-dependent, required under Access and a warning under Dense.

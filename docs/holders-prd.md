@@ -17,7 +17,7 @@ Status: **complete — all phases shipped (v1.11.0–v1.17.0)** · 2026-07-27 ·
 >   tiles lock into one drawer insert.
 >
 > Still open in this feature area: nesting / auto-sort for drawer layouts
-> (see `docs/nesting_prd_v1.0.md`, awaiting sign-off) and STL tiling of
+> (see `docs/nesting_prd_v1.1.md`, awaiting sign-off) and STL tiling of
 > *printed* inserts with registration features.
 
 ## Problem

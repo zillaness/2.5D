@@ -10,8 +10,17 @@ ai_update: Update last_updated and version. Rename file to match. Append changel
 
 # Design note: STL tiling of printed inserts
 
-Status: **DESIGN NOTE — pre-decision, nothing built.** · 2026-09-04 ·
-target branch `claude/2.5d-photo-stl-s3-y0oodn`
+Status: **DESIGN NOTE — pre-decision, DEPRIORITIZED.** · 2026-09-04, updated
+2026-09-05 · target branch `claude/2.5d-photo-stl-s3-y0oodn`
+
+> **Deprioritized 2026-09-05.** Joining large pieces together is in practice a
+> 2D concern: laser-cut foam and routed sheet goods. The printed case is
+> better served by Gridfinity, which is modular by design and never needs two
+> big pieces joined. The analysis below stands and is worth keeping, but the
+> puzzle-tab work in `splitTiles` should be tuned for laser and router first.
+> The one finding that outlives the deprioritization is the fit-sign flip:
+> a laser removes material and a printer adds it, so a socket drawn for one
+> will not assemble on the other.
 
 Not a PRD. This exists to surface the one real decision before anyone writes
 a PRD, because that decision determines whether the feature is footprint work
