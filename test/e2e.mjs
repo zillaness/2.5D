@@ -3373,6 +3373,74 @@ await page.evaluate(async () => {
 });
 
 
+// ---------- layout label geometry (holders.js) ----------
+
+const labGeom = await page.evaluate(async () => {
+  const { layoutLabelGeometry, layoutPockets, itemLabelText } = await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const items = [
+    { name: '13 mm spanner', outer: rect(80, 20), holes: [], circles: [], x: 100, y: 60, rot: 0 },
+    { name: 'pliers', label: 'LINESMAN', outer: rect(40, 30), holes: [], circles: [], x: 100, y: 160, rot: 0 },
+  ];
+  const pockets = layoutPockets(items, 0.5);
+  const off = layoutLabelGeometry(items, pockets, { enabled: false });
+  const on = layoutLabelGeometry(items, pockets, { enabled: true, height: 6, margin: 2 });
+
+  // Auto placement sits clear of the pocket, centred on it.
+  const p0 = pockets[0].pocket;
+  let pMaxY = -Infinity, pMinX = Infinity, pMaxX = -Infinity;
+  for (const p of p0) { pMaxY = Math.max(pMaxY, p.y); pMinX = Math.min(pMinX, p.x); pMaxX = Math.max(pMaxX, p.x); }
+  const b0 = on[0].bounds;
+  const clearsPocket = b0.minY > pMaxY;
+  const centred = Math.abs((b0.minX + b0.maxX) / 2 - (pMinX + pMaxX) / 2) < 0.5;
+
+  // An explicit offset wins and rides with the item.
+  items[0].labelAt = { dx: 0, dy: -40 };
+  const moved = layoutLabelGeometry(items, layoutPockets(items, 0.5), { enabled: true })[0];
+  const atMoved = { x: moved.at.x, y: moved.at.y };
+  items[0].x += 25;
+  const shifted = layoutLabelGeometry(items, layoutPockets(items, 0.5), { enabled: true })[0];
+
+  // follow:false keeps glyphs level even when the tool is turned.
+  items[1].rot = 90;
+  const pk = layoutPockets(items, 0.5);
+  const level = layoutLabelGeometry(items, pk, { enabled: true }).find(L => L.i === 1);
+  const turned = layoutLabelGeometry(items, pk, { enabled: true, follow: true }).find(L => L.i === 1);
+
+  // Blank text is skipped rather than producing empty geometry.
+  const blank = layoutLabelGeometry(
+    [{ name: '   ', outer: rect(20, 20), holes: [], circles: [], x: 50, y: 50, rot: 0 }],
+    layoutPockets([{ name: '   ', outer: rect(20, 20), holes: [], circles: [], x: 50, y: 50, rot: 0 }], 0.5),
+    { enabled: true });
+
+  return {
+    offN: off.length, onN: on.length,
+    texts: on.map(L => L.text), override: itemLabelText(items[1]),
+    clearsPocket, centred,
+    capH: b0.maxY - b0.minY,
+    atMoved, shiftedX: shifted.at.x,
+    levelRot: level.rot, turnedRot: turned.rot,
+    blankN: blank.length,
+  };
+});
+check('labelling off produces no geometry at all',
+  labGeom.offN === 0 && labGeom.onN === 2, `${labGeom.offN} off, ${labGeom.onN} on`);
+check('item label uses the override when set, the name otherwise',
+  labGeom.texts[0] === '13 mm spanner' && labGeom.texts[1] === 'LINESMAN' &&
+  labGeom.override === 'LINESMAN', labGeom.texts.join(' / '));
+check('auto-placed label clears its pocket and centres on it',
+  labGeom.clearsPocket && labGeom.centred, `clears ${labGeom.clearsPocket}, centred ${labGeom.centred}`);
+check('glyphs are built to the requested cap height',
+  near(labGeom.capH, 6, 0.35), `${labGeom.capH.toFixed(2)} mm`);
+check('an explicit offset overrides auto and rides with the tool',
+  near(labGeom.atMoved.y, 20, 0.01) && near(labGeom.shiftedX - labGeom.atMoved.x, 25, 0.01),
+  `at ${labGeom.atMoved.x.toFixed(1)},${labGeom.atMoved.y.toFixed(1)} -> x ${labGeom.shiftedX.toFixed(1)}`);
+check('follow:false keeps glyphs level on a rotated tool; follow:true turns them',
+  labGeom.levelRot === 0 && labGeom.turnedRot === 90,
+  `level ${labGeom.levelRot}, follow ${labGeom.turnedRot}`);
+check('blank label text is skipped, not emitted as empty geometry',
+  labGeom.blankN === 0, `${labGeom.blankN} emitted`);
+
 // ---------- puzzle tabs on tile seams ----------
 
 const puzzle = await page.evaluate(async () => {

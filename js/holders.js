@@ -14,6 +14,7 @@ import {
   MeshBuilder, zipRings, addCap, circleRing, emitBand, emitDisk,
 } from './mesh.js';
 import { signedArea } from './contour.js';
+import { labelLoops, labelBounds } from './text.js';
 
 const CL = () => window.ClipperLib;
 const SCALE = 1000; // Clipper integer units per mm
@@ -237,6 +238,66 @@ export function layoutPockets(items, clearance) {
     }
     return { pocket, pillars, notchAt };
   });
+}
+
+// ---------- labels on a layout ----------
+//
+// Per docs/labelling_prd_v1.0.md. Two kinds:
+//   item labels   — one per placed tool, text from itemLabelText(), so an
+//                   empty pocket says WHICH tool is missing.
+//   layout labels — free-floating, belong to the drawer ("TOP DRAWER",
+//                   "FRONT"). Same object shape as the part labels in
+//                   state.labels, but placed in layout mm.
+//
+// An item label's position is an offset from the item's placement, in LAYOUT
+// axes, not the item's rotated frame: dragging a tool carries its label along,
+// but spinning the tool does not fling the label around the pocket. Whether
+// the glyphs themselves turn with the tool is the separate `follow` option,
+// default off, because a drawer is read from one side.
+export const LABEL_DEFAULTS = {
+  enabled: false,
+  height: 6,        // cap height, mm
+  margin: 2,        // clear space demanded around the glyphs, mm
+  follow: false,    // glyphs rotate with their tool
+  font: 'bold sans-serif',
+  mirror: false,
+};
+
+// items + their pockets (from layoutPockets) -> placed label geometry in
+// layout mm. opts.extra carries free-floating layout labels. Returns [] when
+// labelling is off, so an unlabelled layout costs nothing downstream.
+export function layoutLabelGeometry(items, pockets, opts = {}) {
+  const o = { ...LABEL_DEFAULTS, ...opts };
+  const out = [];
+  if (!o.enabled) return out;
+  (items || []).forEach((item, i) => {
+    const text = itemLabelText(item);
+    const pocket = pockets && pockets[i] && pockets[i].pocket;
+    if (!text || !pocket) return;
+    const h = Math.max(0.5, item.labelHeight || o.height);
+    const rot = o.follow ? (item.rot || 0) : 0;
+    // Auto-placement: centred under the pocket, clear of it by the margin.
+    // Recomputed from the live pocket, so it tracks the tool as it moves and
+    // rotates until the user drags it, which stores an explicit offset.
+    const bb = bboxOf(pocket);
+    const at = item.labelAt
+      ? { x: item.x + item.labelAt.dx, y: item.y + item.labelAt.dy }
+      : { x: (bb.minX + bb.maxX) / 2, y: bb.maxY + o.margin + h / 2 };
+    const loops = labelLoops(text, at.x, at.y, h, { rot, font: o.font, mirror: o.mirror });
+    if (!loops.length) return;
+    out.push({ src: 'item', i, text, loops, bounds: labelBounds(loops), at, rot, height: h, auto: !item.labelAt });
+  });
+  (o.extra || []).forEach((L, j) => {
+    const text = String((L && L.text) || '').trim();
+    if (!text) return;
+    const h = Math.max(0.5, L.height || o.height);
+    const loops = labelLoops(text, L.x, L.y, h,
+      { rot: L.rot || 0, font: L.font || o.font, mirror: !!L.mirror });
+    if (!loops.length) return;
+    out.push({ src: 'layout', i: j, text, loops, bounds: labelBounds(loops),
+      at: { x: L.x, y: L.y }, rot: L.rot || 0, height: h, auto: false });
+  });
+  return out;
 }
 
 // Validity: pockets must stay `border` mm inside the container and must not
