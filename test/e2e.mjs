@@ -3373,6 +3373,69 @@ await page.evaluate(async () => {
 });
 
 
+// ---------- labels UI: toggle, process, readout, and project round-trip ----------
+
+const labUI = await page.evaluate(async () => {
+  const st = window.__app.state;
+  const $ = id => document.getElementById(id);
+  document.getElementById('layoutModal').hidden = false;
+
+  // A project saved before labels existed must not leave state.layout.labels
+  // undefined — loadProject rebuilds state.layout wholesale.
+  const legacy = JSON.parse(window.__app.serializeProject(false));
+  delete legacy.layout.labels;
+  window.__app.loadProject(legacy);
+  const survivedLoad = !!st.layout.labels && st.layout.labels.enabled === false;
+
+  // Needs something to label. Place one small tool well inside the container.
+  st.layout.items = [{
+    name: '13 mm', outer: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 16 }, { x: 0, y: 16 }],
+    holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 110, y: 55,
+  }];
+  window.__app.refreshLayoutEditor();
+
+  $('layLabels').checked = true;
+  $('layLabels').dispatchEvent(new Event('change'));
+  const on = { enabled: st.layout.labels.enabled, fieldsShown: !$('layLabelFields').hidden };
+
+  // Laser: 6 mm caps are fine, so the readout is informational.
+  $('layLabelProcess').value = 'laser';
+  $('layLabelProcess').dispatchEvent(new Event('change'));
+  const laser = { cls: $('layLabelInfo').className, text: $('layLabelInfo').textContent, bitRow: !$('layLabelBitRow').hidden };
+
+  // Router: the bit field appears and 6 mm is now too small.
+  $('layLabelProcess').value = 'router';
+  $('layLabelProcess').dispatchEvent(new Event('change'));
+  const router = { cls: $('layLabelInfo').className, text: $('layLabelInfo').textContent, bitRow: !$('layLabelBitRow').hidden };
+
+  // Raising the letters past 4x the bit clears it.
+  $('layLabelHeight').value = '14';
+  $('layLabelHeight').dispatchEvent(new Event('change'));
+  const bigger = { cls: $('layLabelInfo').className, text: $('layLabelInfo').textContent };
+
+  $('layLabels').checked = false;
+  $('layLabels').dispatchEvent(new Event('change'));
+  const off = { enabled: st.layout.labels.enabled, readout: $('layLabelInfo').textContent };
+  st.layout.items.length = 0;
+  window.__app.refreshLayoutEditor();
+  document.getElementById('layoutModal').hidden = true;
+  return { survivedLoad, on, laser, router, bigger, off };
+});
+check('a project saved before labels existed still loads with labelling off',
+  labUI.survivedLoad, `${labUI.survivedLoad}`);
+check('the labels checkbox turns labelling on and reveals its settings',
+  labUI.on.enabled && labUI.on.fieldsShown, `enabled ${labUI.on.enabled}, fields ${labUI.on.fieldsShown}`);
+check('the marking-bit field appears only for a router',
+  labUI.laser.bitRow === false && labUI.router.bitRow === true,
+  `laser ${labUI.laser.bitRow}, router ${labUI.router.bitRow}`);
+check('6 mm caps read as fine on a laser and as a warning on a router',
+  labUI.laser.cls === 'hint' && labUI.router.cls === 'warn' && /too small/.test(labUI.router.text),
+  `laser "${labUI.laser.text}" / router "${labUI.router.text}"`);
+check('raising the letters past 4x the bit clears the router warning',
+  labUI.bigger.cls === 'hint', `"${labUI.bigger.text}"`);
+check('turning labelling off clears the readout',
+  labUI.off.enabled === false && labUI.off.readout === '', `"${labUI.off.readout}"`);
+
 // ---------- layout label geometry (holders.js) ----------
 
 const labGeom = await page.evaluate(async () => {

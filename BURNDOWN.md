@@ -36,7 +36,8 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - ✅ labelling step 3: layoutLabelConflicts() + per-process minimum cap height
 - ✅ labelling step 4: engrave layer in both SVG export paths — committed below
 - ✅ labelling step 5: labels carve into printed inserts as recesses — committed below
-- ▶ NEXT: labelling step 7 (UI toggle + process settings), then step 6 (drag/rotate)
+- ✅ labelling step 7: UI toggle, process settings, legibility readout — committed below
+- ▶ NEXT: labelling step 6 (drag/rotate labels in the layout editor), then nesting steps 1-4
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done

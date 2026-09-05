@@ -22,7 +22,7 @@ import { toBinarySTL, toSVG, toDXF, toTiledSVG, downloadBlob } from './exporters
 import {
   buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate,
   buildLayoutGridBin, gridContainerLoop, buildHolster, roundedRect, splitTiles,
-  layoutPockets, layoutLabelGeometry, layoutLabelConflicts,
+  layoutPockets, layoutLabelGeometry, layoutLabelConflicts, labelMinHeight,
 } from './holders.js';
 import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
 import { LayoutEditor } from './ui/layoutEditor.js';
@@ -1375,12 +1375,14 @@ function updateLayoutInfo() {
           : '');
     bedEl.className = 'hint';
   }
+  updateLabelInfo();
   if (state.holder.type === 'layout') rebuildHolder();
 }
 // Placed label geometry for the current layout, in layout mm. Empty when
 // labelling is off, so every downstream path no-ops for an unlabelled layout.
 function layPlacedLabels(pockets) {
   const L = state.layout;
+  if (!L.labels || !L.labels.enabled) return [];
   return layoutLabelGeometry(L.items, pockets || layoutPockets(L.items, L.clearance), L.labels);
 }
 // Flat list of glyph loops for the exporters.
@@ -1389,7 +1391,7 @@ function layLabelLoops() {
 }
 // Labels as buildSolid wants them, for a PRINTED insert.
 function layLabelsForMesh() {
-  const cfg = state.layout.labels;
+  const cfg = state.layout.labels || {};
   return layPlacedLabels().map(L => ({
     loops: L.loops, mode: cfg.mode || 'deboss', face: 'top',
     size: Math.max(0.05, cfg.depth || 0.6),
@@ -1418,6 +1420,7 @@ function openLayoutModal() {
   refreshLaySelects();
   syncLayoutFields();
   syncBedFields();
+  syncLabelFields();
   syncLaySelPanel(layoutEditor.sel);
   $('layoutModal').hidden = false;
   refreshLayoutEditor();
@@ -1491,6 +1494,75 @@ function syncBedFields() {
   $('layTabSpacing').value = fmtDim(t.spacing);
   $('layTabFit').value = fmtDim(t.fit);
 }
+// ---------- labels UI ----------
+function syncLabelFields() {
+  const L = state.layout.labels;
+  if (!L) return;
+  $('layLabels').checked = !!L.enabled;
+  $('layLabelFields').hidden = !L.enabled;
+  $('layLabelProcess').value = L.process;
+  $('layLabelBitRow').hidden = L.process !== 'router';
+  $('layLabelHeight').value = fmtDim(L.height);
+  $('layLabelBit').value = fmtDim(L.bitDia);
+  $('layLabelMargin').value = fmtDim(L.margin);
+  $('layLabelDepth').value = fmtDim(L.depth);
+  $('layLabelFollow').checked = !!L.follow;
+}
+// One line saying what will actually be engraved, and every reason a label
+// cannot be. Never silently drops one (labelling PRD, Q5).
+function updateLabelInfo() {
+  const el = $('layLabelInfo');
+  const L = state.layout.labels;
+  if (!L || !L.enabled) { el.textContent = ''; el.className = 'hint'; return; }
+  const pockets = layoutPockets(state.layout.items, state.layout.clearance);
+  const placed = layPlacedLabels(pockets);
+  const issues = layoutLabelConflicts(layContainerLoop(), pockets, placed,
+    { ...L, border: layBorderEff() });
+  if (!placed.length) {
+    el.textContent = 'Nothing to label yet — add a tool.';
+    el.className = 'hint'; return;
+  }
+  const min = labelMinHeight(L);
+  if (!issues.length) {
+    el.textContent = `${placed.length} label${placed.length === 1 ? '' : 's'} at ` +
+      `${fmtDimL(L.height)} caps (${L.process} needs ${fmtDimL(min)}).`;
+    el.className = 'hint'; return;
+  }
+  const by = k => issues.filter(x => x.kind === k);
+  const parts = [];
+  if (by('tooSmall').length) parts.push(`${by('tooSmall').length} too small for ${L.process} (needs ${fmtDimL(min)})`);
+  if (by('pocket').length) parts.push(`${by('pocket').length} overlapping a pocket`);
+  if (by('label').length) parts.push(`${by('label').length} overlapping another label`);
+  if (by('border').length) parts.push(`${by('border').length} across the border`);
+  el.textContent = `${placed.length} label${placed.length === 1 ? '' : 's'}, but ${parts.join(', ')}.`;
+  el.className = 'warn';
+}
+$('layLabels').addEventListener('change', e => {
+  state.layout.labels.enabled = e.target.checked;
+  syncLabelFields();
+  updateLayoutInfo();
+});
+$('layLabelProcess').addEventListener('change', e => {
+  state.layout.labels.process = e.target.value;
+  syncLabelFields();
+  updateLayoutInfo();
+});
+$('layLabelFollow').addEventListener('change', e => {
+  state.layout.labels.follow = e.target.checked;
+  updateLayoutInfo();
+});
+for (const [id, key, min] of [
+  ['layLabelHeight', 'height', 0.5], ['layLabelBit', 'bitDia', 0.1],
+  ['layLabelMargin', 'margin', 0], ['layLabelDepth', 'depth', 0.05],
+]) {
+  $(id).addEventListener('change', e => {
+    const v = parseDim(e.target.value);
+    if (Number.isFinite(v) && v >= min) state.layout.labels[key] = v;
+    syncLabelFields();
+    updateLayoutInfo();
+  });
+}
+
 function layTileOpts() {
   return { tabs: state.layout.bed.tabs, labels: layLabelLoops() };
 }
@@ -2864,6 +2936,13 @@ function loadProject(p) {
         ...state.layout.bed, ...(p.layout.bed || {}),
         tabs: { ...state.layout.bed.tabs, ...((p.layout.bed && p.layout.bed.tabs) || {}) },
       },
+      // Merged onto the defaults, not taken from the file: a project saved
+      // before labels existed has no `labels` key, and rebuilding state.layout
+      // wholesale would otherwise leave it undefined.
+      labels: {
+        ...state.layout.labels, ...(p.layout.labels || {}),
+        extra: structuredClone((p.layout.labels && p.layout.labels.extra) || []),
+      },
     };
   }
   syncHolderPanel();
@@ -3321,5 +3400,6 @@ window.__app = {
   backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,
+  serializeProject, loadProject,
   get viewer() { return viewer; },
 };

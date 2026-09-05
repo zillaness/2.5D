@@ -988,6 +988,51 @@
           Tabs keep clear of seam ends and of pockets within reach.</p>
         </div>
         <p class="hint" id="layBedInfo"></p>
+        <h3 style="margin:10px 0 0">Labels</h3>
+        <div class="field">
+          <label><input type="checkbox" id="layLabels"> Engrave a label per tool</label>
+        </div>
+        <div id="layLabelFields" hidden>
+          <div class="field-row">
+            <div class="field">
+              <label for="layLabelProcess">Marking process</label>
+              <select id="layLabelProcess" title="Sets the minimum legible letter height. A router's bit cannot render letters a laser can.">
+                <option value="laser">Laser</option>
+                <option value="router">CNC router</option>
+                <option value="printed">3D printed</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="layLabelHeight">Letter height (mm)</label>
+              <input type="text" inputmode="decimal" id="layLabelHeight" value="6">
+            </div>
+          </div>
+          <div class="field-row" id="layLabelBitRow" hidden>
+            <div class="field">
+              <label for="layLabelBit">Marking bit ⌀ (mm)</label>
+              <input type="text" inputmode="decimal" id="layLabelBit" value="3.175" title="Letters below about 4× the bit diameter come out as blobs, because the stroke ends up wider than the counter of an 8 or an a.">
+            </div>
+            <div class="field"></div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="layLabelMargin">Clear space (mm)</label>
+              <input type="text" inputmode="decimal" id="layLabelMargin" value="2" title="Foam kept clear around the glyphs.">
+            </div>
+            <div class="field">
+              <label for="layLabelDepth">Engrave depth (mm)</label>
+              <input type="text" inputmode="decimal" id="layLabelDepth" value="0.6" title="Printed inserts only; the cut template engraves at whatever your machine is set to.">
+            </div>
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="layLabelFollow"> Turn labels with their tool</label>
+          </div>
+          <p class="hint">Each tool is labelled with its name, so an empty
+          pocket says <em>which</em> tool is missing. Change any one of them in
+          the tool panel above. Labels go on their own “engrave” layer in the
+          cut template, as outlines, so the machine needs no font.</p>
+        </div>
+        <p class="hint" id="layLabelInfo"></p>
         <div class="btn-row">
           <button id="layPreviewBtn" class="btn">👁 Preview in 3D</button>
         </div>
