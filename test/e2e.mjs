@@ -3495,6 +3495,53 @@ check('6 mm caps pass on a laser and fail on a 1/8 in router; 14 mm passes both'
   !labConf.bigOnRouter.includes('tooSmall'),
   `laser [${labConf.onLaser}] router [${labConf.onRouter}] big [${labConf.bigOnRouter}]`);
 
+// ---------- labels carve into a PRINTED insert, watertight ----------
+
+const labMesh = await page.evaluate(async () => {
+  const { buildLayoutInsert, layoutLabelGeometry, layoutPockets, roundedRect } =
+    await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const container = { outer: roundedRect(110, 70, 220, 140, 6) };
+  const items = [{ name: '13 mm', outer: rect(60, 20), holes: [], circles: [], x: 110, y: 50, rot: 0, depth: 5 }];
+  const pockets = layoutPockets(items, 0.5);
+  const placed = layoutLabelGeometry(items, pockets, { enabled: true, height: 6, margin: 2 });
+  const labels = placed.map(L => ({ loops: L.loops, mode: 'deboss', face: 'top', size: 0.6 }));
+
+  const openEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const a = k(m.indices[t]), b = k(m.indices[t+1]), c = k(m.indices[t+2]);
+      for (const [u, v] of [[a,b],[b,c],[c,a]]) {
+        const key = u < v ? `${u}|${v}` : `${v}|${u}`;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const n of use.values()) if (n !== 2) bad++;
+    return bad;
+  };
+
+  const bare = buildLayoutInsert(container, items, { clearance: 0.5, floor: 3, border: 5 });
+  const withL = buildLayoutInsert(container, items, { clearance: 0.5, floor: 3, border: 5, labels });
+  return {
+    placedN: placed.length,
+    bareTris: bare.indices.length / 3, labTris: withL.indices.length / 3,
+    bareBad: openEdges(bare), labBad: openEdges(withL),
+    sameSlab: Math.abs(bare.stats.slab.w - withL.stats.slab.w) < 1e-6 &&
+              Math.abs(bare.stats.slab.thickness - withL.stats.slab.thickness) < 1e-6,
+    warns: (withL.stats.warnings || []).join(' | '),
+  };
+});
+check('a labelled printed insert stays watertight',
+  labMesh.labBad === 0 && labMesh.bareBad === 0,
+  `${labMesh.labBad} open edges labelled, ${labMesh.bareBad} bare`);
+check('the label actually adds geometry to the insert',
+  labMesh.placedN === 1 && labMesh.labTris > labMesh.bareTris,
+  `${labMesh.bareTris} -> ${labMesh.labTris} triangles`);
+check('labelling does not change the insert\'s slab size or thickness',
+  labMesh.sameSlab, `${labMesh.sameSlab}${labMesh.warns ? ' — ' + labMesh.warns : ''}`);
+
 // ---------- labels reach the cut files on their own engrave layer ----------
 
 const labSvg = await page.evaluate(async () => {

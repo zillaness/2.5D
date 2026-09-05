@@ -10,7 +10,7 @@
 // exactly the way letter counters stay standing in a debossed label.
 
 import {
-  buildSolid, circleToPolygon,
+  buildSolid, circleToPolygon, glyphIslands,
   MeshBuilder, zipRings, addCap, circleRing, emitBand, emitDisk,
 } from './mesh.js';
 import { signedArea } from './contour.js';
@@ -421,7 +421,7 @@ export function layoutConflicts(containerOuter, pockets, border) {
 // be conflict-free (run layoutConflicts first) — conflicts return null with
 // a reason in `reason`.
 export function buildLayoutInsert(container, items, opts = {}) {
-  const { clearance = 0.5, floor = 3, border = 5, defaultDepth = 5 } = opts;
+  const { clearance = 0.5, floor = 3, border = 5, defaultDepth = 5, labels = [] } = opts;
   if (!container || !container.outer || container.outer.length < 3) return null;
   if (!items || !items.length) return { reason: 'empty' };
   const warnings = [];
@@ -442,6 +442,22 @@ export function buildLayoutInsert(container, items, opts = {}) {
     islands: [{ outer: p.pocket, holes: p.pillars }],
     depth: depths[i], face: 'top',
   }));
+  // A debossed label IS a recess: glyph islands cut into the slab's top face,
+  // the same machinery the pockets already use, so no new mesh capability and
+  // the watertight-by-construction guarantee carries over unchanged. This is
+  // also why labels sit BESIDE pockets rather than on a pocket floor: two
+  // recesses on the same face cannot nest (labelling PRD, "Out of scope").
+  for (const L of labels) {
+    if (!L || !L.loops || !L.loops.length) continue;
+    if (L.mode && L.mode !== 'deboss') {
+      warnings.push('Raised (embossed) labels are not available on layout inserts yet — engraved instead.');
+    }
+    const islands = glyphIslands(L.loops);
+    if (!islands.length) { warnings.push('A label produced no geometry and was skipped.'); continue; }
+    const d = Math.min(Math.max(0.05, L.size || 0.6), Math.max(0.5, floor) * 0.8);
+    recesses.push({ islands, depth: d, face: L.face === 'bottom' ? 'bottom' : 'top' });
+  }
+
   const mesh = buildSolid(container.outer, [], [], {
     thickness, zBase: 0, top: none, bottom: none, recesses,
   });

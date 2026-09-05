@@ -1272,6 +1272,7 @@ function buildLayoutNow() {
         L.items, { clearance: L.clearance });
     }
     return buildLayoutInsert({ outer: layContainerLoop() }, L.items, {
+      labels: layLabelsForMesh(),
       clearance: L.clearance, floor: L.floor, border: L.border,
       defaultDepth: state.regions[0].thickness,
     });
@@ -1385,6 +1386,14 @@ function layPlacedLabels(pockets) {
 // Flat list of glyph loops for the exporters.
 function layLabelLoops() {
   return layPlacedLabels().flatMap(L => L.loops);
+}
+// Labels as buildSolid wants them, for a PRINTED insert.
+function layLabelsForMesh() {
+  const cfg = state.layout.labels;
+  return layPlacedLabels().map(L => ({
+    loops: L.loops, mode: cfg.mode || 'deboss', face: 'top',
+    size: Math.max(0.05, cfg.depth || 0.6),
+  }));
 }
 // Pocket geometry for the tiling plan (same clearance/pillars as the build).
 function layoutPocketsForPlan() {
