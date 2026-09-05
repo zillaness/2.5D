@@ -125,8 +125,10 @@ matter in a drawer, and leave CutSheetCalculator as the density specialist.
 - Automatic depth assignment. Pocket depth stays per-item and manual.
 - The label *rendering* itself. Turning a name into glyph loops and carving or
   engraving it is the existing `js/text.js` plus `buildSolid` label path, and
-  is specified separately. This document only covers the space a label
-  occupies during packing.
+  is specified in `docs/labelling_prd_v1.0.md`. This document only covers the
+  space a label occupies during packing. The dependency runs one way:
+  labelling can ship without nesting, nesting cannot reserve label space
+  without labelling.
 - Syncing profiles between devices. localStorage is per-browser, same as the
   container library, and that is accepted.
 

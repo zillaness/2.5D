@@ -593,11 +593,12 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
   instead of being clipped. **Awaiting sign-off** — see
   `docs/nesting_prd_v1.1.md`.
 - **Tool labels on inserts** — engrave or emboss each tool's name into the
-  insert, seeded from the trace name and editable per placement. The
-  text-to-glyph and label-carving machinery already exists from the
-  emboss/deboss feature; what is missing is wiring it into the layout path.
-  See `docs/printed_tile_registration_v1.0.md` for why joining pieces is a
-  2D concern here.
+  insert, seeded from the trace name and editable per placement, so an empty
+  pocket says *which* wrench is missing. The text-to-glyph and label-carving
+  machinery already exists from the emboss/deboss feature; what is missing is
+  wiring it into the layout path, plus process-aware minimum text sizing
+  (a router bit cannot render letters a laser can). **Awaiting sign-off** —
+  see `docs/labelling_prd_v1.0.md`.
 
 ### Horizon
 

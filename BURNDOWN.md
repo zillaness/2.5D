@@ -27,7 +27,10 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   count line, holders-prd records the v1.18–v1.23 follow-on work — committed below
 - 05:47 ✅ docs/nesting_prd_v1.0.md drafted (288 lines, DRAFT — not implemented) — committed below
 - 05:56 ✅ docs/printed_tile_registration_v1.0.md design note (130 lines) — committed below
-- 05:56 ⏸ STOP: queue exhausted. Everything remaining needs Sam's call.
+- 05:56 ⏸ queue exhausted; resumed on Sam's direction
+- (later) ✅ nesting PRD v1.1: packing profiles, custom profiles, label-aware webs — f719de3
+- (later) ✅ labelling PRD v1.0 drafted — committed below
+- ▶ NEXT: nothing. Both PRDs await sign-off; Sam asked for no implementation yet.
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done
@@ -57,10 +60,10 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   Joining big pieces is a laser/router concern; Gridfinity covers the printed
   case. The fit-sign flip finding (laser removes material, printer adds it)
   still matters if it is ever revived.
-- **Tool labelling on inserts.** Machinery exists (`js/text.js` +
-  `buildSolid`'s `opts.labels`); `buildLayoutInsert` never passes labels and
-  `item.name` is read-only in the layout editor (`js/main.js:1380` writes it
-  into a `<p class="hint">`). Needs its own PRD.
+- **Sign-off on `docs/labelling_prd_v1.0.md`**, plus answers to its open
+  questions 1 (single-line fonts for routers, deferring is a real cost) and 4
+  (a third `engrave` SVG layer, which changes the exported layer set). Those
+  two change the shape of the work rather than a default.
 - **Sign-off on `docs/nesting_prd_v1.1.md`.** Steps 1-4 of its plan are the
   feature; nothing was built. Open questions carry recommendations: rotation
   step per profile, explicit button rather than auto-run, default webs (8 mm
