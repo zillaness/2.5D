@@ -300,6 +300,80 @@ export function layoutLabelGeometry(items, pockets, opts = {}) {
   return out;
 }
 
+// Minimum legible cap height per marking process. This is physics, not taste:
+// a router's marking bit cannot render letters a laser can, and an outline
+// font traced by a 1/8" endmill turns an 8 into a blob because the stroke ends
+// up wider than the counter. v1 reports the governing number rather than
+// emitting mush; single-line fonts are the real fix (labelling PRD, Q1).
+export const LABEL_PROCESS = {
+  laser:   { name: 'laser',   min: () => 2 },
+  router:  { name: 'router',  min: o => 4 * Math.max(0.1, o.bitDia || 3.175) },
+  printed: { name: 'printed', min: o => 3 * Math.max(0.05, o.nozzle || 0.4) },
+};
+export function labelMinHeight(opts = {}) {
+  const P = LABEL_PROCESS[opts.process] || LABEL_PROCESS.laser;
+  return P.min(opts);
+}
+
+const boxLoop = (b, pad = 0) => [
+  { x: b.minX - pad, y: b.minY - pad }, { x: b.maxX + pad, y: b.minY - pad },
+  { x: b.maxX + pad, y: b.maxY + pad }, { x: b.minX - pad, y: b.maxY + pad },
+];
+
+// Area (mm^2) of a boolean between two loops, using the same Clipper settings
+// and tolerance convention as layoutConflicts.
+function clipArea(subject, clip, type) {
+  const ClipperLib = CL();
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPath(positivePath(toClipperPath(subject)), ClipperLib.PolyType.ptSubject, true);
+  clipper.AddPath(positivePath(toClipperPath(clip)), ClipperLib.PolyType.ptClip, true);
+  const sol = new ClipperLib.Paths();
+  clipper.Execute(type, sol, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+  let area = 0;
+  for (const path of sol) area += Math.abs(ClipperLib.Clipper.Area(path));
+  return area / (SCALE * SCALE);
+}
+
+// Why a label cannot be cut as placed. Returns [] when every label is fine.
+// Never throws and never mutates: a label that fails is reported and left
+// where the user put it, flagged, rather than being auto-shrunk or truncated
+// (labelling PRD, Q5). Each issue is { at, src, i, kind, detail }.
+export function layoutLabelConflicts(containerOuter, pockets, placed, opts = {}) {
+  const o = { ...LABEL_DEFAULTS, ...opts };
+  const issues = [];
+  if (!placed || !placed.length) return issues;
+  const minH = labelMinHeight(o);
+  const inner = containerOuter
+    ? offsetLoop(containerOuter, -Math.max(0.5, o.border == null ? 5 : o.border))[0]
+    : null;
+  const boxes = placed.map(L => boxLoop(L.bounds, o.margin / 2));
+
+  placed.forEach((L, k) => {
+    const id = { at: L.at, src: L.src, i: L.i, text: L.text };
+    if (L.height < minH - 1e-6) {
+      issues.push({ ...id, kind: 'tooSmall',
+        detail: `${L.height.toFixed(1)} mm caps; ${(LABEL_PROCESS[o.process] || LABEL_PROCESS.laser).name} needs ${minH.toFixed(1)} mm` });
+    }
+    if (inner && clipArea(boxes[k], inner, CL().ClipType.ctDifference) > 0.05) {
+      issues.push({ ...id, kind: 'border', detail: 'crosses the layout border' });
+    }
+    for (let j = 0; j < pockets.length; j++) {
+      const p = pockets[j] && pockets[j].pocket;
+      if (!p) continue;
+      if (clipArea(boxes[k], p, CL().ClipType.ctIntersection) > 0.05) {
+        issues.push({ ...id, kind: 'pocket', detail: `overlaps pocket ${j + 1}` });
+        break;
+      }
+    }
+    for (let j = k + 1; j < placed.length; j++) {
+      if (clipArea(boxes[k], boxes[j], CL().ClipType.ctIntersection) > 0.05) {
+        issues.push({ ...id, kind: 'label', detail: `overlaps the label "${placed[j].text}"` });
+      }
+    }
+  });
+  return issues;
+}
+
 // Validity: pockets must stay `border` mm inside the container and must not
 // overlap each other. Returns { collisions: Set(index), escaped: Set(index) }.
 export function layoutConflicts(containerOuter, pockets, border) {

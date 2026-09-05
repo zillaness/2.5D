@@ -3441,6 +3441,60 @@ check('follow:false keeps glyphs level on a rotated tool; follow:true turns them
 check('blank label text is skipped, not emitted as empty geometry',
   labGeom.blankN === 0, `${labGeom.blankN} emitted`);
 
+// ---------- label conflicts + per-process legibility ----------
+
+const labConf = await page.evaluate(async () => {
+  const { layoutLabelGeometry, layoutLabelConflicts, layoutPockets, labelMinHeight } =
+    await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const container = [{ x: 0, y: 0 }, { x: 260, y: 0 }, { x: 260, y: 200 }, { x: 0, y: 200 }];
+  const mk = (name, x, y, at) => ({ name, outer: rect(60, 20), holes: [], circles: [], x, y, rot: 0, ...(at ? { labelAt: at } : {}) });
+
+  const kinds = (items, opts) => {
+    const pk = layoutPockets(items, 0.5);
+    const placed = layoutLabelGeometry(items, pk, { enabled: true, ...opts });
+    return layoutLabelConflicts(container, pk, placed, { enabled: true, border: 5, ...opts })
+      .map(x => x.kind);
+  };
+
+  // Clean: two well-separated tools, auto-placed labels.
+  const clean = kinds([mk('AAA', 70, 50), mk('BBB', 70, 150)], {});
+  // Label dragged straight onto its own pocket.
+  const onPocket = kinds([mk('AAA', 70, 50, { dx: 0, dy: 0 })], {});
+  // Label dragged off the edge of the container.
+  const offEdge = kinds([mk('AAA', 70, 50, { dx: 0, dy: -60 })], {});
+  // Two labels dragged onto the same spot.
+  const collide = kinds([mk('AAA', 70, 40, { dx: 0, dy: 60 }), mk('BBB', 70, 160, { dx: 0, dy: -60 })], {});
+
+  // Legibility: 6 mm caps are fine on a laser, illegible on a 1/8" router.
+  const onLaser = kinds([mk('AAA', 70, 50)], { process: 'laser', height: 6 });
+  const onRouter = kinds([mk('AAA', 70, 50)], { process: 'router', bitDia: 3.175, height: 6 });
+  const bigOnRouter = kinds([mk('AAA', 70, 50)], { process: 'router', bitDia: 3.175, height: 14 });
+
+  return {
+    clean, onPocket, offEdge, collide, onLaser, onRouter, bigOnRouter,
+    minLaser: labelMinHeight({ process: 'laser' }),
+    minRouter: labelMinHeight({ process: 'router', bitDia: 3.175 }),
+    minPrinted: labelMinHeight({ process: 'printed', nozzle: 0.4 }),
+  };
+});
+check('well-placed labels report no issues',
+  labConf.clean.length === 0, labConf.clean.join(',') || 'none');
+check('a label dragged onto its own pocket is reported',
+  labConf.onPocket.includes('pocket'), labConf.onPocket.join(',') || 'none');
+check('a label pushed past the layout border is reported',
+  labConf.offEdge.includes('border'), labConf.offEdge.join(',') || 'none');
+check('two labels on the same spot are reported once, not twice',
+  labConf.collide.filter(k => k === 'label').length === 1, labConf.collide.join(',') || 'none');
+check('minimum cap height follows the process (laser 2, router 4x bit, printed 3x nozzle)',
+  near(labConf.minLaser, 2, 0.01) && near(labConf.minRouter, 12.7, 0.01) &&
+  near(labConf.minPrinted, 1.2, 0.01),
+  `${labConf.minLaser} / ${labConf.minRouter} / ${labConf.minPrinted}`);
+check('6 mm caps pass on a laser and fail on a 1/8 in router; 14 mm passes both',
+  !labConf.onLaser.includes('tooSmall') && labConf.onRouter.includes('tooSmall') &&
+  !labConf.bigOnRouter.includes('tooSmall'),
+  `laser [${labConf.onLaser}] router [${labConf.onRouter}] big [${labConf.bigOnRouter}]`);
+
 // ---------- puzzle tabs on tile seams ----------
 
 const puzzle = await page.evaluate(async () => {
