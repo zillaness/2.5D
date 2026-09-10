@@ -2487,8 +2487,14 @@ const cutThrough = await page.evaluate(async () => {
   const holed = mk(60, 45, 0, null, [[{ x: 15, y: 10 }, { x: 35, y: 10 }, { x: 35, y: 20 }, { x: 15, y: 20 }]]);
   const pillared = buildLayoutInsert(container, [holed], { ...base, construction: 'through', sheet: 6 });
   const pillarSlab = buildLayoutInsert(container, [holed], base);
-  // 'layered' is not built yet: it must fall back rather than break.
-  const layered = buildLayoutInsert(container, items, { ...base, construction: 'layered', sheet: 6 });
+  // Layered: the through result at top-sheet thickness, plus the container
+  // outline as a plain slab at base thickness under it.
+  const layered = buildLayoutInsert(container, items, { ...base, construction: 'layered', sheet: 6, baseSheet: 3 });
+  const lTop = layered && layered.parts && layered.parts[0];
+  const lBase = layered && layered.parts && layered.parts[1];
+  const deepLayered = buildLayoutInsert(container, [mk(60, 45, 0, 12), mk(150, 45, 90, 2.5)],
+    { ...base, construction: 'layered', sheet: 6, baseSheet: 3 });
+  const pocket = buildLayoutInsert(container, items, base);
 
   return {
     ok: !!cut && !cut.reason,
@@ -2509,6 +2515,26 @@ const cutThrough = await page.evaluate(async () => {
     slabTemplate: pillarSlab?.template?.pockets?.[0]?.pillars?.length,
     layeredThick: layered?.stats?.slab?.thickness,
     layeredWarns: (layered?.stats?.warnings || []).join(' | '),
+    layeredNames: (layered?.parts || []).map(p => p.name).join(','),
+    layeredConstruction: layered?.stats?.construction,
+    layeredTris: layered?.stats?.triangles,
+    partTris: (lTop?.stats?.triangles || 0) + (lBase?.stats?.triangles || 0),
+    layeredZs: layered ? zSet(layered) : [],
+    layeredVol: layered ? volume(layered) : 0,
+    topBad: lTop ? badEdges(lTop) : -1,
+    baseBad: lBase ? badEdges(lBase) : -1,
+    topVol: lTop ? volume(lTop) : 0,
+    baseVol: lBase ? volume(lBase) : 0,
+    wantBase: area(container.outer) * 3,
+    topZs: lTop ? zSet(lTop) : [],
+    baseZs: lBase ? zSet(lBase) : [],
+    layeredTop: layered?.stats?.slab?.top,
+    layeredBase: layered?.stats?.slab?.base,
+    layeredPocketDepth: layered?.stats?.slab?.pocketDepth,
+    deepLayeredWarns: (deepLayered?.stats?.warnings || []).join(' | '),
+    deepLayeredThick: deepLayered?.stats?.slab?.thickness,
+    cutNames: (cut?.parts || []).map(p => p.name).join(','),
+    pocketNames: (pocket?.parts || []).map(p => p.name).join(','),
   };
 });
 
@@ -2535,9 +2561,37 @@ check('support pillars are dropped from a through cut, mesh and template alike',
   cutThrough.pillarBad === 0 && /pillars/.test(cutThrough.pillarWarns) &&
   cutThrough.pillarTemplate === 0 && cutThrough.slabTemplate === 1,
   `${cutThrough.pillarBad} open edges, template pillars ${cutThrough.pillarTemplate} vs ${cutThrough.slabTemplate}`);
-check('the unbuilt layered construction falls back to the pocket insert and says so',
-  cutThrough.layeredThick === 9 && /not built yet/.test(cutThrough.layeredWarns),
-  `${cutThrough.layeredThick} mm — ${cutThrough.layeredWarns}`);
+check('layered returns two named parts, the cut top sheet and the contrast base',
+  cutThrough.layeredNames === 'top,base' && cutThrough.layeredConstruction === 'layered',
+  `${cutThrough.layeredNames} (${cutThrough.layeredConstruction})`);
+check('each layered part is watertight on its own — one shell per cut sheet',
+  cutThrough.topBad === 0 && cutThrough.baseBad === 0,
+  `top ${cutThrough.topBad}, base ${cutThrough.baseBad} open edges`);
+check('the assembled preview is the two parts stacked, nothing fused',
+  cutThrough.layeredTris === cutThrough.partTris &&
+  Math.abs(cutThrough.layeredVol - (cutThrough.topVol + cutThrough.baseVol)) < 1e-3 &&
+  cutThrough.layeredZs.join(',') === '0.000,3.000,9.000',
+  `${cutThrough.layeredTris} vs ${cutThrough.partTris} triangles, z ${cutThrough.layeredZs.join(',')}`);
+check('the layered top sheet is the through cut, sitting on the base',
+  Math.abs(cutThrough.topVol - cutThrough.wantCut) < cutThrough.wantCut * 0.002 &&
+  cutThrough.topZs.join(',') === '3.000,9.000',
+  `${cutThrough.topVol.toFixed(0)} mm³ vs ${cutThrough.wantCut.toFixed(0)}, z ${cutThrough.topZs.join(',')}`);
+check('the layered base is a plain slab at base thickness — no pockets in it',
+  Math.abs(cutThrough.baseVol - cutThrough.wantBase) < cutThrough.wantBase * 0.002 &&
+  cutThrough.baseZs.join(',') === '0.000,3.000',
+  `${cutThrough.baseVol.toFixed(0)} mm³ vs ${cutThrough.wantBase.toFixed(0)}, z ${cutThrough.baseZs.join(',')}`);
+check('the layered stack reports top, base and glued thickness',
+  cutThrough.layeredTop === 6 && cutThrough.layeredBase === 3 &&
+  cutThrough.layeredThick === 9 && cutThrough.layeredPocketDepth === 6,
+  `top ${cutThrough.layeredTop}, base ${cutThrough.layeredBase}, stack ${cutThrough.layeredThick}`);
+check('a tool deeper than the one top sheet warns instead of stacking sheets',
+  /stand proud/.test(cutThrough.deepLayeredWarns) &&
+  /depths are ignored/.test(cutThrough.deepLayeredWarns) &&
+  cutThrough.deepLayeredThick === 9,
+  cutThrough.deepLayeredWarns);
+check('pocket and through builds stay one part',
+  cutThrough.cutNames === 'insert' && cutThrough.pocketNames === 'insert',
+  `through "${cutThrough.cutNames}", pocket "${cutThrough.pocketNames}"`);
 
 // The panel and the 3D preview: the select drives the build, the sheet field
 // appears, the floor field goes dead, and the warning is on screen.
@@ -2622,6 +2676,108 @@ check('leaving the through cut restores the pocket panel',
   cutUI.restored.items === 0 && !cutUI.restored.sheetRow && !cutUI.restored.warn &&
   !cutUI.restored.floorOff,
   JSON.stringify(cutUI.restored));
+
+// The layered build end to end: the panel grows a base-sheet field, the
+// preview shows the glued stack, and the export writes one STL per part.
+const layUI = await page.evaluate(async () => {
+  const $ = id => document.getElementById(id);
+  const st = window.__app.state;
+  st.layout.items = [{
+    name: 'layered tool', outer: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 16 }, { x: 0, y: 16 }],
+    holes: [], circles: [], thickness: 5, depth: 4, rot: 0, x: 110, y: 55,
+  }];
+  const holder = $('holderType');
+  holder.value = 'layout';
+  holder.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 250));
+  const baseFieldAsThrough = (() => {
+    $('layConstruction').value = 'through';
+    $('layConstruction').dispatchEvent(new Event('change'));
+    return !$('laySheetBaseField').hidden;
+  })();
+
+  $('layConstruction').value = 'layered';
+  $('layConstruction').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 400));
+  const asLayered = {
+    baseField: !$('laySheetBaseField').hidden, sheetRow: !$('laySheetRow').hidden,
+    floorOff: $('layFloor').disabled,
+    panel: $('layoutInfo').textContent,
+    warn: $('layConstructionWarn').hidden ? '' : $('layConstructionWarn').textContent,
+    info: $('meshInfo').textContent,
+    construction: st.holderMesh ? st.holderMesh.stats.construction : '',
+    thick: st.holderMesh ? st.holderMesh.stats.slab.thickness : 0,
+    parts: st.holderMesh && st.holderMesh.parts ? st.holderMesh.parts.map(p => p.name).join(',') : '',
+  };
+
+  // A thicker base flows straight into the stack.
+  $('laySheetBase').value = '5';
+  $('laySheetBase').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 400));
+  const thickerBase = {
+    stored: st.layout.sheet.base,
+    thick: st.holderMesh ? st.holderMesh.stats.slab.thickness : 0,
+  };
+  const modal = $('layoutModal');
+  if (modal) modal.hidden = false;
+  return { baseFieldAsThrough, asLayered, thickerBase };
+});
+
+check('the base-sheet field belongs to the layered build alone',
+  !layUI.baseFieldAsThrough && layUI.asLayered.baseField && layUI.asLayered.sheetRow &&
+  layUI.asLayered.floorOff,
+  `through ${layUI.baseFieldAsThrough}, layered ${layUI.asLayered.baseField}`);
+check('the layered preview builds both parts and reports the glued stack',
+  layUI.asLayered.construction === 'layered' && layUI.asLayered.thick === 9 &&
+  layUI.asLayered.parts === 'top,base' && /layered/.test(layUI.asLayered.info) &&
+  /contrast base/.test(layUI.asLayered.info),
+  `${layUI.asLayered.parts} — ${layUI.asLayered.info.split('\n')[0]}`);
+check('the layout panel names both sheets and still warns about the depths',
+  /top sheet on a/.test(layUI.asLayered.panel) && /depths are ignored/.test(layUI.asLayered.warn),
+  `${layUI.asLayered.panel} — ${layUI.asLayered.warn}`);
+check('a thicker base rebuilds the stack',
+  layUI.thickerBase.stored === 5 && layUI.thickerBase.thick === 11,
+  `${layUI.thickerBase.stored} mm base, ${layUI.thickerBase.thick} mm stack`);
+{
+  const names = [];
+  const onDownload = d => names.push(d.suggestedFilename());
+  page.on('download', onDownload);
+  await page.click('#layExportBtn');
+  await new Promise(r => setTimeout(r, 2500));
+  page.off('download', onDownload);
+  check('a layered export writes one STL file per part',
+    names.length === 2 && names.some(n => /-top-2p5d\.stl$/.test(n)) &&
+    names.some(n => /-base-2p5d\.stl$/.test(n)),
+    names.join(', ') || 'no download event');
+}
+const layRestore = await page.evaluate(async () => {
+  const $ = id => document.getElementById(id);
+  const st = window.__app.state;
+  $('laySheetBase').value = '3';
+  $('laySheetBase').dispatchEvent(new Event('change'));
+  $('layConstruction').value = 'pocket';
+  $('layConstruction').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  st.layout.items.length = 0;
+  window.__app.refreshLayoutEditor();
+  const modal = $('layoutModal');
+  if (modal) modal.hidden = true;
+  const holder = $('holderType');
+  holder.value = 'none';
+  holder.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 300));
+  return {
+    construction: st.layout.construction, top: st.layout.sheet.top, base: st.layout.sheet.base,
+    items: st.layout.items.length, sheetRow: !$('laySheetRow').hidden,
+    baseField: !$('laySheetBaseField').hidden, warn: !$('layConstructionWarn').hidden,
+    floorOff: $('layFloor').disabled,
+  };
+});
+check('leaving the layered build restores the pocket panel',
+  layRestore.construction === 'pocket' && layRestore.top === 6 && layRestore.base === 3 &&
+  layRestore.items === 0 && !layRestore.sheetRow && !layRestore.baseField &&
+  !layRestore.warn && !layRestore.floorOff,
+  JSON.stringify(layRestore));
 
 // ---------- Gridfinity bin (holders.js) ----------
 

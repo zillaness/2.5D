@@ -417,7 +417,7 @@ export function layoutConflicts(containerOuter, pockets, border) {
 //
 // container: { outer } in layout mm; items: [{ outer, holes, circles, x, y,
 // rot, depth }]; opts: { clearance, floor, border, defaultDepth,
-// construction, sheet }.
+// construction, sheet, baseSheet }.
 //
 // `construction` picks how the insert is made (PRD Part D):
 //   'pocket'  (default) — the routed / printed slab: a floor under every
@@ -425,25 +425,32 @@ export function layoutConflicts(containerOuter, pockets, border) {
 //   'through'           — the laser-cut sheet: every pocket is a hole clean
 //                         through it, so the thickness IS `sheet` and the
 //                         per-tool depths have nothing to control.
-// Both are single watertight shells out of buildSolid; the through cut uses
-// the pockets as traced holes instead of as recesses, which is the same
-// route the single-tool foam insert already takes at floor 0. No CSG.
+//   'layered'           — that same cut sheet glued onto a plain slab of a
+//                         contrasting colour, `baseSheet` thick. Two parts,
+//                         so a missing tool reads as a bright silhouette.
+// All three are watertight shells out of buildSolid; the cut constructions
+// pass the pockets as traced holes instead of as recesses, which is the same
+// route the single-tool foam insert already takes at floor 0. The layered
+// build is two separate shells stacked in z, never a boolean. No CSG.
 //
-// Returns { positions, indices, stats, template } or null. The layout must
-// be conflict-free (run layoutConflicts first) — conflicts return null with
-// a reason in `reason`.
+// Returns { positions, indices, stats, parts, template } or null. `parts` is
+// always present: one entry for a single-piece build, two ('top' then 'base')
+// for 'layered', each its own watertight mesh, and positions/indices at the
+// top level are every part merged for the preview and for callers that still
+// want one mesh. The layout must be conflict-free (run layoutConflicts
+// first) — conflicts return null with a reason in `reason`.
 export function buildLayoutInsert(container, items, opts = {}) {
   const { clearance = 0.5, floor = 3, border = 5, defaultDepth = 5, labels = [] } = opts;
   if (!container || !container.outer || container.outer.length < 3) return null;
   if (!items || !items.length) return { reason: 'empty' };
   const warnings = [];
-  // 'layered' is accepted by the state but not built yet (its base layer is a
-  // later step), so it falls back to the pocket slab rather than pretending.
   const through = opts.construction === 'through';
-  if (opts.construction === 'layered') {
-    warnings.push('The layered construction is not built yet — showing the pocket insert.');
-  }
+  const layered = opts.construction === 'layered';
+  // Both laser constructions cut the pockets clean through the top sheet;
+  // 'layered' just puts a second, plain sheet under it.
+  const cutThrough = through || layered;
   const sheet = Math.max(0.5, opts.sheet || 6);
+  const baseSheet = Math.max(0.5, opts.baseSheet || 3);
 
   const pockets = layoutPockets(items, clearance);
   const { collisions, escaped } = layoutConflicts(container.outer, pockets, border);
@@ -453,23 +460,30 @@ export function buildLayoutInsert(container, items, opts = {}) {
 
   const depths = items.map(it => Math.max(0.3, it.depth || it.thickness || defaultDepth));
   const maxDepth = Math.max(...depths);
-  // A pocket insert keeps a floor; a through cut has none, and its thickness
-  // is whatever sheet went on the laser bed.
-  const thickness = through ? sheet : Math.max(0.5, floor) + maxDepth;
-  if (through) {
-    warnings.push(`Through cut: per-tool pocket depths are ignored — every pocket is cut clean through the ${sheet.toFixed(1)} mm sheet.`);
+  // A pocket insert keeps a floor; a cut sheet has none, and its thickness is
+  // whatever sheet went on the laser bed.
+  const topT = cutThrough ? sheet : Math.max(0.5, floor) + maxDepth;
+  // Assembled height: the base carries the top sheet, so the stack is as
+  // thick as both together and the top sheet starts at the base's top face.
+  const thickness = layered ? topT + baseSheet : topT;
+  if (cutThrough) {
+    const what = layered ? 'Layered build' : 'Through cut';
+    const which = layered ? 'top sheet' : 'sheet';
+    warnings.push(`${what}: per-tool pocket depths are ignored — every pocket is cut clean through the ${sheet.toFixed(1)} mm ${which}.`);
+    // Open question 1 takes its recommendation: one top sheet, no stacking.
+    // A tool deeper than it still builds, and Sam gets told it will stand proud.
     if (maxDepth > sheet + 1e-6) {
-      warnings.push(`The deepest tool wants ${maxDepth.toFixed(1)} mm but the sheet is ${sheet.toFixed(1)} mm — it will stand proud. Use a thicker sheet, or stack a second one by hand.`);
+      warnings.push(`The deepest tool wants ${maxDepth.toFixed(1)} mm but the ${which} is ${sheet.toFixed(1)} mm — it will stand proud. Use a thicker sheet, or stack a second one by hand.`);
     }
     if (pockets.some(p => p.pillars && p.pillars.length)) {
-      warnings.push('Through cut: support pillars would float free and were dropped.');
+      warnings.push(`${what}: support pillars would float free and were dropped.`);
     }
   } else if (floor < 1) {
     warnings.push(`Thin insert floor (${Math.max(0.5, floor).toFixed(1)} mm).`);
   }
 
   const none = { mode: 'none', size: 0 };
-  const recesses = through ? [] : pockets.map((p, i) => ({
+  const recesses = cutThrough ? [] : pockets.map((p, i) => ({
     islands: [{ outer: p.pocket, holes: p.pillars }],
     depth: depths[i], face: 'top',
   }));
@@ -486,27 +500,59 @@ export function buildLayoutInsert(container, items, opts = {}) {
     const islands = glyphIslands(L.loops);
     if (!islands.length) { warnings.push('A label produced no geometry and was skipped.'); continue; }
     // An engraved label may not eat the part it is cut into: a pocket insert
-    // has only its floor to spare, a through-cut sheet half its thickness.
-    const cap = through ? sheet * 0.5 : Math.max(0.5, floor) * 0.8;
+    // has only its floor to spare, a cut sheet half its thickness.
+    const cap = cutThrough ? sheet * 0.5 : Math.max(0.5, floor) * 0.8;
     const d = Math.min(Math.max(0.05, L.size || 0.6), cap);
     recesses.push({ islands, depth: d, face: L.face === 'bottom' ? 'bottom' : 'top' });
   }
 
-  // The pockets are holes in a through cut and recesses in a pocket insert.
-  const mesh = buildSolid(container.outer, through ? pockets.map(p => p.pocket) : [], [], {
-    thickness, zBase: 0, top: none, bottom: none, recesses,
+  // The pockets are holes in a cut sheet and recesses in a pocket insert.
+  const top = buildSolid(container.outer, cutThrough ? pockets.map(p => p.pocket) : [], [], {
+    thickness: topT, zBase: layered ? baseSheet : 0, top: none, bottom: none, recesses,
   });
-  if (!mesh) return null;
+  if (!top) return null;
+  const named = (name, m) => ({ name, positions: m.positions, indices: m.indices, stats: m.stats });
+  const parts = [named(layered ? 'top' : 'insert', top)];
+  let mesh = top;
+  if (layered) {
+    // The contrast base: the container outline as a plain slab, no pockets.
+    // Its own shell, stacked under the top sheet rather than fused to it, so
+    // each part exports as its own cuttable / printable file.
+    const base = buildSolid(container.outer, [], [], {
+      thickness: baseSheet, zBase: 0, top: none, bottom: none, recesses: [],
+    });
+    if (!base) return null;
+    parts.push(named('base', base));
+    // Merged for the preview and for callers that still want one mesh. Each
+    // part keeps its own closed shell; they simply meet face to face at the
+    // glue line, which is what the two cut sheets do in the drawer.
+    const merged = mergeParts([top, base]);
+    mesh = {
+      ...merged,
+      stats: {
+        ...top.stats,
+        triangles: top.stats.triangles + base.stats.triangles,
+        islands: top.stats.islands + base.stats.islands,
+        sizeZ: thickness, zBase: 0, zTop: thickness,
+        warnings: [...(top.stats.warnings || []), ...(base.stats.warnings || [])],
+      },
+    };
+  }
   mesh.stats.warnings = [...warnings, ...(mesh.stats.warnings || [])];
-  mesh.stats.construction = through ? 'through' : 'pocket';
+  mesh.stats.construction = layered ? 'layered' : through ? 'through' : 'pocket';
   const bb = bboxOf(container.outer);
-  mesh.stats.slab = { w: bb.w, h: bb.h, thickness, pocketDepth: through ? thickness : maxDepth };
+  mesh.stats.slab = {
+    w: bb.w, h: bb.h, thickness,
+    pocketDepth: cutThrough ? topT : maxDepth,
+    top: topT, base: layered ? baseSheet : 0,
+  };
   return {
     ...mesh,
+    parts,
     template: {
-      construction: through ? 'through' : 'pocket',
+      construction: mesh.stats.construction,
       slab: container.outer,
-      pockets: pockets.map(p => ({ pocket: p.pocket, pillars: through ? [] : p.pillars })),
+      pockets: pockets.map(p => ({ pocket: p.pocket, pillars: cutThrough ? [] : p.pillars })),
       origin: { x: bb.minX, y: bb.minY }, w: bb.w, h: bb.h,
     },
   };

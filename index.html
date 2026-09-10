@@ -916,8 +916,7 @@
           <select id="layConstruction" title="How the insert is made. Pocket keeps a floor under every tool (routed or 3D printed). Through cuts every pocket clean through one sheet, the way a laser does. Layered glues that sheet onto a contrasting base, so a missing tool reads as a bright silhouette.">
             <option value="pocket">Pocket — floor under each tool (routed / printed)</option>
             <option value="through">Through cut — one laser-cut sheet</option>
-            <!-- Enabled by Part D plan step 3, which builds the base layer. -->
-            <option value="layered" disabled>Layered — top sheet + contrast base</option>
+            <option value="layered">Layered — top sheet + contrast base</option>
           </select>
         </div>
         <p id="layConstructionWarn" class="warn" hidden></p>
@@ -933,8 +932,12 @@
         </div>
         <div class="field-row" id="laySheetRow" hidden>
           <div class="field">
-            <label for="laySheetTop">Sheet thickness (mm)</label>
+            <label for="laySheetTop">Top sheet (mm)</label>
             <input type="text" inputmode="decimal" id="laySheetTop" value="6">
+          </div>
+          <div class="field" id="laySheetBaseField" hidden>
+            <label for="laySheetBase">Base sheet (mm)</label>
+            <input type="text" inputmode="decimal" id="laySheetBase" value="3">
           </div>
         </div>
         <div class="field">

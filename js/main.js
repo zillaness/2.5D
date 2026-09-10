@@ -1059,9 +1059,13 @@ function rebuildHolder() {
       : s.cells.u ? ` (${s.cells.n}×${s.cells.m} grid, ${s.cells.u}u)`
       : ` (${s.cells.count} socket${s.cells.count === 1 ? '' : 's'})`;
     const cutThrough = isLayout && s.construction === 'through';
+    const layered = isLayout && s.construction === 'layered';
+    // The layered stack measures top sheet plus base, since that is what ends
+    // up glued in the drawer.
     $('meshInfo').textContent =
-      `${label}${cutThrough ? ' (through cut)' : ''}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}${cellNote}\n` +
+      `${label}${cutThrough ? ' (through cut)' : layered ? ' (layered)' : ''}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}${cellNote}\n` +
       (['plate', 'holster'].includes(state.holder.type) ? ''
+        : layered ? `Top sheet ${fmtDimL(s.slab.top)} cut through, on a ${fmtDimL(s.slab.base)} contrast base (two parts)\n`
         : cutThrough ? `Pockets cut through the full ${fmtDimL(s.slab.thickness)} sheet\n`
         : `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n`) +
       `Triangles: ${s.triangles}`;
@@ -1287,7 +1291,7 @@ function buildLayoutNow() {
       labels: layLabelsForMesh(),
       clearance: L.clearance, floor: L.floor, border: L.border,
       defaultDepth: state.regions[0].thickness,
-      construction: L.construction || 'pocket', sheet: L.sheet.top,
+      construction: layConstruction(), sheet: L.sheet.top, baseSheet: L.sheet.base,
     });
   } catch (err) { console.error('layout build failed', err); return null; }
 }
@@ -1335,7 +1339,10 @@ function syncLayoutFields() {
   $('layFloor').value = fmtDim(L.floor);
   $('layBorder').value = fmtDim(layBorderEff());
   $('laySheetTop').value = fmtDim(L.sheet.top);
+  $('laySheetBase').value = fmtDim(L.sheet.base);
   $('laySheetRow').hidden = grid || layConstruction() === 'pocket';
+  // Only the layered build has a second sheet under the cut one.
+  $('laySheetBaseField').hidden = layConstruction() !== 'layered';
   // A cut sheet has no floor and no per-pocket depth: the sheet is the depth.
   $('layFloor').disabled = grid || layConstruction() !== 'pocket';
   $('layBorder').disabled = grid;  // grid bins enforce the bin's minimum wall
@@ -1368,21 +1375,27 @@ function updateLayoutInfo() {
   const grid = L.container.type === 'grid';
   const constr = layConstruction();
   const sheetT = Math.max(0.5, L.sheet.top);
+  const baseT = Math.max(0.5, L.sheet.base);
   $('layoutInfo').textContent = grid
     ? `Gridfinity ${L.container.n}×${L.container.m} (${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm) · ${n} tool${n === 1 ? '' : 's'}`
     : `Container ${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm · ${n} tool${n === 1 ? '' : 's'}` +
       (n ? constr === 'through'
         ? ` · ${fmtDimL(sheetT)} sheet, cut through`
+        : constr === 'layered'
+        ? ` · ${fmtDimL(sheetT)} top sheet on a ${fmtDimL(baseT)} base`
         : ` · insert ${fmtDimL(Math.max(0.5, L.floor) + maxD)} thick` : '');
   // A laser cuts the whole sheet, so the per-tool depths stop meaning
   // anything the moment the construction leaves 'pocket'. Say so where the
   // depths are typed, not only on the 3D preview.
   const cw = $('layConstructionWarn');
   const notes = [];
-  if (constr === 'through') {
-    notes.push('Through cut: per-tool pocket depths are ignored — every pocket is cut clean through the sheet.');
+  if (constr !== 'pocket') {
+    const which = constr === 'layered' ? 'top sheet' : 'sheet';
+    notes.push(`${constr === 'layered' ? 'Layered build' : 'Through cut'}: per-tool pocket depths are ignored — every pocket is cut clean through the ${which}.`);
+    // One top sheet, no stacking (PRD Part D, open question 1): say so rather
+    // than quietly cutting a tool's silhouette too shallow for it.
     if (n && maxD > sheetT + 1e-6) {
-      notes.push(`Deepest tool wants ${fmtDimL(maxD)} but the sheet is ${fmtDimL(sheetT)} — it will stand proud.`);
+      notes.push(`Deepest tool wants ${fmtDimL(maxD)} but the ${which} is ${fmtDimL(sheetT)} — it will stand proud.`);
     }
   }
   cw.hidden = !notes.length;
@@ -1507,6 +1520,12 @@ for (const [id, key, cells] of [['layW', 'w', 'n'], ['layH', 'h', 'm']]) {
 $('laySheetTop').addEventListener('change', e => {
   const mm = parseDim(e.target.value);
   if (mm !== null && mm >= 0.5) state.layout.sheet.top = mm;
+  syncLayoutFields();
+  refreshLayoutEditor();
+});
+$('laySheetBase').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm !== null && mm >= 0.5) state.layout.sheet.base = mm;
   syncLayoutFields();
   refreshLayoutEditor();
 });
@@ -1779,6 +1798,18 @@ $('layExportBtn').addEventListener('click', () => {
   const bed = layBedDims();
   if (bed && res.stats && res.stats.slab && (res.stats.slab.w > bed.w + 1e-6 || res.stats.slab.h > bed.h + 1e-6)) {
     toast(`Heads up: this is ${fmtDim(res.stats.slab.w)} × ${fmtDim(res.stats.slab.h)}, larger than the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed. The STL exports whole — STL tiling isn't available yet; the cut template splits into tiles.`, 7000);
+  }
+  // A layered build is two cut parts, so it writes one file per part: the
+  // through-cut top sheet and the plain contrast base, each watertight on its
+  // own. Every other construction is one part and keeps its old filename.
+  const parts = res.parts && res.parts.length > 1 ? res.parts : null;
+  if (parts) {
+    for (const p of parts) {
+      deliverExport(toBinarySTL(p.positions, p.indices, `${state.fileName} drawer ${p.name}`),
+        `${state.fileName}-${p.name}-2p5d.stl`);
+    }
+    toast(`Exported ${parts.length} files (${parts.map(p => `${p.name}`).join(', ')}) — cut both, then glue the top sheet onto the base.`, 6500);
+    return;
   }
   const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} ${grid ? 'gridfinity' : 'drawer'}`);
   deliverExport(blob, `${state.fileName}-${grid ? 'bin' : 'drawer'}-2p5d.stl`);
