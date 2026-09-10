@@ -807,6 +807,13 @@
           <select id="layToolSel" style="flex:1"></select>
           <button id="layAddBtn" class="btn small">＋ Add</button>
         </div>
+        <!-- One button, two backends: the File System Access picker where the
+             browser has it, the directory input everywhere else. -->
+        <div class="btn-row" style="margin-top:6px">
+          <button id="layOpenFolderBtn" class="btn small" style="flex:1" title="Open a folder of 2.5D trace files. Every readable trace lands in the palette below.">📁 Open folder…</button>
+          <button id="layReopenFolderBtn" class="btn small" hidden title="Open the folder you used last, without picking it again"></button>
+        </div>
+        <input type="file" id="layFolderInput" webkitdirectory directory multiple hidden>
         <!-- Palette: the outline library and, once a folder is opened, the
              traces read out of it. Both groups show at once. -->
         <div id="layPalette" style="margin-top:8px">
@@ -821,6 +828,7 @@
               <span>Folder</span>
               <span id="layPalFolderName" class="hint" style="margin:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"></span>
               <button id="layPalAddAllBtn" class="btn small">Add all</button>
+              <button id="layPalSaveFolderBtn" class="btn small" hidden title="Write this project's JSON into the open folder, so the drawer lives next to its traces">💾 Save here</button>
             </div>
             <p class="hint" id="layPalSkipped" style="margin:2px 0 0" hidden></p>
             <div id="layPalFolderList" style="max-height:200px; overflow:auto"></div>

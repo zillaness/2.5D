@@ -3759,6 +3759,219 @@ check('closing the folder empties its group again, leaving the library alone',
     window.__app.state.layout.items.length === 0),
   'folder group hidden and the layout cleared');
 
+// --- the File System Access folder backend: js/import/folderAccess.js ---
+
+// One synthetic folder, "bench", built twice: as a handle tree for the File
+// System Access walk, and as the flat FileList a directory input hands over
+// for the same folder. Both must read into the very same palette.
+const walkVsInput = await page.evaluate(async () => {
+  const { walkFolder } = await import('/js/import/folderAccess.js');
+  const { tracesFromFiles } = await import('/js/import/traceFolder.js');
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const proj = (name, w, h, thickness) => JSON.stringify({
+    app: '2.5D', version: 1, fileName: name,
+    regions: [{ thickness }],
+    trace: { outer: rect(20, 30, w, h), holes: [], circles: [] },
+  });
+  const bodies = {
+    'bench/anvil.json': proj('anvil', 70, 25, 8),
+    'bench/notes.txt': 'not a trace',
+    'bench/sub/rasp.json': proj('rasp', 30, 30, 4),
+  };
+  // The handle tree. Deliberately out of alphabetical order, so the walk's
+  // own sort is what makes the two lists line up.
+  const fileHandle = (name, body) => ({
+    kind: 'file', name,
+    getFile: async () => new File([body], name, { type: 'application/json' }),
+  });
+  const dirHandle = (name, children) => {
+    const h = {
+      kind: 'directory', name, children,
+      values: async function* () { for (const c of h.children) yield c; },
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      written: [],
+      getFileHandle: async (n) => ({
+        createWritable: async () => ({
+          write: async text => { h.written.push({ name: n, text }); },
+          close: async () => {},
+        }),
+      }),
+    };
+    return h;
+  };
+  const root = dirHandle('bench', [
+    dirHandle('sub', [fileHandle('rasp.json', bodies['bench/sub/rasp.json'])]),
+    fileHandle('notes.txt', bodies['bench/notes.txt']),
+    fileHandle('anvil.json', bodies['bench/anvil.json']),
+  ]);
+  window.__fakeFolder = root;
+
+  // The same folder through a directory input: flat, every file already read.
+  const flat = Object.keys(bodies).map(path => {
+    const f = new File([bodies[path]], path.split('/').pop(), { type: 'application/json' });
+    Object.defineProperty(f, 'webkitRelativePath', { value: path });
+    return f;
+  });
+
+  const pairs = await walkFolder(root);
+  const fromWalk = await tracesFromFiles(pairs);
+  const fromInput = await tracesFromFiles(flat);
+  const shape = r => JSON.stringify({
+    entries: r.entries.map(e => ({ name: e.name, path: e.source.path, t: e.thickness, outer: e.outer })),
+    skipped: r.skipped,
+  });
+  return {
+    walkPaths: pairs.map(p => p.path),
+    inputPaths: flat.map(f => f.webkitRelativePath),
+    same: shape(fromWalk) === shape(fromInput),
+    names: fromWalk.entries.map(e => e.name),
+    skipped: fromWalk.skipped.map(s => s.path + ':' + s.reason),
+  };
+});
+
+check('the handle walk recurses into subfolders and yields the directory input’s own list',
+  walkVsInput.walkPaths.join(',') === 'bench/anvil.json,bench/notes.txt,bench/sub/rasp.json' &&
+  walkVsInput.walkPaths.join(',') === walkVsInput.inputPaths.join(',') && walkVsInput.same &&
+  walkVsInput.names.join(',') === 'anvil,rasp' &&
+  walkVsInput.skipped.join(',') === 'bench/notes.txt:not-json',
+  `${walkVsInput.walkPaths.join(',')} / identical ${walkVsInput.same}`);
+
+// With the API gone, one button still has to open a folder: the input.
+const noApi = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const inp = document.getElementById('layFolderInput');
+  let opened = 0;
+  const realClick = inp.click;
+  inp.click = () => { opened++; };
+  // showDirectoryPicker lives on Window.prototype, so shadow it rather than
+  // deleting it, and drop the shadow afterwards.
+  Object.defineProperty(window, 'showDirectoryPicker', { value: undefined, configurable: true });
+  document.getElementById('layOpenFolderBtn').click();
+  await new Promise(r => setTimeout(r, 150));
+  inp.click = realClick;
+  delete window.showDirectoryPicker;
+  return { opened, isDir: inp.hasAttribute('webkitdirectory'), multiple: inp.multiple };
+});
+
+check('without the File System Access API the same button falls back to the directory input',
+  noApi.opened === 1 && noApi.isDir && noApi.multiple,
+  `input opened ${noApi.opened}, webkitdirectory ${noApi.isDir}`);
+
+// With the API present, the picker feeds the very same palette.
+const picked = await page.evaluate(async () => {
+  Object.defineProperty(window, 'showDirectoryPicker', {
+    value: async () => window.__fakeFolder, configurable: true,
+  });
+  document.getElementById('layOpenFolderBtn').click();
+  await new Promise(r => setTimeout(r, 400));
+  const rows = () => Array.from(document.querySelectorAll('#layPalFolderList .pal-name'))
+    .map(r => r.textContent);
+  return {
+    rows: rows(),
+    label: document.getElementById('layPalFolderName').textContent,
+    shown: !document.getElementById('layPalFolderGroup').hidden,
+    reopen: document.getElementById('layReopenFolderBtn').textContent,
+    reopenShown: !document.getElementById('layReopenFolderBtn').hidden,
+    saveShown: !document.getElementById('layPalSaveFolderBtn').hidden,
+    handled: window.__app.folderBackend.handle === window.__fakeFolder,
+  };
+});
+
+check('the picker backend fills the folder palette and offers to reopen and write back',
+  picked.rows.join(',') === 'anvil,rasp' && picked.label === 'bench' && picked.shown &&
+  picked.handled && picked.reopenShown && picked.reopen === '↻ bench' && picked.saveShown,
+  `${picked.rows.join(',')} / ${picked.label} / reopen "${picked.reopen}" / save ${picked.saveShown}`);
+
+// Reopen re-walks the handle, so a file added since shows up without a pick.
+const reopened = await page.evaluate(async () => {
+  const root = window.__fakeFolder;
+  const body = JSON.stringify({
+    app: '2.5D', version: 1, fileName: 'zed',
+    regions: [{ thickness: 3 }],
+    trace: { outer: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }], holes: [], circles: [] },
+  });
+  root.children[0].children.push({
+    kind: 'file', name: 'zed.json',
+    getFile: async () => new File([body], 'zed.json', { type: 'application/json' }),
+  });
+  document.getElementById('layReopenFolderBtn').click();
+  await new Promise(r => setTimeout(r, 400));
+  return Array.from(document.querySelectorAll('#layPalFolderList .pal-name')).map(r => r.textContent);
+});
+
+check('Reopen re-reads the folder from disk, picking up a trace added since',
+  reopened.join(',') === 'anvil,rasp,zed', reopened.join(','));
+
+// Save project to folder writes project JSON, and nothing else, through the handle.
+const wrote = await page.evaluate(async () => {
+  const root = window.__fakeFolder;
+  root.written.length = 0;
+  window.__app.state.fileName = 'bench drawer';
+  document.getElementById('layPalSaveFolderBtn').click();
+  await new Promise(r => setTimeout(r, 400));
+  const w = root.written[0] || null;
+  let parsed = null;
+  try { parsed = JSON.parse(w.text); } catch { /* reported below */ }
+  return {
+    n: root.written.length,
+    name: w && w.name,
+    app: parsed && parsed.app,
+    hasLayout: !!(parsed && parsed.layout),
+  };
+});
+
+check('Save project to folder writes one project JSON, named for the project, into the folder',
+  wrote.n === 1 && wrote.name === 'bench drawer.json' && wrote.app === '2.5D' && wrote.hasLayout,
+  `${wrote.n} written, "${wrote.name}", app ${wrote.app}`);
+
+// The handle store: a real directory handle structured-clones into IndexedDB;
+// anything that does not is simply not remembered, and says so.
+const store = await page.evaluate(async () => {
+  const fa = await import('/js/import/folderAccess.js');
+  const okPlain = await fa.rememberFolder({ name: 'plain', kind: 'directory' }, 'plain');
+  const back = await fa.recallFolder();
+  const okUnclonable = await fa.rememberFolder({ name: 'fn', values() {} }, 'fn');
+  const still = await fa.recallFolder();
+  await fa.forgetFolder();
+  const gone = await fa.recallFolder();
+  const dbs = typeof indexedDB.databases === 'function'
+    ? (await indexedDB.databases()).map(d => d.name) : ['2p5d.folder.v1'];
+  return {
+    okPlain, okUnclonable,
+    label: back && back.label,
+    handleName: back && back.handle && back.handle.name,
+    stillThere: !!still,
+    gone: gone === null,
+    named: dbs.includes('2p5d.folder.v1'),
+  };
+});
+
+check('the folder handle is remembered in IndexedDB under 2p5d.folder.v1, and forgotten on request',
+  store.okPlain && store.label === 'plain' && store.handleName === 'plain' &&
+  store.named && store.stillThere && store.gone && store.okUnclonable === false,
+  `remembered ${store.okPlain} as "${store.label}", unclonable ${store.okUnclonable}, cleared ${store.gone}`);
+
+// Put the page back: no folder, no handle, the real picker (if any) restored.
+await page.evaluate(async () => {
+  const fa = await import('/js/import/folderAccess.js');
+  await fa.forgetFolder();
+  window.__app.folderBackend.forget();
+  window.__app.palette.setFolder({ entries: [], skipped: [] }, '');
+  window.__app.state.layout.items.length = 0;
+  window.__app.state.fileName = 'object';
+  window.__app.layoutEditor.sel = -1;
+  window.__app.syncLaySelPanel(-1);
+  delete window.showDirectoryPicker;
+  delete window.__fakeFolder;
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {

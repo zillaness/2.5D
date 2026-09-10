@@ -40,6 +40,11 @@ import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
 import { Viewer3D } from './viewer3d.js';
 import { importCad } from './import/cadImport.js';
+import { tracesFromFiles } from './import/traceFolder.js';
+import {
+  hasDirectoryPicker, pickFolder, walkFolder, ensurePermission,
+  rememberFolder, recallFolder, writeProjectFile,
+} from './import/folderAccess.js';
 
 const $ = id => document.getElementById(id);
 
@@ -1767,6 +1772,117 @@ function laySetFolder(read, label) {
     label: label || '',
   };
   refreshLayPalette();
+}
+
+// ---------- the two folder backends ----------
+
+// The File System Access handle for the open folder, when the browser has
+// that API. Null on the directory-input path, which reads once and cannot
+// write, so "Save here" stays hidden there.
+let layFolderHandle = null;
+// What the Reopen button offers: the folder picked this session, or the one
+// IndexedDB remembers from a previous load. { label, handle }.
+let layRemembered = null;
+
+// A folder of hundreds of files is read one at a time, so the header counts
+// up instead of sitting blank. laySetFolder overwrites this when it lands.
+function layFolderProgress(done, total) {
+  $('layPalFolderGroup').hidden = false;
+  $('layPalFolderName').textContent = `reading ${done}/${total}\u2026`;
+}
+
+function syncFolderButtons() {
+  const re = $('layReopenFolderBtn');
+  const label = layRemembered && layRemembered.label;
+  re.hidden = !label;
+  re.textContent = label ? `\u21BB ${label}` : '';
+  re.title = label ? `Re-read \u201c${label}\u201d from disk` : '';
+  // Writing back needs a handle. The directory input has none.
+  $('layPalSaveFolderBtn').hidden = !layFolderHandle;
+}
+
+// Walk a directory handle into the same { path, file } pairs the directory
+// input hands over, read them, and show the result.
+async function layUseHandle(handle, label) {
+  if (!await ensurePermission(handle, 'read')) {
+    toast('That folder was not shared with this page.');
+    return false;
+  }
+  const name = label || handle.name || 'folder';
+  layFolderHandle = handle;
+  layRemembered = { label: name, handle };
+  syncFolderButtons();
+  const pairs = await walkFolder(handle);
+  laySetFolder(await tracesFromFiles(pairs, { onProgress: layFolderProgress }), name);
+  syncFolderButtons();
+  await rememberFolder(handle, name);
+  return true;
+}
+
+$('layOpenFolderBtn').addEventListener('click', async () => {
+  if (hasDirectoryPicker()) {
+    let handle = null;
+    try {
+      handle = await pickFolder();
+    } catch {
+      // The API is there but unusable here (an iframe, a policy). Fall back.
+      $('layFolderInput').click();
+      return;
+    }
+    if (!handle) return; // cancelled: do not pop the input open behind it
+    await layUseHandle(handle);
+    return;
+  }
+  $('layFolderInput').click();
+});
+
+$('layReopenFolderBtn').addEventListener('click', async () => {
+  let handle = layRemembered && layRemembered.handle;
+  let label = layRemembered && layRemembered.label;
+  if (!handle) {
+    const got = await recallFolder();
+    if (got) { handle = got.handle; label = got.label; }
+  }
+  if (!handle) { toast('That folder is gone \u2014 open it again.'); return; }
+  await layUseHandle(handle, label);
+});
+
+// The baseline backend: one shot, every file already read, no handle to keep.
+$('layFolderInput').addEventListener('change', async e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  layFolderHandle = null;
+  const label = (files[0].webkitRelativePath || '').split('/')[0] || 'folder';
+  syncFolderButtons();
+  laySetFolder(await tracesFromFiles(files, { onProgress: layFolderProgress }), label);
+});
+
+// Project JSON is the only thing written into the folder; exports keep going
+// through the browser's own download, which needs no collision policy.
+$('layPalSaveFolderBtn').addEventListener('click', async () => {
+  if (!layFolderHandle) { toast('Open a folder with the picker first.'); return; }
+  if (!await ensurePermission(layFolderHandle, 'readwrite')) {
+    toast('The folder is open for reading only.');
+    return;
+  }
+  try {
+    const written = await writeProjectFile(
+      layFolderHandle, state.fileName || 'drawer', serializeProject(false));
+    toast(`Saved \u201c${written}\u201d into the folder.`);
+  } catch {
+    toast('Could not write into the folder.');
+  }
+});
+
+// A remembered handle survives the reload; the permission does not, so the
+// button only offers the folder and the click re-requests it.
+if (hasDirectoryPicker()) {
+  recallFolder().then(got => {
+    if (!got || layRemembered) return;
+    layRemembered = { label: got.label, handle: got.handle };
+    syncFolderButtons();
+  });
 }
 
 $('layPalAddAllBtn').addEventListener('click', () => {
@@ -3583,6 +3699,12 @@ window.__app = {
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,
   layoutExports: { stl: layoutStlExport, svg: layoutSvgExport },
   palette: { setFolder: laySetFolder, refresh: refreshLayPalette, get folder() { return layFolder; } },
+  folderBackend: {
+    use: layUseHandle, sync: syncFolderButtons,
+    get handle() { return layFolderHandle; },
+    get remembered() { return layRemembered; },
+    forget() { layFolderHandle = null; layRemembered = null; syncFolderButtons(); },
+  },
   serializeProject, loadProject,
   get viewer() { return viewer; },
 };
