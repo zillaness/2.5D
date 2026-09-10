@@ -186,6 +186,24 @@ const bboxOf = pts => {
   return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
 };
 
+// Area centroid of a closed loop — where a label sits when it goes INSIDE the
+// pocket silhouette. The bbox centre is the fallback for a degenerate loop:
+// a sliver still gets a label rather than a NaN.
+const centroidOf = pts => {
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    const f = p.x * q.y - q.x * p.y;
+    a += f; cx += (p.x + q.x) * f; cy += (p.y + q.y) * f;
+  }
+  if (Math.abs(a) < 1e-9) {
+    const bb = bboxOf(pts);
+    return { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
+  }
+  a *= 0.5;
+  return { x: cx / (6 * a), y: cy / (6 * a) };
+};
+
 // ---------- multi-tool layout (drawer / toolbox inserts) ----------
 
 // The text engraved or embossed for a placed item. `label` overrides the
@@ -266,6 +284,12 @@ export const LABEL_DEFAULTS = {
 // items + their pockets (from layoutPockets) -> placed label geometry in
 // layout mm. opts.extra carries free-floating layout labels. Returns [] when
 // labelling is off, so an unlabelled layout costs nothing downstream.
+//
+// opts.inside puts each tool's label INSIDE its own pocket footprint, centred
+// on the pocket's centroid. That is illegal on a pocket insert (two recesses
+// on one face cannot nest) and is the whole point of a layered build, where
+// the label is cut into the flat base and read through the silhouette (PRD
+// Part D). Either way an explicit drag (item.labelAt) still wins.
 export function layoutLabelGeometry(items, pockets, opts = {}) {
   const o = { ...LABEL_DEFAULTS, ...opts };
   const out = [];
@@ -276,16 +300,20 @@ export function layoutLabelGeometry(items, pockets, opts = {}) {
     if (!text || !pocket) return;
     const h = Math.max(0.5, item.labelHeight || o.height);
     const rot = o.follow ? (item.rot || 0) : 0;
-    // Auto-placement: centred under the pocket, clear of it by the margin.
+    // Auto-placement: on the pocket's centroid when the label goes inside it,
+    // otherwise centred under the pocket and clear of it by the margin.
     // Recomputed from the live pocket, so it tracks the tool as it moves and
     // rotates until the user drags it, which stores an explicit offset.
     const bb = bboxOf(pocket);
     const at = item.labelAt
       ? { x: item.x + item.labelAt.dx, y: item.y + item.labelAt.dy }
+      : o.inside
+      ? centroidOf(pocket)
       : { x: (bb.minX + bb.maxX) / 2, y: bb.maxY + o.margin + h / 2 };
     const loops = labelLoops(text, at.x, at.y, h, { rot, font: o.font, mirror: o.mirror });
     if (!loops.length) return;
-    out.push({ src: 'item', i, text, loops, bounds: labelBounds(loops), at, rot, height: h, auto: !item.labelAt });
+    out.push({ src: 'item', i, text, loops, bounds: labelBounds(loops), at, rot, height: h,
+      auto: !item.labelAt, inside: !!o.inside });
   });
   (o.extra || []).forEach((L, j) => {
     const text = String((L && L.text) || '').trim();
@@ -294,8 +322,10 @@ export function layoutLabelGeometry(items, pockets, opts = {}) {
     const loops = labelLoops(text, L.x, L.y, h,
       { rot: L.rot || 0, font: L.font || o.font, mirror: !!L.mirror });
     if (!loops.length) return;
+    // Free-floating layout labels ("TOP DRAWER") name the drawer, not a tool,
+    // so they stay on the sheet you can see whatever the tool labels do.
     out.push({ src: 'layout', i: j, text, loops, bounds: labelBounds(loops),
-      at: { x: L.x, y: L.y }, rot: L.rot || 0, height: h, auto: false });
+      at: { x: L.x, y: L.y }, rot: L.rot || 0, height: h, auto: false, inside: false });
   });
   return out;
 }
@@ -337,7 +367,9 @@ function clipArea(subject, clip, type) {
 // Why a label cannot be cut as placed. Returns [] when every label is fine.
 // Never throws and never mutates: a label that fails is reported and left
 // where the user put it, flagged, rather than being auto-shrunk or truncated
-// (labelling PRD, Q5). Each issue is { at, src, i, kind, detail }.
+// (labelling PRD, Q5). Each issue is { at, src, i, kind, detail }. Kinds:
+// 'tooSmall', 'border', 'pocket', 'label', and — for a label placed inside
+// its own pocket on a layered base — 'covered'.
 export function layoutLabelConflicts(containerOuter, pockets, placed, opts = {}) {
   const o = { ...LABEL_DEFAULTS, ...opts };
   const issues = [];
@@ -360,9 +392,21 @@ export function layoutLabelConflicts(containerOuter, pockets, placed, opts = {})
     for (let j = 0; j < pockets.length; j++) {
       const p = pockets[j] && pockets[j].pocket;
       if (!p) continue;
+      // A base-layer label sits inside its OWN pocket on purpose — that is
+      // the shadow-board label. Any OTHER pocket is still a clash.
+      if (L.inside && L.src === 'item' && j === L.i) continue;
       if (clipArea(boxes[k], p, CL().ClipType.ctIntersection) > 0.05) {
         issues.push({ ...id, kind: 'pocket', detail: `overlaps pocket ${j + 1}` });
         break;
+      }
+    }
+    // What spoils an inside label instead is spilling out of the silhouette:
+    // the top sheet covers whatever is not in the hole.
+    if (L.inside && L.src === 'item') {
+      const own = pockets[L.i] && pockets[L.i].pocket;
+      if (own && clipArea(boxLoop(L.bounds), own, CL().ClipType.ctDifference) > 0.05) {
+        issues.push({ ...id, kind: 'covered',
+          detail: `sticks out of pocket ${L.i + 1} — the top sheet hides it` });
       }
     }
     for (let j = k + 1; j < placed.length; j++) {
@@ -487,6 +531,11 @@ export function buildLayoutInsert(container, items, opts = {}) {
     islands: [{ outer: p.pocket, holes: p.pillars }],
     depth: depths[i], face: 'top',
   }));
+  // Labels marked `layer: 'base'` are engraved into the contrast sheet's top
+  // face, which is flat and has nothing else cut into it — so a label may sit
+  // inside a pocket footprint there and be read through the silhouette. Only
+  // a layered build has that sheet; anywhere else the label stays on top.
+  const baseRecesses = [];
   // A debossed label IS a recess: glyph islands cut into the slab's top face,
   // the same machinery the pockets already use, so no new mesh capability and
   // the watertight-by-construction guarantee carries over unchanged. This is
@@ -499,11 +548,15 @@ export function buildLayoutInsert(container, items, opts = {}) {
     }
     const islands = glyphIslands(L.loops);
     if (!islands.length) { warnings.push('A label produced no geometry and was skipped.'); continue; }
+    const onBase = layered && L.layer === 'base';
     // An engraved label may not eat the part it is cut into: a pocket insert
     // has only its floor to spare, a cut sheet half its thickness.
-    const cap = cutThrough ? sheet * 0.5 : Math.max(0.5, floor) * 0.8;
+    const cap = onBase ? baseSheet * 0.5
+      : cutThrough ? sheet * 0.5
+      : Math.max(0.5, floor) * 0.8;
     const d = Math.min(Math.max(0.05, L.size || 0.6), cap);
-    recesses.push({ islands, depth: d, face: L.face === 'bottom' ? 'bottom' : 'top' });
+    const face = L.face === 'bottom' ? 'bottom' : 'top';
+    (onBase ? baseRecesses : recesses).push({ islands, depth: d, face });
   }
 
   // The pockets are holes in a cut sheet and recesses in a pocket insert.
@@ -519,7 +572,7 @@ export function buildLayoutInsert(container, items, opts = {}) {
     // Its own shell, stacked under the top sheet rather than fused to it, so
     // each part exports as its own cuttable / printable file.
     const base = buildSolid(container.outer, [], [], {
-      thickness: baseSheet, zBase: 0, top: none, bottom: none, recesses: [],
+      thickness: baseSheet, zBase: 0, top: none, bottom: none, recesses: baseRecesses,
     });
     if (!base) return null;
     parts.push(named('base', base));
@@ -546,6 +599,7 @@ export function buildLayoutInsert(container, items, opts = {}) {
     pocketDepth: cutThrough ? topT : maxDepth,
     top: topT, base: layered ? baseSheet : 0,
   };
+  mesh.stats.baseLabels = baseRecesses.length;
   return {
     ...mesh,
     parts,

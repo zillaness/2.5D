@@ -2593,6 +2593,124 @@ check('pocket and through builds stay one part',
   cutThrough.cutNames === 'insert' && cutThrough.pocketNames === 'insert',
   `through "${cutThrough.cutNames}", pocket "${cutThrough.pocketNames}"`);
 
+// Base-layer labels: engraved into the contrast sheet, inside the pocket
+// footprint, which is legal there because the base has nothing else cut in it.
+const baseLabels = await page.evaluate(async () => {
+  const { buildLayoutInsert, layoutLabelGeometry, layoutLabelConflicts, layoutPockets, roundedRect } =
+    await import('/js/holders.js');
+  const badEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+  const inPoly = (pt, poly) => {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[i], b = poly[j];
+      if ((a.y > pt.y) !== (b.y > pt.y) &&
+          pt.x < (b.x - a.x) * (pt.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    return inside;
+  };
+  const bboxOf = pts => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { minX, minY, maxX, maxY };
+  };
+
+  const toolOutline = [{ x: 5, y: 5 }, { x: 45, y: 5 }, { x: 45, y: 25 }, { x: 5, y: 25 }];
+  const mk = (name, x, y) =>
+    ({ name, outer: toolOutline, holes: [], circles: [], x, y, rot: 0, depth: 4, thickness: 4 });
+  const items = [mk('T1', 60, 45), mk('T2', 150, 45)];
+  const container = { outer: roundedRect(5 + 105, 5 + 40, 210, 80, 4) };
+  const pockets = layoutPockets(items, 0.5);
+  const cfg = { enabled: true, height: 6, margin: 2, process: 'laser', border: 5 };
+  const beside = layoutLabelGeometry(items, pockets, cfg);
+  const inside = layoutLabelGeometry(items, pockets, { ...cfg, inside: true });
+  const pb = bboxOf(pockets[0].pocket);
+
+  const asMesh = (placed, layer) => placed.map(L =>
+    ({ loops: L.loops, mode: 'deboss', face: 'top', layer, size: 0.6 }));
+  const opt = { clearance: 0.5, floor: 3, border: 5, defaultDepth: 6,
+    construction: 'layered', sheet: 6, baseSheet: 3 };
+  const bare = buildLayoutInsert(container, items, opt);
+  const onBase = buildLayoutInsert(container, items, { ...opt, labels: asMesh(inside, 'base') });
+  const onTop = buildLayoutInsert(container, items, { ...opt, labels: asMesh(beside, 'top') });
+  // A pocket insert has no base sheet, so a base label falls back to the top.
+  const noBase = buildLayoutInsert(container, items,
+    { clearance: 0.5, floor: 3, border: 5, defaultDepth: 6, labels: asMesh(inside, 'base') });
+
+  const glyphs = inside[0].loops.flat();
+  const huge = layoutLabelGeometry(items, pockets, { ...cfg, height: 30, inside: true });
+
+  return {
+    insideAt: inside[0].at, besideAt: beside[0].at,
+    pocketMid: { x: (pb.minX + pb.maxX) / 2, y: (pb.minY + pb.maxY) / 2 }, pocketBottom: pb.maxY,
+    insideFlag: inside.map(L => L.inside).join(','), besideFlag: beside.map(L => L.inside).join(','),
+    glyphsInPocket: glyphs.every(p => inPoly(p, pockets[0].pocket)),
+    glyphCount: glyphs.length,
+    bareBaseLabels: bare.stats.baseLabels, onBaseLabels: onBase.stats.baseLabels,
+    onTopLabels: onTop.stats.baseLabels, noBaseLabels: noBase.stats.baseLabels,
+    bareTris: bare.parts.map(p => p.stats.triangles),
+    onBaseTris: onBase.parts.map(p => p.stats.triangles),
+    onTopTris: onTop.parts.map(p => p.stats.triangles),
+    noBaseTris: noBase.stats.triangles,
+    noBaseBare: buildLayoutInsert(container, items,
+      { clearance: 0.5, floor: 3, border: 5, defaultDepth: 6 }).stats.triangles,
+    topBad: badEdges(onBase.parts[0]), baseBad: badEdges(onBase.parts[1]),
+    ownPocketIssues: layoutLabelConflicts(container.outer, pockets, inside, { ...cfg, inside: true })
+      .map(x => x.kind).join(','),
+    // Same glyphs, judged by the beside-the-pocket rules: now it IS a clash.
+    besideOnPocket: layoutLabelConflicts(container.outer, pockets,
+      inside.map(L => ({ ...L, inside: false })), cfg).map(x => x.kind).join(','),
+    hugeIssues: layoutLabelConflicts(container.outer, pockets, huge, { ...cfg, inside: true })
+      .map(x => x.kind).join(','),
+  };
+});
+
+check('a base label defaults to its pocket centroid, not beside the pocket',
+  Math.abs(baseLabels.insideAt.x - baseLabels.pocketMid.x) < 0.01 &&
+  Math.abs(baseLabels.insideAt.y - baseLabels.pocketMid.y) < 0.01 &&
+  baseLabels.besideAt.y > baseLabels.pocketBottom &&
+  baseLabels.insideFlag === 'true,true' && baseLabels.besideFlag === 'false,false',
+  `inside ${JSON.stringify(baseLabels.insideAt)} vs centroid ${JSON.stringify(baseLabels.pocketMid)}, beside y ${baseLabels.besideAt.y.toFixed(1)}`);
+check('every glyph of a base label lands inside the pocket footprint',
+  baseLabels.glyphsInPocket && baseLabels.glyphCount > 3,
+  `${baseLabels.glyphCount} points, all inside ${baseLabels.glyphsInPocket}`);
+check('base labels are engraved into the base part, leaving the top sheet alone',
+  baseLabels.onBaseLabels === 2 && baseLabels.bareBaseLabels === 0 &&
+  baseLabels.onBaseTris[1] > baseLabels.bareTris[1] &&
+  baseLabels.onBaseTris[0] === baseLabels.bareTris[0],
+  `base ${baseLabels.bareTris[1]} -> ${baseLabels.onBaseTris[1]} tris, top ${baseLabels.bareTris[0]} -> ${baseLabels.onBaseTris[0]}`);
+check('labels kept on the top sheet cut the top sheet instead',
+  baseLabels.onTopLabels === 0 && baseLabels.onTopTris[0] > baseLabels.bareTris[0] &&
+  baseLabels.onTopTris[1] === baseLabels.bareTris[1],
+  `top ${baseLabels.bareTris[0]} -> ${baseLabels.onTopTris[0]}, base ${baseLabels.onTopTris[1]}`);
+check('a base label on a construction with no base sheet falls back to the top',
+  baseLabels.noBaseLabels === 0 && baseLabels.noBaseTris > baseLabels.noBaseBare,
+  `${baseLabels.noBaseBare} -> ${baseLabels.noBaseTris} triangles`);
+check('a labelled layered build stays watertight in both parts',
+  baseLabels.topBad === 0 && baseLabels.baseBad === 0,
+  `top ${baseLabels.topBad}, base ${baseLabels.baseBad} open edges`);
+check('a label inside its own pocket is intended, not a conflict',
+  baseLabels.ownPocketIssues === '' && /pocket/.test(baseLabels.besideOnPocket),
+  `inside "${baseLabels.ownPocketIssues}", beside-rules "${baseLabels.besideOnPocket}"`);
+check('a base label spilling out of its silhouette is reported as covered',
+  /covered/.test(baseLabels.hugeIssues), baseLabels.hugeIssues);
+
 // The panel and the 3D preview: the select drives the build, the sheet field
 // appears, the floor field goes dead, and the warning is on screen.
 const cutUI = await page.evaluate(async () => {
@@ -2718,9 +2836,30 @@ const layUI = await page.evaluate(async () => {
     stored: st.layout.sheet.base,
     thick: st.holderMesh ? st.holderMesh.stats.slab.thickness : 0,
   };
+  // Tool labels go on the contrast base by default here, and the toggle puts
+  // them back beside the pockets on the top sheet.
+  $('layLabels').checked = true;
+  $('layLabels').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 400));
+  const labelled = {
+    row: !$('layLabelBaseRow').hidden, checked: $('layLabelBase').checked,
+    onBase: st.holderMesh ? st.holderMesh.stats.baseLabels : -1,
+  };
+  $('layLabelBase').checked = false;
+  $('layLabelBase').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 400));
+  const movedUp = {
+    stored: st.layout.labels.onBase,
+    onBase: st.holderMesh ? st.holderMesh.stats.baseLabels : -1,
+  };
+  $('layLabelBase').checked = true;
+  $('layLabelBase').dispatchEvent(new Event('change'));
+  $('layLabels').checked = false;
+  $('layLabels').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 300));
   const modal = $('layoutModal');
   if (modal) modal.hidden = false;
-  return { baseFieldAsThrough, asLayered, thickerBase };
+  return { baseFieldAsThrough, asLayered, thickerBase, labelled, movedUp };
 });
 
 check('the base-sheet field belongs to the layered build alone',
@@ -2738,6 +2877,12 @@ check('the layout panel names both sheets and still warns about the depths',
 check('a thicker base rebuilds the stack',
   layUI.thickerBase.stored === 5 && layUI.thickerBase.thick === 11,
   `${layUI.thickerBase.stored} mm base, ${layUI.thickerBase.thick} mm stack`);
+check('turning labels on engraves them into the base of a layered build',
+  layUI.labelled.row && layUI.labelled.checked && layUI.labelled.onBase === 1,
+  `row ${layUI.labelled.row}, ${layUI.labelled.onBase} label(s) on the base`);
+check('unticking the base-label option moves the labels back to the top sheet',
+  layUI.movedUp.stored === false && layUI.movedUp.onBase === 0,
+  `stored ${layUI.movedUp.stored}, ${layUI.movedUp.onBase} on the base`);
 {
   const names = [];
   const onDownload = d => names.push(d.suggestedFilename());
@@ -2770,13 +2915,15 @@ const layRestore = await page.evaluate(async () => {
     construction: st.layout.construction, top: st.layout.sheet.top, base: st.layout.sheet.base,
     items: st.layout.items.length, sheetRow: !$('laySheetRow').hidden,
     baseField: !$('laySheetBaseField').hidden, warn: !$('layConstructionWarn').hidden,
-    floorOff: $('layFloor').disabled,
+    floorOff: $('layFloor').disabled, labelRow: !$('layLabelBaseRow').hidden,
+    labels: st.layout.labels.enabled, onBase: st.layout.labels.onBase,
   };
 });
 check('leaving the layered build restores the pocket panel',
   layRestore.construction === 'pocket' && layRestore.top === 6 && layRestore.base === 3 &&
   layRestore.items === 0 && !layRestore.sheetRow && !layRestore.baseField &&
-  !layRestore.warn && !layRestore.floorOff,
+  !layRestore.warn && !layRestore.floorOff && !layRestore.labelRow &&
+  layRestore.labels === false && layRestore.onBase === true,
   JSON.stringify(layRestore));
 
 // ---------- Gridfinity bin (holders.js) ----------

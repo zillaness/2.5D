@@ -102,6 +102,9 @@ const state = {
       enabled: false, height: 6, margin: 2, follow: false,
       process: 'laser', bitDia: 3.175, nozzle: 0.4,
       font: 'bold sans-serif', mode: 'deboss', depth: 0.6,
+      // Layered builds only: the tool label is engraved into the contrast
+      // base, inside the pocket footprint, instead of beside the pocket.
+      onBase: true,
       extra: [],   // free-floating layout labels ("TOP DRAWER", "FRONT")
     },
   },
@@ -1343,6 +1346,8 @@ function syncLayoutFields() {
   $('laySheetRow').hidden = grid || layConstruction() === 'pocket';
   // Only the layered build has a second sheet under the cut one.
   $('laySheetBaseField').hidden = layConstruction() !== 'layered';
+  $('layLabelBaseRow').hidden = layConstruction() !== 'layered';
+  $('layLabelBase').checked = (L.labels || {}).onBase !== false;
   // A cut sheet has no floor and no per-pocket depth: the sheet is the depth.
   $('layFloor').disabled = grid || layConstruction() !== 'pocket';
   $('layBorder').disabled = grid;  // grid bins enforce the bin's minimum wall
@@ -1434,20 +1439,33 @@ function updateLayoutInfo() {
 }
 // Placed label geometry for the current layout, in layout mm. Empty when
 // labelling is off, so every downstream path no-ops for an unlabelled layout.
+// Do the tool labels go on the contrast base, inside the pocket footprint?
+// Only a layered build has a base to engrave, and there it is the default
+// (PRD Part D, open question 3): reading the name through the silhouette is
+// the point of the second sheet. `onBase` is additive and optional, so a
+// project saved before it loads with base labels on.
+function layLabelsOnBase() {
+  return layConstruction() === 'layered' && (state.layout.labels || {}).onBase !== false;
+}
 function layPlacedLabels(pockets) {
   const L = state.layout;
   if (!L.labels || !L.labels.enabled) return [];
-  return layoutLabelGeometry(L.items, pockets || layoutPockets(L.items, L.clearance), L.labels);
+  return layoutLabelGeometry(L.items, pockets || layoutPockets(L.items, L.clearance),
+    { ...L.labels, inside: layLabelsOnBase() });
 }
 // Flat list of glyph loops for the exporters.
 function layLabelLoops() {
   return layPlacedLabels().flatMap(L => L.loops);
 }
-// Labels as buildSolid wants them, for a PRINTED insert.
+// Labels as buildSolid wants them. A tool label goes on the base sheet when
+// the construction has one and base labels are on; a drawer-level label
+// ("TOP DRAWER") always stays on the sheet you can see.
 function layLabelsForMesh() {
   const cfg = state.layout.labels || {};
+  const onBase = layLabelsOnBase();
   return layPlacedLabels().map(L => ({
     loops: L.loops, mode: cfg.mode || 'deboss', face: 'top',
+    layer: onBase && L.src === 'item' ? 'base' : 'top',
     size: Math.max(0.05, cfg.depth || 0.6),
   }));
 }
@@ -1529,6 +1547,11 @@ $('laySheetBase').addEventListener('change', e => {
   syncLayoutFields();
   refreshLayoutEditor();
 });
+$('layLabelBase').addEventListener('change', e => {
+  state.layout.labels.onBase = e.target.checked;
+  syncLayoutFields();
+  refreshLayoutEditor();
+});
 $('layConstruction').addEventListener('change', e => {
   const v = e.target.value;
   if (['pocket', 'through', 'layered'].includes(v)) state.layout.construction = v;
@@ -1604,6 +1627,7 @@ function updateLabelInfo() {
   const parts = [];
   if (by('tooSmall').length) parts.push(`${by('tooSmall').length} too small for ${L.process} (needs ${fmtDimL(min)})`);
   if (by('pocket').length) parts.push(`${by('pocket').length} overlapping a pocket`);
+  if (by('covered').length) parts.push(`${by('covered').length} spilling out of the pocket (the top sheet would hide it)`);
   if (by('label').length) parts.push(`${by('label').length} overlapping another label`);
   if (by('border').length) parts.push(`${by('border').length} across the border`);
   el.textContent = `${placed.length} label${placed.length === 1 ? '' : 's'}, but ${parts.join(', ')}.`;
