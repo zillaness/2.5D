@@ -230,18 +230,38 @@ function guessOrientation(corners) {
 
 // ---------- step navigation ----------
 
+// A failed 3D preview (e.g. WebGL unavailable) must never block mesh
+// building or export, so every caller tolerates a null viewer.
+function ensureViewer() {
+  if (viewer) return;
+  try {
+    viewer = new Viewer3D($('stage3'));
+  } catch (err) {
+    console.error('3D preview unavailable', err);
+    toast('3D preview unavailable in this browser — the STL export still works.');
+  }
+}
+
 function goStep(n) {
-  if (n >= 2 && !state.image && !state.rect) return; // rect alone = restored project
+  // Step 4 organises a drawer from the library or a folder, so it is the one
+  // step past the first that needs no photo and no trace.
+  if (n >= 2 && n !== 4 && !state.image && !state.rect) return; // rect alone = restored project
   if (n === 2 && state.rectDirty && state.image) {
     if (!doRectify()) return;
     retrace();
   }
   state.step = n;
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= 4; i++) {
     $('stage' + i).hidden = i !== n;
     $('panel' + i).hidden = i !== n;
     $('stepBtn' + i).classList.toggle('active', i === n);
   }
+  // Step 4 puts the layout editor and the 3D preview side by side, so stage3
+  // stays mounted and shares the stage with stage4.
+  const split = n === 4;
+  $('stage3').hidden = !(n === 3 || split);
+  $('stage3').style.left = split ? '50%' : '';
+  $('stage4').style.right = split ? '50%' : '';
   positionHoleTag();
   if (n === 2) {
     $('lensRow').hidden = state.reference !== 'rect';
@@ -249,24 +269,17 @@ function goStep(n) {
     updateTraceInfo(); // also refreshes the optional underside entry point
     traceEditor.draw();
   }
-  if (n === 3) {
-    // A failed 3D preview (e.g. WebGL unavailable) must never block mesh
-    // building or export.
-    if (!viewer) {
-      try {
-        viewer = new Viewer3D($('stage3'));
-      } catch (err) {
-        console.error('3D preview unavailable', err);
-        toast('3D preview unavailable in this browser — the STL export still works.');
-      }
-    }
+  if (n === 3 || split) {
+    ensureViewer();
     if (viewer) viewer.resize();
-    rebuildMesh(true);
   }
+  if (n === 3) rebuildMesh(true);
+  if (split) openLayoutPanel(); else $('layoutModal').hidden = true;
   updateStepButtons();
 }
 
 function updateStepButtons() {
+  // stepBtn4 is never disabled: organising needs no photo and no trace.
   $('stepBtn2').disabled = !state.image && !state.rect;
   $('stepBtn3').disabled = !(traceEditor.outer && traceEditor.outer.length >= 3);
   $('toTraceBtn').disabled = !state.image && !state.rect;
@@ -1102,7 +1115,7 @@ $('holderType').addEventListener('change', e => {
   $('plateParams').hidden = state.holder.type !== 'plate';
   $('holsterParams').hidden = state.holder.type !== 'holster';
   if (state.holder.type === 'none') { state.holderMesh = null; rebuildMesh(true); }
-  else if (state.holder.type === 'layout') { openLayoutModal(); rebuildHolder(); }
+  else if (state.holder.type === 'layout') { goStep(4); rebuildHolder(); }
   else rebuildHolder();
 });
 for (const [id, key, min] of [
@@ -1341,6 +1354,7 @@ function updateLayoutInfo() {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
+  $('layEmptyHint').hidden = n > 0;
   const grid = L.container.type === 'grid';
   $('layoutInfo').textContent = grid
     ? `Gridfinity ${L.container.n}×${L.container.m} (${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm) · ${n} tool${n === 1 ? '' : 's'}`
@@ -1416,7 +1430,10 @@ function syncLaySelPanel(i) {
   $('laySelNotch').checked = !!it.notch;
   $('laySelNotchDia').value = fmtDim(it.notch ? it.notch.dia : 25);
 }
-function openLayoutModal() {
+// Sync every control in the Step 4 panel and redraw the layout editor.
+// `#layoutModal` is the panel's controls container: its hidden flag now means
+// "the layout editor is not the active step", which is what goStep drives.
+function openLayoutPanel() {
   refreshLaySelects();
   syncLayoutFields();
   syncBedFields();
@@ -1425,11 +1442,6 @@ function openLayoutModal() {
   $('layoutModal').hidden = false;
   refreshLayoutEditor();
 }
-
-$('layoutCloseBtn').addEventListener('click', () => { $('layoutModal').hidden = true; });
-$('layoutModal').addEventListener('pointerdown', e => {
-  if (e.target === $('layoutModal')) $('layoutModal').hidden = true;
-});
 $('layContainerSel').addEventListener('change', e => {
   const v = e.target.value;
   if (v === 'rect') {
@@ -1715,7 +1727,6 @@ $('layPreviewBtn').addEventListener('click', () => {
   state.holder.type = 'layout';
   $('holderType').value = 'layout';
   $('foamParams').hidden = true;
-  $('layoutModal').hidden = true;
   goStep(3);
   rebuildHolder();
 });

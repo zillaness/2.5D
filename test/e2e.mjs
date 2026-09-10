@@ -3280,6 +3280,121 @@ check('scale bar sets scale from two points (300 px = 75 mm -> 4 px/mm) and trac
 check('the bar is captioned with its length in the picture', /75/.test(barFlow.label), barFlow.label);
 
 
+// ---------- Step 4: Organize (shell) ----------
+
+console.log('\nStep 4: Organize');
+
+// A cold load: no photo, no trace, and Step 4 must still open. Uses its own
+// page so "fresh" means fresh; console errors there count like any other.
+const cold = await (async () => {
+  const fresh = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+  fresh.on('console', m => { if (m.type() === 'error') consoleErrors.push('[step4 cold load] ' + m.text()); });
+  fresh.on('pageerror', e => consoleErrors.push('[step4 cold load] ' + String(e)));
+  await fresh.goto(`http://127.0.0.1:${port}/`);
+  await fresh.waitForFunction(() => window.__app && window.ClipperLib);
+  const out = await fresh.evaluate(async () => {
+    const app = window.__app;
+    const before = document.getElementById('stepBtn4').disabled;
+    app.goStep(4);
+    await new Promise(r => setTimeout(r, 250));
+    const LAY_IDS = [
+      'layoutCanvas', 'layoutInfo', 'layoutWarn', 'layContainerSel', 'layRectFields', 'layW', 'layH',
+      'layToolSel', 'layAddBtn', 'laySelPanel', 'laySelName', 'laySelLabel', 'laySelLabelReset',
+      'laySelDepth', 'laySelRot', 'laySelNotch', 'laySelNotchDia', 'layRemoveBtn', 'layClearance',
+      'layFloor', 'layBorder', 'layBed', 'layBedCustom', 'layBedW', 'layBedH', 'layTabs',
+      'layTabFields', 'layTabHead', 'layTabNeck', 'layTabDepth', 'layTabSpacing', 'layTabFit',
+      'layBedInfo', 'layLabels', 'layLabelFields', 'layLabelProcess', 'layLabelHeight',
+      'layLabelBitRow', 'layLabelBit', 'layLabelMargin', 'layLabelDepth', 'layLabelFollow',
+      'layLabelInfo', 'layPreviewBtn', 'layExportBtn', 'layExportSvgBtn', 'layoutModal',
+    ];
+    return {
+      wasDisabled: before,
+      hasImage: !!app.state.image,
+      hasRect: !!app.state.rect,
+      step: app.state.step,
+      panelShown: !document.getElementById('panel4').hidden,
+      stageShown: !document.getElementById('stage4').hidden,
+      preview3d: !document.getElementById('stage3').hidden,
+      tabActive: document.getElementById('stepBtn4').classList.contains('active'),
+      others: [1, 2, 3].filter(i => !document.getElementById('panel' + i).hidden),
+      controlsShown: !document.getElementById('layoutModal').hidden,
+      inPanel4: !!document.querySelector('#panel4 #layoutModal #layAddBtn'),
+      inStage4: !!document.querySelector('#stage4 #layoutCanvas'),
+      missing: LAY_IDS.filter(id => !document.getElementById(id)),
+      overlays: document.querySelectorAll('.modal-overlay').length,
+      overlayGone: !document.querySelector('#layoutModal.modal-overlay') && !document.getElementById('layoutCloseBtn'),
+      hint: document.getElementById('layEmptyHint').textContent.trim(),
+      hintShown: !document.getElementById('layEmptyHint').hidden,
+      holderOptions: [...document.getElementById('holderType').options].map(o => o.value),
+      addedFromLibrary: (() => {
+        // The palette still adds: place a synthetic tool with no trace behind it.
+        app.state.layout.items.push({
+          name: 'cold tool', outer: [{ x: 5, y: 5 }, { x: 55, y: 5 }, { x: 55, y: 35 }, { x: 5, y: 35 }],
+          holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 30, y: 30,
+        });
+        app.refreshLayoutEditor();
+        return { n: app.state.layout.items.length, info: document.getElementById('layoutInfo').textContent };
+      })(),
+    };
+  });
+  await fresh.close();
+  return out;
+})();
+check('Step 4 is enabled unconditionally and opens with no photo and no trace',
+  cold.wasDisabled === false && !cold.hasImage && !cold.hasRect && cold.step === 4 &&
+  cold.panelShown && cold.stageShown && cold.tabActive && cold.others.length === 0,
+  `disabled ${cold.wasDisabled}, step ${cold.step}, panel ${cold.panelShown}, stage ${cold.stageShown}`);
+check('the layout editor and the 3D preview share the stage on Step 4',
+  cold.stageShown && cold.preview3d && cold.controlsShown && cold.inStage4,
+  `layout ${cold.stageShown}, 3D ${cold.preview3d}`);
+check('every layout control id survives the move out of the modal',
+  cold.missing.length === 0 && cold.inPanel4 && cold.inStage4,
+  cold.missing.length ? `missing ${cold.missing.join(', ')}` : 'all layout ids resolve');
+check('the layout modal overlay and its close button are gone',
+  cold.overlayGone && cold.overlays === 2,
+  `${cold.overlays} overlays left (project + CAD), close button ${cold.overlayGone}`);
+check('an empty Step 4 prompts for the library or a folder of traces',
+  cold.hintShown && /Add tools from your library, or open a folder of traces\./.test(cold.hint),
+  cold.hint);
+check('the Step 3 holder select still offers the layout option for old projects',
+  cold.holderOptions.includes('layout'), cold.holderOptions.join('/'));
+check('a drawer can be laid out on Step 4 with nothing traced',
+  cold.addedFromLibrary.n === 1 && /1 tool/.test(cold.addedFromLibrary.info),
+  cold.addedFromLibrary.info);
+
+// Step 3's "Drawer insert" holder type is now a shortcut to Step 4.
+await page.evaluate(() => window.__app.goStep(3));
+const jump = await page.evaluate(async () => {
+  const sel = document.getElementById('holderType');
+  sel.value = 'layout';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 250));
+  return {
+    step: window.__app.state.step,
+    type: window.__app.state.holder.type,
+    panel3Hidden: document.getElementById('panel3').hidden,
+    panel4Shown: !document.getElementById('panel4').hidden,
+    controlsShown: !document.getElementById('layoutModal').hidden,
+  };
+});
+check('the drawer-insert holder type on Step 3 jumps to Step 4 instead of opening a modal',
+  jump.step === 4 && jump.type === 'layout' && jump.panel3Hidden && jump.panel4Shown && jump.controlsShown,
+  `step ${jump.step}, holder ${jump.type}`);
+
+// Leave the page as the blocks after this one expect it: no holder, no items,
+// no bed, back on Step 3.
+await page.evaluate(async () => {
+  window.__app.state.layout.items.length = 0;
+  const bed = document.getElementById('layBed');
+  bed.value = 'none';
+  bed.dispatchEvent(new Event('change'));
+  const sel = document.getElementById('holderType');
+  sel.value = 'none';
+  sel.dispatchEvent(new Event('change'));
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {
