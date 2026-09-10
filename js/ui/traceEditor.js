@@ -14,6 +14,21 @@ import { labelLoops, labelBounds } from '../text.js';
 
 const VERT_R = 4.5;
 const HIT_R = 8;
+
+// Do the two screen-space segments a-b and c-d touch? Used by the crossing
+// box to ask whether an arc's polyline leaves the box through one of its
+// edges. Standard orientation test, with the collinear-touch cases folded in.
+const xprod = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+function segsIntersect(a, b, c, d) {
+  const d1 = xprod(c, d, a), d2 = xprod(c, d, b);
+  const d3 = xprod(a, b, c), d4 = xprod(a, b, d);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+  const onSeg = (p, q, r) => Math.abs(xprod(p, q, r)) < 1e-9 &&
+    r.x >= Math.min(p.x, q.x) - 1e-9 && r.x <= Math.max(p.x, q.x) + 1e-9 &&
+    r.y >= Math.min(p.y, q.y) - 1e-9 && r.y <= Math.max(p.y, q.y) + 1e-9;
+  return onSeg(c, d, a) || onSeg(c, d, b) || onSeg(a, b, c) || onSeg(a, b, d);
+}
 // Extra sections ("regions") reuse the loop-addressing scheme: loop index
 // -1 = outer outline, 0..n-1 = traced holes, REGION_LOOP_BASE + i = the
 // footprint of sections[i] (i >= 1; sections[0] is the base = outer).
@@ -61,7 +76,11 @@ export class TraceEditor {
       screw: { std: 'custom', size: '', fit: 'clearance' },
     };
     this.selection = null;   // {type:'vertex', loop, idx} | {type:'circle', idx} | {type:'holeloop', loop}
-    this.selectedVerts = [];  // multi-selection: [{loop, idx}] for group move/delete/fit
+    this._clearMulti();  // multi-selection: [{loop, idx}] for group move/delete/fit
+    // Holes in the same multi-selection, by index into this.circles. Group
+    // move, Delete, Escape and the count readout cover both lists; the arc and
+    // line tools stay vertex-only.
+    this.selectedCircles = [];
     // Measurement annotations + geometric constraints (refs into the trace;
     // see measure.js). Both live-update as the trace is edited.
     this.measurements = [];
@@ -154,7 +173,7 @@ export class TraceEditor {
     if (!keepRefs) this._refsOp({ op: 'clearLoops' });
     else this._reprojectArcsLive(); // e.g. after a 90° rotate — keep fillets tangent
     this.selection = null;
-    this.selectedVerts = [];
+    this._clearMulti();
     this._notifySelect();
     this.draw();
   }
@@ -234,7 +253,7 @@ export class TraceEditor {
     this._ensureArcIds();
     this._notifyAnnos();
     this.selection = null;
-    this.selectedVerts = [];
+    this._clearMulti();
     this._notifySelect();
     this._changed();
     return true;
@@ -1019,18 +1038,13 @@ export class TraceEditor {
     }
 
     if (vHit) {
-      if (this._vertInMulti(vHit) && this.selectedVerts.length > 1) {
+      if (this._vertInMulti(vHit) && this._multiCount() > 1) {
         // Drag the whole group.
         this.pushUndo();
-        const mm0 = this._screenToMm(sp);
-        this._groupDrag = {
-          start: mm0,
-          orig: this.selectedVerts.map(v => ({ ...this._loop(v.loop)[v.idx] })),
-        };
-        this.dragging = true;
+        this._beginGroupDrag(this._screenToMm(sp));
         return;
       }
-      this.selectedVerts = [];
+      this._clearMulti();
       this.selection = vHit;
       this.pushUndo();
       this.dragging = true;
@@ -1039,7 +1053,13 @@ export class TraceEditor {
       return;
     }
     if (cHit) {
-      this.selectedVerts = [];
+      if (this._circleInMulti(cHit.idx) && this._multiCount() > 1) {
+        // A selected hole is a group handle too.
+        this.pushUndo();
+        this._beginGroupDrag(this._screenToMm(sp));
+        return;
+      }
+      this._clearMulti();
       this.selection = { type: 'circle', idx: cHit.idx };
       this._circleResize = cHit.region === 'resize';
       this.pushUndo();
@@ -1052,7 +1072,7 @@ export class TraceEditor {
     const eHit = this._hitEdge(sp);
     if (eHit) {
       // Insert a vertex on the edge and start dragging it.
-      this.selectedVerts = [];
+      this._clearMulti();
       this.pushUndo();
       const pts = this._loop(eHit.loop);
       const a = pts[eHit.idx], b = pts[(eHit.idx + 1) % pts.length];
@@ -1077,7 +1097,7 @@ export class TraceEditor {
     const mm = this._screenToMm(sp);
     for (let h = 0; h < this.holes.length; h++) {
       if (pointInPolygon(mm, this.holes[h])) {
-        this.selectedVerts = [];
+        this._clearMulti();
         this.selection = { type: 'holeloop', loop: h };
         this.pushUndo();
         this.dragging = true;
@@ -1089,7 +1109,7 @@ export class TraceEditor {
     }
     for (let s = 1; s < this.sections.length; s++) {
       if (this.sections[s].pts && pointInPolygon(mm, this.sections[s].pts)) {
-        this.selectedVerts = [];
+        this._clearMulti();
         this.selection = { type: 'holeloop', loop: REGION_LOOP_BASE + s };
         this.pushUndo();
         this.dragging = true;
@@ -1101,7 +1121,7 @@ export class TraceEditor {
     }
 
     this.selection = null;
-    this.selectedVerts = [];
+    this._clearMulti();
     this.panning = true;
     this._notifySelect();
     this.draw();
@@ -1110,6 +1130,11 @@ export class TraceEditor {
   // ---- multi-selection helpers ----
 
   _vertKey(v) { return `${v.loop}:${v.idx}`; }
+  // Both halves of the multi-selection are emptied together: a gesture or a
+  // single-selection click replaces the whole thing, never half of it.
+  _clearMulti() { this.selectedVerts = []; this.selectedCircles = []; }
+  _multiCount() { return this.selectedVerts.length + this.selectedCircles.length; }
+  _circleInMulti(idx) { return this.selectedCircles.indexOf(idx) >= 0; }
   _vertInMulti(v) { return this.selectedVerts.some(s => s.loop === v.loop && s.idx === v.idx); }
   _toggleVert(v) {
     const i = this.selectedVerts.findIndex(s => s.loop === v.loop && s.idx === v.idx);
@@ -1117,8 +1142,49 @@ export class TraceEditor {
     else this.selectedVerts.push({ loop: v.loop, idx: v.idx });
   }
   clearMultiSelect() {
-    this.selectedVerts = [];
+    this._clearMulti();
     this.draw();
+  }
+
+  // Start a group drag from the current multi-selection: every selected
+  // vertex and hole centre remembers where it was, and moves by the delta.
+  _beginGroupDrag(mm0) {
+    this._groupDrag = {
+      start: mm0,
+      orig: this.selectedVerts.map(v => {
+        const pts = this._loop(v.loop);
+        const pt = pts && pts[v.idx];
+        return pt ? { ...pt } : { x: mm0.x, y: mm0.y };
+      }),
+      origCircles: this.selectedCircles.map(i => {
+        const c = this.circles[i];
+        return c ? { cx: c.cx, cy: c.cy } : { cx: mm0.x, cy: mm0.y };
+      }),
+    };
+    this.dragging = true;
+  }
+
+  // Apply a group drag: everything in the multi-selection moves by the delta
+  // from where the drag started, clamped to the rectified sheet.
+  _moveGroupTo(mm) {
+    const g = this._groupDrag;
+    if (!g) return;
+    const maxX = this.rectified.width / this.pxPerMm;
+    const maxY = this.rectified.height / this.pxPerMm;
+    const dx = mm.x - g.start.x, dy = mm.y - g.start.y;
+    const clamp = (v, hi) => Math.max(0, Math.min(hi, v));
+    this.selectedVerts.forEach((v, i) => {
+      const loop = this._loop(v.loop);
+      const o = g.orig[i];
+      if (!loop || !o) return;
+      loop[v.idx] = { x: clamp(o.x + dx, maxX), y: clamp(o.y + dy, maxY) };
+    });
+    this.selectedCircles.forEach((ci, i) => {
+      const c = this.circles[ci], o = g.origCircles[i];
+      if (!c || !o) return;
+      c.cx = clamp(o.cx + dx, maxX);
+      c.cy = clamp(o.cy + dy, maxY);
+    });
   }
 
   // Commit or cancel an in-progress region draft (mode 'region').
@@ -1191,21 +1257,9 @@ export class TraceEditor {
       this.draw();
       return;
     }
-    // Group move of a vertex multi-selection
+    // Group move of the multi-selection (vertices and holes together)
     if (this.dragging && this._groupDrag) {
-      const mm = this._screenToMm(sp);
-      const maxX = this.rectified.width / this.pxPerMm;
-      const maxY = this.rectified.height / this.pxPerMm;
-      const dx = mm.x - this._groupDrag.start.x, dy = mm.y - this._groupDrag.start.y;
-      this.selectedVerts.forEach((v, i) => {
-        const loop = this._loop(v.loop);
-        if (!loop) return;
-        const o = this._groupDrag.orig[i];
-        loop[v.idx] = {
-          x: Math.max(0, Math.min(maxX, o.x + dx)),
-          y: Math.max(0, Math.min(maxY, o.y + dy)),
-        };
-      });
+      this._moveGroupTo(this._screenToMm(sp));
       this._ghost = this._hasSolvables() ? this._solveGhost(this._dragAnchors()) : null;
       this._changed(true);
       return;
@@ -1272,7 +1326,10 @@ export class TraceEditor {
       this._brush = null;
       this.dragging = false;
       // No stray guard here: a press with no drag is the circle select.
-      this._applySelection({ verts: this._verticesNearPath(path, this.brushRadiusPx) }, 'replace');
+      this._applySelection({
+        verts: this._verticesNearPath(path, this.brushRadiusPx),
+        circles: this._circlesInGesture('brush', { path, r: this.brushRadiusPx }),
+      }, 'replace');
       this.draw();
       return;
     }
@@ -1283,7 +1340,10 @@ export class TraceEditor {
       // Too few points or too small an area is a stray click: change nothing,
       // which leaves a plain click in lasso mode behaving like edit mode.
       if (!this._lassoIsStray(path)) {
-        this._applySelection({ verts: this._verticesInPolygon(path) }, 'replace');
+        this._applySelection({
+          verts: this._verticesInPolygon(path),
+          circles: this._circlesInGesture('lasso', path),
+        }, 'replace');
       }
       this.draw();
       return;
@@ -1418,6 +1478,105 @@ export class TraceEditor {
     return sel;
   }
 
+  // A hole in screen space: centre and bore-rim radius in px.
+  _circleScreen(c) {
+    return {
+      c: this._mmToScreen({ x: c.cx, y: c.cy }),
+      r: (c.d / 2) * this.pxPerMm * this.vp.scale,
+    };
+  }
+
+  // Does the screen segment a-b cross any edge of the screen rect?
+  _segCrossesRect(a, b, r) {
+    const xa = Math.min(r.x0, r.x1), xb = Math.max(r.x0, r.x1);
+    const ya = Math.min(r.y0, r.y1), yb = Math.max(r.y0, r.y1);
+    const cs = [{ x: xa, y: ya }, { x: xb, y: ya }, { x: xb, y: yb }, { x: xa, y: yb }];
+    for (let i = 0; i < 4; i++) {
+      if (segsIntersect(a, b, cs[i], cs[(i + 1) % 4])) return true;
+    }
+    return false;
+  }
+
+  // The crossing box's rule: a fillet arc is all or nothing. If the box holds
+  // any vertex of an arc's run, or that run's polyline leaves the box through
+  // an edge, the whole run joins the list. Only the crossing box expands:
+  // lasso and brush stay literal, since silently grabbing the unseen end of a
+  // fillet would defeat the point of an organic gesture.
+  _expandToArcRuns(list, rect) {
+    if (!this.arcs.length) return list;
+    const out = list.slice();
+    const seen = new Set(out.map(v => this._vertKey(v)));
+    for (const arc of this.arcs) {
+      const pts = this._loop(arc.loop);
+      if (!pts || !pts.length) continue;
+      const n = pts.length;
+      const at = k => (arc.lo + k) % n;
+      let hit = false;
+      for (let k = 0; k < arc.len && !hit; k++) {
+        if (seen.has(`${arc.loop}:${at(k)}`)) hit = true;
+      }
+      for (let k = 0; k + 1 < arc.len && !hit; k++) {
+        if (this._segCrossesRect(
+          this._mmToScreen(pts[at(k)]), this._mmToScreen(pts[at(k + 1)]), rect)) hit = true;
+      }
+      if (!hit) continue;
+      for (let k = 0; k < arc.len; k++) {
+        const key = `${arc.loop}:${at(k)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ loop: arc.loop, idx: at(k) });
+      }
+    }
+    return out;
+  }
+
+  // Which holes a gesture takes, as indices into this.circles.
+  //   'window'   the whole disc has to be inside the box
+  //   'crossing' also takes a disc whose rim the box cuts
+  //   'lasso'    the centre is inside the path
+  //   'brush'    the swept path comes within the radius of the rim or centre
+  // `geom` is the rect for the two box kinds, the path for a lasso, and
+  // { path, r } for the brush.
+  _circlesInGesture(kind, geom) {
+    const out = [];
+    if (!geom) return out;
+    for (let i = 0; i < this.circles.length; i++) {
+      const { c, r } = this._circleScreen(this.circles[i]);
+      let take = false;
+      if (kind === 'window' || kind === 'crossing') {
+        const xa = Math.min(geom.x0, geom.x1), xb = Math.max(geom.x0, geom.x1);
+        const ya = Math.min(geom.y0, geom.y1), yb = Math.max(geom.y0, geom.y1);
+        take = c.x - r >= xa && c.x + r <= xb && c.y - r >= ya && c.y + r <= yb;
+        if (!take && kind === 'crossing') {
+          // The rim meets the box when the box's nearest point to the centre
+          // is inside the disc and its farthest point is outside it.
+          const nx = Math.max(xa, Math.min(xb, c.x)), ny = Math.max(ya, Math.min(yb, c.y));
+          const near = Math.hypot(nx - c.x, ny - c.y);
+          const far = Math.max(
+            Math.hypot(xa - c.x, ya - c.y), Math.hypot(xb - c.x, ya - c.y),
+            Math.hypot(xa - c.x, yb - c.y), Math.hypot(xb - c.x, yb - c.y));
+          take = near <= r && far >= r;
+        }
+      } else if (kind === 'lasso') {
+        take = !this._lassoIsStray(geom) && pointInPolygon(c, geom);
+      } else if (kind === 'brush') {
+        const path = geom.path || [];
+        const rb = geom.r == null ? this.brushRadiusPx : geom.r;
+        for (let k = 0; k < path.length && !take; k++) {
+          const a = path[k], b = path[k + 1] || path[k];
+          const dmin = pointSegDist(c, a, b).d;
+          const dmax = Math.max(Math.hypot(a.x - c.x, a.y - c.y), Math.hypot(b.x - c.x, b.y - c.y));
+          // Distances from the centre along the segment cover [dmin, dmax], so
+          // the gap to the rim circle is 0 when that span straddles r.
+          const toRim = dmin <= r && r <= dmax ? 0 : (r < dmin ? dmin - r : r - dmax);
+          take = dmin <= rb || toRim <= rb;
+        }
+      }
+      if (take) out.push(i);
+    }
+    return out;
+  }
+
   // The ring stands in for the cursor: shown while a brush drag is in flight,
   // and whenever the editor is sitting in the Brush sub-mode so the user can
   // size it against the trace before painting.
@@ -1425,15 +1584,18 @@ export class TraceEditor {
     return this.selectSubMode === 'brush' && (!!this._brush || this.mode === 'select');
   }
 
-  // The only writer of the multi-selection. `result` is { verts }; `mode` is
-  // 'replace' | 'add' | 'subtract'. Dedupes by loop:idx, since a gesture can
-  // reach the same vertex twice.
+  // The only writer of the multi-selection. `result` is { verts, circles };
+  // `mode` is 'replace' | 'add' | 'subtract'. Both halves take the same mode,
+  // and both dedupe, since a gesture can reach the same target twice.
   _applySelection(result, mode = 'replace') {
     const verts = (result && result.verts) || [];
-    let out;
+    const circles = (result && result.circles) || [];
+    let out, cout;
     if (mode === 'subtract') {
       const drop = new Set(verts.map(v => this._vertKey(v)));
       out = this.selectedVerts.filter(v => !drop.has(this._vertKey(v)));
+      const dropC = new Set(circles);
+      cout = this.selectedCircles.filter(i => !dropC.has(i));
     } else {
       const seen = new Set();
       out = [];
@@ -1445,17 +1607,39 @@ export class TraceEditor {
       };
       if (mode === 'add') this.selectedVerts.forEach(push);
       verts.forEach(push);
+      const seenC = new Set();
+      cout = [];
+      const pushC = i => {
+        if (seenC.has(i)) return;
+        seenC.add(i);
+        cout.push(i);
+      };
+      if (mode === 'add') this.selectedCircles.forEach(pushC);
+      circles.forEach(pushC);
     }
     this.selectedVerts = out;
+    this.selectedCircles = cout;
     this.selection = null;
     this._notifySelect();
   }
 
-  // Shift+drag box release: today's behaviour, now routed through the
-  // resolver and the single writer.
-  _applyMarquee(m) {
+  // Right-to-left (the release is left of the press) is the crossing box.
+  // Vertical direction is ignored.
+  _rectIsCrossing(m) { return m.x1 < m.x0; }
+
+  // Box release. The direction is read here, on release rather than during the
+  // drag, so a user who overshoots and comes back gets the direction they
+  // ended with. Left to right is a window: only what is enclosed. Right to
+  // left is a crossing box, which also takes the whole run of any fillet arc
+  // it touches and any hole whose rim it cuts. Plain edges and managed
+  // straight lines are never taken by touch.
+  _applyMarquee(m, mode = 'replace') {
     if (this._rectIsStray(m)) return; // ignore a stray click
-    this._applySelection({ verts: this._verticesInRect(m) }, 'replace');
+    const crossing = this._rectIsCrossing(m);
+    let verts = this._verticesInRect(m);
+    if (crossing) verts = this._expandToArcRuns(verts, m);
+    const circles = this._circlesInGesture(crossing ? 'crossing' : 'window', m);
+    this._applySelection({ verts, circles }, mode);
   }
 
   // ---- edit ops ----
@@ -1491,15 +1675,16 @@ export class TraceEditor {
   }
 
   deleteSelected() {
-    if (this.selectedVerts.length) { this._deleteVertGroup(); return; }
+    if (this._multiCount()) { this._deleteVertGroup(); return; }
     if (!this.selection) return;
     if (this.selection.type === 'vertex') this._deleteVertex(this.selection);
     else if (this.selection.type === 'circle') this._deleteCircle(this.selection.idx);
     else if (this.selection.type === 'holeloop') this.deleteSelectedHole();
   }
 
-  // Delete every vertex in the multi-selection, per loop, keeping each loop a
-  // valid polygon (>= 3 points) and never emptying the outer outline.
+  // Delete everything in the multi-selection: every vertex, per loop, keeping
+  // each loop a valid polygon (>= 3 points) and never emptying the outer
+  // outline, then every selected hole.
   _deleteVertGroup() {
     this.pushUndo();
     const byLoop = new Map();
@@ -1538,7 +1723,13 @@ export class TraceEditor {
       this._refsOp({ op: 'deleteLoop', loop: REGION_LOOP_BASE + s });
       this.sections.splice(s, 1);
     }
-    this.selectedVerts = [];
+    // Phase 3: selected holes, also from the back so indices stay valid.
+    for (const ci of [...this.selectedCircles].sort((a, b) => b - a)) {
+      if (!this.circles[ci]) continue;
+      this._refsOp({ op: 'deleteCircle', idx: ci });
+      this.circles.splice(ci, 1);
+    }
+    this._clearMulti();
     this.selection = null;
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
     this._notifySelect();
@@ -1655,7 +1846,7 @@ export class TraceEditor {
   hasMultiRun(minCount = 3) { return !!this._selectionSpan(minCount); }
 
   _reselectRun(loop, lo, newLen) {
-    this.selectedVerts = [];
+    this._clearMulti();
     for (let i = 0; i < newLen; i++) this.selectedVerts.push({ loop, idx: lo + i });
   }
 
@@ -1850,7 +2041,7 @@ export class TraceEditor {
     }
     if (!count) { this.undoStack.pop(); return 0; }
     this.selection = null;
-    this.selectedVerts = [];
+    this._clearMulti();
     if (this.cb.onSectionsChanged) this.cb.onSectionsChanged();
     this._notifyAnnos();
     this._notifySelect();
@@ -2176,7 +2367,8 @@ export class TraceEditor {
       const c = this.circles[i];
       const ctr = this._mmToScreen({ x: c.cx, y: c.cy });
       const r = (c.d / 2) * this.pxPerMm * s;
-      const sel = this.selection && this.selection.type === 'circle' && this.selection.idx === i;
+      const sel = (this.selection && this.selection.type === 'circle' && this.selection.idx === i) ||
+        this._circleInMulti(i);
       const col = sel ? '#ffd257' : '#78aaff';
       ctx.beginPath();
       ctx.arc(ctr.x, ctr.y, r, 0, Math.PI * 2);
@@ -2251,16 +2443,19 @@ export class TraceEditor {
       ctx.fill();
     }
 
-    // Marquee selection rectangle
+    // Marquee selection rectangle. The crossing box (dragged right to left)
+    // is tinted green with a longer dash so its meaning is legible before
+    // release; the geometry drawn is the same rectangle either way.
     if (this._marquee) {
       const m = this._marquee;
+      const cross = this._rectIsCrossing(m);
       const x = Math.min(m.x0, m.x1), y = Math.min(m.y0, m.y1);
       const w = Math.abs(m.x1 - m.x0), h = Math.abs(m.y1 - m.y0);
-      ctx.fillStyle = 'rgba(83, 169, 255, 0.12)';
+      ctx.fillStyle = cross ? 'rgba(55, 214, 122, 0.10)' : 'rgba(83, 169, 255, 0.12)';
       ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = '#53a9ff';
+      ctx.strokeStyle = cross ? '#37d67a' : '#53a9ff';
       ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
+      ctx.setLineDash(cross ? [10, 5] : [4, 3]);
       ctx.strokeRect(x, y, w, h);
       ctx.setLineDash([]);
     }

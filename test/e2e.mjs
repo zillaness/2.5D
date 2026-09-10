@@ -1118,6 +1118,156 @@ check('the swept segment does not reach vertices off the line',
 check('a brush release replaces the selection and ends the gesture',
   selBrush.gestureSel === '-1:0,-1:1' && selBrush.brushCleared, selBrush.gestureSel);
 
+const selBox = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+
+  // Direction is the sign of x1 - x0 at release; vertical direction is ignored.
+  const a = S(15, 15), b = S(65, 40);
+  const dirWindow = te._rectIsCrossing({ x0: a.x, y0: b.y, x1: b.x, y1: a.y });
+  const dirCross = te._rectIsCrossing({ x0: b.x, y0: a.y, x1: a.x, y1: b.y });
+
+  // A live first-class fillet arc, which is what a crossing box expands to:
+  // an L-corner with a blunt 3-point run, rounded by makeTangentSelection.
+  te.setTrace([
+    { x: 10, y: 60 }, { x: 40, y: 60 },
+    { x: 54, y: 60 }, { x: 60, y: 56 }, { x: 60, y: 50 },
+    { x: 60, y: 30 }, { x: 60, y: 10 },
+    { x: 10, y: 10 },
+  ], []);
+  te.selectedVerts = [2, 3, 4].map(idx => ({ loop: -1, idx }));
+  const made = te.makeTangentSelection();
+  const run = key(te.selectedVerts);          // the arc's whole run, re-seeded for us
+  const runIdx = te.selectedVerts.map(v => v.idx);
+  const runLen = runIdx.length;
+  const arcCount = te.arcs.length;
+
+  // A 5 px box over one vertex in the middle of the run.
+  const mp = te._mmToScreen(te.outer[runIdx[Math.floor(runLen / 2)]]);
+  te._applyMarquee({ x0: mp.x - 2.5, y0: mp.y - 2.5, x1: mp.x + 2.5, y1: mp.y + 2.5 });
+  const boxWindow = key(te.selectedVerts);
+  const boxWindowLen = te.selectedVerts.length;
+  te._applyMarquee({ x0: mp.x + 2.5, y0: mp.y - 2.5, x1: mp.x - 2.5, y1: mp.y + 2.5 });
+  const boxCross = key(te.selectedVerts);
+
+  // The other half of the crossing rule, isolated by passing an empty vertex
+  // list: a box that holds no vertex of the run, but that the run's polyline
+  // passes through, still takes the whole run.
+  let gapD = -1, gapMid = { x: 0, y: 0 };
+  for (let k = 0; k + 1 < runLen; k++) {
+    const p = te._mmToScreen(te.outer[runIdx[k]]);
+    const q = te._mmToScreen(te.outer[runIdx[k + 1]]);
+    const d = Math.hypot(q.x - p.x, q.y - p.y);
+    if (d > gapD) { gapD = d; gapMid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }; }
+  }
+  const hw = Math.min(3, gapD / 3);
+  const crossedRun = key(te._expandToArcRuns([], {
+    x0: gapMid.x - hw, y0: gapMid.y - hw, x1: gapMid.x + hw, y1: gapMid.y + hw }));
+  const missedRun = key(te._expandToArcRuns([], {
+    x0: S(5, 5).x, y0: S(5, 5).y, x1: S(8, 8).x, y1: S(8, 8).y }));
+
+  // A crossing band over a plain edge of the square expands nothing.
+  te.setTrace(square(), []);
+  const top = S(0, 0).y - 500, bot = S(0, 100).y + 500;
+  const edgeX = S(40, 0).x;
+  te.selectedVerts = [{ loop: -1, idx: 2 }];
+  te._applyMarquee({ x0: edgeX + 1, y0: top, x1: edgeX - 1, y1: bot });
+  const plainEdge = key(te.selectedVerts);
+  const plainArcs = te.arcs.length;
+
+  // Holes. The bore rim of a 10 mm hole at (40, 40) sits 5 mm from its centre.
+  te.setCircles([hole(40, 40, 10)]);
+  const rimPx = te._circleScreen(te.circles[0]).r;
+  const c0 = S(30, 30), c1 = S(40, 40);
+  te._applyMarquee({ x0: c0.x, y0: c0.y, x1: c1.x, y1: c1.y });
+  const clipWindow = te.selectedCircles.join(',');
+  te._applyMarquee({ x0: c1.x, y0: c0.y, x1: c0.x, y1: c1.y });
+  const clipCross = te.selectedCircles.join(',');
+  const w0 = S(30, 30), w1 = S(50, 50);
+  te._applyMarquee({ x0: w0.x, y0: w0.y, x1: w1.x, y1: w1.y });
+  const wholeWindow = te.selectedCircles.join(',');
+
+  // Lasso takes a hole by its centre; the brush takes one by its rim.
+  const lassoIn = te._circlesInGesture('lasso', [S(30, 30), S(50, 30), S(50, 50), S(30, 50)]).join(',');
+  const lassoOut = te._circlesInGesture('lasso', [S(5, 5), S(15, 5), S(15, 15), S(5, 15)]).join(',');
+  const brushRim = te._circlesInGesture('brush', { path: [S(45, 40)], r: 3 }).join(',');
+  const brushFar = te._circlesInGesture('brush', { path: [S(20, 20)], r: 3 }).join(',');
+
+  // Group move carries a selected hole's centre along with the vertices.
+  te._clearMulti();
+  te.selectedVerts = [{ loop: -1, idx: 0 }, { loop: -1, idx: 1 }];
+  te.selectedCircles = [0];
+  te._beginGroupDrag({ x: 0, y: 0 });
+  te._moveGroupTo({ x: 5, y: 5 });
+  te._groupDrag = null;
+  te.dragging = false;
+  const movedVert = { ...te.outer[0] };
+  const movedHole = { cx: te.circles[0].cx, cy: te.circles[0].cy };
+
+  // Delete takes the selected holes too.
+  te.setTrace(square(), []);
+  te.setCircles([hole(40, 40, 10), hole(70, 70, 6)]);
+  te._clearMulti();
+  te.selectedCircles = [0];
+  te.deleteSelected();
+  const leftCount = te.circles.length;
+  const leftCx = te.circles.length ? te.circles[0].cx : null;
+  const clearedAfterDelete = te._multiCount();
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return {
+    dirWindow, dirCross, madeOk: !!made.ok, run, runLen, arcCount,
+    boxWindow, boxWindowLen, boxCross, crossedRun, missedRun, gapD,
+    plainEdge, plainArcs, rimPx,
+    clipWindow, clipCross, wholeWindow,
+    lassoIn, lassoOut, brushRim, brushFar,
+    movedVert, movedHole, leftCount, leftCx, clearedAfterDelete,
+  };
+});
+
+console.log('\nPart A step 4 — directional box, arc runs, holes in the selection');
+check('the box direction is the sign of x1 - x0, read on release',
+  selBox.dirWindow === false && selBox.dirCross === true,
+  `window=${selBox.dirWindow}, crossing=${selBox.dirCross}`);
+check('a right-to-left box over one vertex of a fillet run takes the whole run',
+  selBox.madeOk && selBox.arcCount === 1 && selBox.boxCross === selBox.run,
+  `${selBox.runLen}-vertex run, got ${selBox.boxCross}`);
+check('the same box left-to-right takes only what it encloses',
+  selBox.boxWindowLen > 0 && selBox.boxWindowLen < selBox.runLen &&
+  selBox.boxWindow !== selBox.run,
+  `${selBox.boxWindowLen} of ${selBox.runLen}`);
+check('a crossing box crossed only by the run polyline still takes the whole run',
+  selBox.crossedRun === selBox.run && selBox.missedRun === '',
+  `crossed ${selBox.crossedRun} (widest gap ${selBox.gapD.toFixed(1)} px), missed "${selBox.missedRun}"`);
+check('a crossing box touching only a plain edge selects nothing',
+  selBox.plainEdge === '' && selBox.plainArcs === 0, `got "${selBox.plainEdge}"`);
+check('a window box clipping a hole rim skips it, a crossing box takes it',
+  selBox.rimPx > 5 && selBox.clipWindow === '' && selBox.clipCross === '0' && selBox.wholeWindow === '0',
+  `rim ${selBox.rimPx.toFixed(1)} px, window "${selBox.clipWindow}", crossing "${selBox.clipCross}", enclosed "${selBox.wholeWindow}"`);
+check('lasso takes a hole by its centre, the brush by its rim',
+  selBox.lassoIn === '0' && selBox.lassoOut === '' &&
+  selBox.brushRim === '0' && selBox.brushFar === '',
+  `lasso "${selBox.lassoIn}"/"${selBox.lassoOut}", brush "${selBox.brushRim}"/"${selBox.brushFar}"`);
+check('group move shifts a selected hole centre with the vertices',
+  Math.abs(selBox.movedVert.x - 25) < 1e-6 && Math.abs(selBox.movedVert.y - 25) < 1e-6 &&
+  Math.abs(selBox.movedHole.cx - 45) < 1e-6 && Math.abs(selBox.movedHole.cy - 45) < 1e-6,
+  `vertex ${selBox.movedVert.x},${selBox.movedVert.y}; hole ${selBox.movedHole.cx},${selBox.movedHole.cy}`);
+check('Delete removes the selected holes and clears the multi-selection',
+  selBox.leftCount === 1 && selBox.leftCx === 70 && selBox.clearedAfterDelete === 0,
+  `${selBox.leftCount} left, first at ${selBox.leftCx}`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
