@@ -204,15 +204,25 @@ export class TraceEditor {
     if (mode !== 'label') this.selLabel = -1;
     this._hoverSnap = null;
     this.mode = mode;
-    this.canvas.style.cursor = mode === 'pan' ? 'grab'
-      : (mode === 'region' || mode === 'measure' || mode === 'constrain' || mode === 'label')
-        ? 'crosshair' : 'default';
+    this._syncCursor();
     if (this.cb.onPicksChanged) this.cb.onPicksChanged();
     this.draw();
   }
 
+  // The cursor for the current mode, and inside the Select tool for the
+  // current sub-mode: the brush ring stands in for the pointer, so Brush
+  // hides the system cursor and Box and Lasso get a crosshair.
+  _syncCursor() {
+    const m = this.mode;
+    this.canvas.style.cursor = m === 'pan' ? 'grab'
+      : m === 'select' ? (this.selectSubMode === 'brush' ? 'none' : 'crosshair')
+      : (m === 'region' || m === 'measure' || m === 'constrain' || m === 'label')
+        ? 'crosshair' : 'default';
+  }
+
   setSelectSubMode(sub) {
     this.selectSubMode = sub;
+    this._syncCursor();
     this.draw();
   }
 
@@ -1017,6 +1027,14 @@ export class TraceEditor {
       this.dragging = true;
       this._notifySelect();
       this._changed();
+      return;
+    }
+
+    // The Select tool: a plain left drag anywhere is a select gesture in the
+    // current sub-mode, so no Shift is needed. Ctrl/Cmd+click still toggles a
+    // single vertex and the right button still pans, both further down.
+    if (this.mode === 'select' && e.button === 0 && !(e.ctrlKey || e.metaKey)) {
+      this._beginSelectGesture(sp, this._gestureSelectMode(e));
       return;
     }
 

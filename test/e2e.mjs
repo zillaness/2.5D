@@ -1390,6 +1390,139 @@ check('Alt+click deletes a vertex in Edit mode and is skipped in Select mode',
   selMod.editDeleted === 3 && selMod.selectKept === 4,
   `edit ${selMod.editDeleted} pts, select ${selMod.selectKept} pts`);
 
+const selUI = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const sub = s => document.querySelector(`#selSubRow [data-selsub="${s}"]`);
+  const $$ = id => document.getElementById(id);
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+
+  // Drive the real pointer path. Capture is a no-op here because the events
+  // are hand-built and carry no live pointer.
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, o) => Object.assign({
+    pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false,
+  }, o || {});
+  const drag = (pts, o) => {
+    te._down(ev(pts[0], o));
+    for (let i = 1; i < pts.length; i++) te._move(ev(pts[i], o));
+    te._up();
+  };
+  // A triangle over the top of the square: corners 0 and 1 only.
+  const topTri = [S(5, 5), S(75, 5), S(40, 45)];
+
+  // The toolbar gains one button, and it is the only way into the mode.
+  const btn = document.querySelector('.tool-btn[data-tool="select"]');
+  btn.click();
+  const selMode = te.mode;
+  const selActive = btn.classList.contains('active');
+  const boxCursor = cv.style.cursor;
+
+  // Sub-mode control: Brush hides the cursor (the ring is the cursor) and is
+  // the only sub-mode that shows the radius slider.
+  sub('brush').click();
+  const brushSub = te.selectSubMode;
+  const brushCursor = cv.style.cursor;
+  const brushMarked = sub('brush').classList.contains('primary') &&
+    !sub('box').classList.contains('primary');
+  const radiusShown = !$$('brushRadiusField').hidden;
+  const slider = $$('brushRadius');
+  slider.value = '30';
+  slider.dispatchEvent(new Event('input', { bubbles: true }));
+  const radiusSet = te.brushRadiusPx;
+  const radiusLabel = $$('brushRadiusVal').textContent;
+
+  sub('lasso').click();
+  const lassoSub = te.selectSubMode;
+  const lassoCursor = cv.style.cursor;
+  const radiusHidden = $$('brushRadiusField').hidden;
+
+  // A plain drag in the Select tool selects, through the current sub-mode.
+  drag(topTri);
+  const plainDrag = key(te.selectedVerts);
+  const countText = $$('selCount').textContent;
+  const notPanning = te.panning === false;
+
+  // Shift still adds and Alt still subtracts once the tool is active.
+  drag([S(15, 55), S(65, 55), S(65, 75), S(15, 75)], { shiftKey: true });
+  const shiftAdded = key(te.selectedVerts);
+  drag(topTri, { altKey: true });
+  const altRemoved = key(te.selectedVerts);
+
+  // Back in Edit mode: a plain drag on empty space still pans and clears,
+  // and Shift+drag selects with whatever sub-mode is current.
+  document.querySelector('.tool-btn[data-tool="edit"]').click();
+  const editMode = te.mode;
+  te._clearMulti();
+  te._down(ev(S(5, 5)));
+  const editPans = te.panning === true;
+  const editPlainSel = te.selectedVerts.length;
+  te._up();
+  drag(topTri, { shiftKey: true });
+  const editShiftSel = key(te.selectedVerts);
+
+  const hint = $$('selHint').textContent.replace(/\s+/g, ' ');
+
+  // Leave the page as the blocks after this one expect to find it.
+  sub('box').click();
+  slider.value = '12';
+  slider.dispatchEvent(new Event('input', { bubbles: true }));
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  te._selectGestureMode = 'replace';
+  te._notifySelect();
+  const restored = `${te.mode}/${te.selectSubMode}/${te.brushRadiusPx}/${$$('selCount').textContent}`;
+  return {
+    selMode, selActive, boxCursor, brushSub, brushCursor, brushMarked,
+    radiusShown, radiusSet, radiusLabel, lassoSub, lassoCursor, radiusHidden,
+    plainDrag, countText, notPanning, shiftAdded, altRemoved,
+    editMode, editPans, editPlainSel, editShiftSel, hint, restored,
+  };
+});
+
+console.log('\nPart A step 6 — the Select tool, its sub-modes and the panel');
+check('the toolbar Select button puts the editor in select mode',
+  selUI.selMode === 'select' && selUI.selActive, `${selUI.selMode}, active=${selUI.selActive}`);
+check('Box and Lasso use a crosshair, Brush hides the cursor for its ring',
+  selUI.boxCursor === 'crosshair' && selUI.brushCursor === 'none' && selUI.lassoCursor === 'crosshair',
+  `box "${selUI.boxCursor}", brush "${selUI.brushCursor}", lasso "${selUI.lassoCursor}"`);
+check('the sub-mode buttons switch the editor sub-mode and mark the active one',
+  selUI.brushSub === 'brush' && selUI.lassoSub === 'lasso' && selUI.brushMarked,
+  `${selUI.brushSub} then ${selUI.lassoSub}, marked=${selUI.brushMarked}`);
+check('the radius slider is shown only for Brush and sets the brush radius',
+  selUI.radiusShown && selUI.radiusHidden && selUI.radiusSet === 30 && selUI.radiusLabel === '30 px',
+  `shown=${selUI.radiusShown}, hidden after=${selUI.radiusHidden}, r=${selUI.radiusSet}, label "${selUI.radiusLabel}"`);
+check('a plain drag in the Select tool resolves through the current sub-mode',
+  selUI.plainDrag === '-1:0,-1:1' && selUI.notPanning, `${selUI.plainDrag || '(none)'}, panning=${!selUI.notPanning}`);
+check('the selection count reads out both points and holes',
+  selUI.countText === '2 points', `"${selUI.countText}"`);
+check('Shift adds and Alt subtracts through the Select tool pointer path',
+  selUI.shiftAdded === '-1:0,-1:1,-1:2,-1:3' && selUI.altRemoved === '-1:2,-1:3',
+  `${selUI.shiftAdded} then ${selUI.altRemoved}`);
+check('a plain drag on empty space still pans in Edit mode',
+  selUI.editMode === 'edit' && selUI.editPans && selUI.editPlainSel === 0,
+  `mode ${selUI.editMode}, panning=${selUI.editPans}, ${selUI.editPlainSel} selected`);
+check('Shift+drag in Edit mode selects with the current sub-mode',
+  selUI.editShiftSel === '-1:0,-1:1', selUI.editShiftSel || '(none)');
+check('the Selection panel hint names the three shapes and the modifiers',
+  /Box:/.test(selUI.hint) && /Lasso:/.test(selUI.hint) && /Brush:/.test(selUI.hint) &&
+  /Shift adds, Alt removes, Escape clears/.test(selUI.hint), selUI.hint);
+check('the step 6 block leaves the editor back in Edit mode with an empty selection',
+  selUI.restored === 'edit/box/12/', selUI.restored);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {

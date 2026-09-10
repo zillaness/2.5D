@@ -270,6 +270,7 @@
       <h3>Edit</h3>
       <div class="tool-row" id="toolRow">
         <button class="tool-btn active" data-tool="edit" title="Drag vertices; click an edge to add one; right/Alt-click deletes">✎ Edit</button>
+        <button class="tool-btn" data-tool="select" title="Drag to select points and holes — box, lasso or brush; Shift adds, Alt removes">⬚ Select</button>
         <button class="tool-btn" data-tool="addhole" title="Click to place a circular hole">◎ Add hole</button>
         <button class="tool-btn" data-tool="region" title="Draw a section with its own thickness/offset — click points, double-click or Enter to close, Esc cancels">▱ Section</button>
         <button class="tool-btn" data-tool="measure" title="Measure from the photo — click points, edges or holes; Esc cancels a half-done pick">📏 Measure</button>
@@ -484,9 +485,23 @@
       </div>
 
       <h3>Selection <span class="val" id="selCount"></span></h3>
-      <p class="hint">Ctrl/⌘-click points to multi-select, or Shift-drag a box
+      <p class="hint">Ctrl/⌘-click points to multi-select, or Shift-drag
       around them. Drag any selected point to move the group; Delete removes
-      them. Then clean up the selected run:</p>
+      them.</p>
+      <div class="btn-row" id="selSubRow">
+        <button class="btn small primary" data-selsub="box" title="Drag a rectangle: left-to-right takes what is enclosed, right-to-left also takes any arc or hole it touches">▭ Box</button>
+        <button class="btn small" data-selsub="lasso" title="Draw a freehand loop around the points">◌ Lasso</button>
+        <button class="btn small" data-selsub="brush" title="Paint over the points with a round brush">● Brush</button>
+      </div>
+      <div class="field" id="brushRadiusField" hidden>
+        <label for="brushRadius">Brush radius <span id="brushRadiusVal" class="val"></span></label>
+        <input type="range" id="brushRadius" min="4" max="60" value="12">
+      </div>
+      <p class="hint" id="selHint">Drag to select points. Box: left-to-right
+      takes what is enclosed, right-to-left also takes any arc it touches.
+      Lasso: draw around them. Brush: paint over them. Shift adds, Alt
+      removes, Escape clears.</p>
+      <p class="hint">Then clean up the selected run:</p>
       <div class="btn-row">
         <button id="fitArcBtn" class="btn small" disabled title="Replace the selected run with a fitted circular arc">◜ Fit arc</button>
         <button id="fitLineBtn" class="btn small" disabled title="Straighten the selected run to a line">╱ Fit line</button>
