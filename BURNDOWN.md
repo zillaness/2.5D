@@ -90,8 +90,8 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   inside it, direction-blind. Sam wants more. Tabled so far:
   - Lasso (freehand organic region): **yes**, point-in-polygon against the
     drawn path, same `_applyMarquee` shape.
-  - Brush (drag, grab any point the cursor passes over): proposed, undecided.
-    A circle mode folds into this as brush radius rather than a separate mode.
+  - Brush (drag, grab any point the cursor passes over): **yes**, with an
+    adjustable brush radius. Circle select folds into this; no separate mode.
   - Directional box (left-to-right = window/enclosed, right-to-left =
     crossing/touched): only meaningful once the marquee selects entities with
     extent. Sam: fillet arcs probably yes, straight segments probably not.
@@ -127,4 +127,4 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 
 ## CHANGELOG
 - v1.0 (2026-09-04): Initial ledger for the 2026-09-04 burndown.
-- v1.1 (2026-09-10): Tabled trace-editor selection modes (lasso yes, brush and directional box open).
+- v1.1 (2026-09-10): Tabled trace-editor selection modes (lasso and radius brush yes, directional box open).
