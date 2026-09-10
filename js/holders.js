@@ -1322,6 +1322,9 @@ function planSeams(L, B, spans, lastB = B, minCell = 1) {
 // Returns { tiles: [{ col, row, x0, y0, w, h, slabs, holes }], nx, ny,
 // seamsX, seamsY, crossings } with tile loops in TILE-LOCAL mm (origin at
 // the tile's top-left), or null when the layout already fits the bed.
+// opts.seams = { x: [...], y: [...] } reuses an existing seam plan instead of
+// planning a fresh one, which is how the contrast base of a layered build is
+// split on exactly the seams the top sheet was split on.
 export function splitTiles(template, bedW, bedH, opts = {}) {
   if (!template || !(bedW > 10) || !(bedH > 10)) return null;
   const { origin, w, h } = template;
@@ -1353,8 +1356,12 @@ export function splitTiles(template, bedW, bedH, opts = {}) {
     for (const p of loop) { lo = Math.min(lo, p[axis]); hi = Math.max(hi, p[axis]); }
     return [lo, hi];
   };
-  const px = planSeams(w, giverW, pockets.map(p => spanOf(p.pocket, 'x')), bedW, minCell);
-  const py = planSeams(h, giverH, pockets.map(p => spanOf(p.pocket, 'y')), bedH, minCell);
+  const given = opts.seams;
+  const reuse = axis => ({ n: given[axis].length + 1, seams: given[axis].slice() });
+  const px = given ? reuse('x')
+    : planSeams(w, giverW, pockets.map(p => spanOf(p.pocket, 'x')), bedW, minCell);
+  const py = given ? reuse('y')
+    : planSeams(h, giverH, pockets.map(p => spanOf(p.pocket, 'y')), bedH, minCell);
   const xs = [0, ...px.seams, w], ys = [0, ...py.seams, h];
 
   const tiles = [];

@@ -2895,6 +2895,126 @@ check('unticking the base-label option moves the labels back to the top sheet',
     names.some(n => /-base-2p5d\.stl$/.test(n)),
     names.join(', ') || 'no download event');
 }
+// The cut template for a layered build: two sheets, the through-cut top and
+// the contrast base, and the label artwork split between them. Exercised on
+// the exporters directly first (exact markup), then through the panel.
+const svgLayers = await page.evaluate(async () => {
+  const { toSVG, toTiledSVG } = await import('/js/exporters.js');
+  const rect = (x, y, w, h) => [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  const outline = rect(0, 0, 100, 60);
+  const hole = rect(20, 20, 30, 20);
+  const glyph = rect(25, 25, 5, 5);
+  const plain = await toSVG(outline, [hole], 100, 60, { engrave: [glyph] }).text();
+  const layered = await toSVG(outline, [hole], 100, 60,
+    { base: { outline, engrave: [glyph] } }).text();
+
+  const tile = (col, holes, marks) => ({
+    col, row: 0, w: 50, h: 60, slabs: [rect(0, 0, 50, 60)], holes, marks,
+  });
+  const top = [tile(0, [rect(10, 10, 20, 20)], []), tile(1, [], [])];
+  const base = [tile(0, [], [glyph]), tile(1, [], [])];
+  const tiledPlain = await toTiledSVG(top, { name: 'drawer' }).text();
+  const tiledBase = await toTiledSVG(top, { name: 'drawer', base }).text();
+  return { plain, layered, tiledPlain, tiledBase };
+});
+
+check('a single-sheet cut template still has no base layer',
+  !svgLayers.plain.includes('id="base"') && !svgLayers.plain.includes('base-engrave') &&
+  svgLayers.plain.includes('width="100mm"') && svgLayers.plain.includes('id="engrave"'),
+  svgLayers.plain.split('\n')[2]);
+check('a layered cut template puts the base sheet beside the top in its own layer',
+  svgLayers.layered.includes('id="base"') &&
+  svgLayers.layered.includes('width="210mm"') &&
+  svgLayers.layered.includes('viewBox="0 0 210 60"') &&
+  svgLayers.layered.includes('M 110.000,0.000'),
+  svgLayers.layered.split('\n')[2]);
+check('base label artwork engraves on the base layer, never into the top sheet',
+  svgLayers.layered.includes('id="base-engrave"') &&
+  svgLayers.layered.includes('135.000,25.000') &&
+  !/id="engrave"/.test(svgLayers.layered),
+  svgLayers.layered.includes('id="base-engrave"') ? 'base-engrave only' : 'missing');
+check('a tiled template without a base is unchanged',
+  !svgLayers.tiledPlain.includes('id="base"') &&
+  svgLayers.tiledPlain.includes('height="60.000mm"') &&
+  (svgLayers.tiledPlain.match(/<text /g) || []).length === 2,
+  svgLayers.tiledPlain.split('\n')[2]);
+check('a layered tiled template adds the base tile set below the top grid',
+  svgLayers.tiledBase.includes('id="base"') && svgLayers.tiledBase.includes('id="base-marks"') &&
+  svgLayers.tiledBase.includes('id="base-engrave"') &&
+  svgLayers.tiledBase.includes('height="150.000mm"') &&
+  svgLayers.tiledBase.includes('translate(0.000,90.000)') &&
+  svgLayers.tiledBase.includes('>A1 base —'),
+  svgLayers.tiledBase.split('\n')[3]);
+
+// The base tiles are the top sheet's seams with no pockets and no tabs, so
+// the two sheets glue up square (PRD Part D, open question 2).
+const baseTiles = await page.evaluate(async () => {
+  const { splitTiles } = await import('/js/holders.js');
+  const rect = (x0, y0, x1, y1) => [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+  const template = {
+    construction: 'layered', slab: rect(0, 0, 550, 380), origin: { x: 0, y: 0 }, w: 550, h: 380,
+    pockets: [
+      { pocket: rect(60, 40, 200, 120), pillars: [] },
+      { pocket: rect(380, 260, 500, 340), pillars: [] },
+    ],
+  };
+  const glyph = rect(100, 60, 140, 80); // a base label inside the first pocket
+  const top = splitTiles(template, 300, 200, { tabs: { enabled: true } });
+  const base = splitTiles({ ...template, pockets: [] }, 300, 200,
+    { labels: [glyph], seams: { x: top.seamsX, y: top.seamsY } });
+  const corners = t => t.slabs.reduce((n, l) => n + l.length, 0);
+  return {
+    topSeams: `${top.seamsX.join(',')} / ${top.seamsY.join(',')}`,
+    baseSeams: `${base.seamsX.join(',')} / ${base.seamsY.join(',')}`,
+    tiles: [top.tiles.length, base.tiles.length],
+    aligned: top.tiles.every((t, i) => t.x0 === base.tiles[i].x0 && t.y0 === base.tiles[i].y0),
+    tabs: [top.tabs, base.tabs, top.tabCount],
+    holes: base.tiles.reduce((n, t) => n + t.holes.length, 0),
+    marks: base.tiles.reduce((n, t) => n + t.marks.length, 0),
+    topCorners: Math.max(...top.tiles.map(corners)),
+    baseCorners: Math.max(...base.tiles.map(corners)),
+  };
+});
+check('the base sheet tiles on exactly the top sheet\'s seams',
+  baseTiles.topSeams === baseTiles.baseSeams && baseTiles.tiles[0] === baseTiles.tiles[1] &&
+  baseTiles.tiles[0] === 4 && baseTiles.aligned,
+  `${baseTiles.topSeams} vs ${baseTiles.baseSeams}, ${baseTiles.tiles.join('/')} tiles`);
+check('the base sheet carries the base engraving, no pockets and no puzzle tabs',
+  baseTiles.holes === 0 && baseTiles.marks === 1 &&
+  baseTiles.tabs[0] === true && baseTiles.tabs[1] === false && baseTiles.tabs[2] > 0 &&
+  baseTiles.baseCorners === 4 && baseTiles.topCorners > 4,
+  `${baseTiles.holes} holes, ${baseTiles.marks} engraved, tabs ${baseTiles.tabs.join('/')}, ` +
+  `corners ${baseTiles.baseCorners} vs ${baseTiles.topCorners}`);
+
+// End to end: the panel exports one file holding both sheets, with the tool
+// labels on the base where they read through the silhouette.
+await page.evaluate(async () => {
+  const $ = id => document.getElementById(id);
+  $('layLabels').checked = true;
+  $('layLabels').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 400));
+});
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#layExportSvgBtn'),
+  ]);
+  const fp = dl ? await dl.path().catch(() => null) : null;
+  const txt = fp ? fs.readFileSync(fp, 'utf8') : '';
+  check('the layered cut template downloads both sheets in one file',
+    !!dl && /-drawer-template\.svg$/.test(dl.suggestedFilename()) &&
+    txt.includes('id="base"') && txt.includes('id="base-engrave"') &&
+    !txt.includes('id="engrave"'),
+    dl ? `${dl.suggestedFilename()}: base ${txt.includes('id="base"')}, ` +
+      `base-engrave ${txt.includes('id="base-engrave"')}, top engrave ${txt.includes('id="engrave"')}`
+      : 'no download event');
+}
+await page.evaluate(async () => {
+  const $ = id => document.getElementById(id);
+  $('layLabels').checked = false;
+  $('layLabels').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 300));
+});
 const layRestore = await page.evaluate(async () => {
   const $ = id => document.getElementById(id);
   const st = window.__app.state;

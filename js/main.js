@@ -1453,19 +1453,31 @@ function layPlacedLabels(pockets) {
   return layoutLabelGeometry(L.items, pockets || layoutPockets(L.items, L.clearance),
     { ...L.labels, inside: layLabelsOnBase() });
 }
-// Flat list of glyph loops for the exporters.
+// Which sheet a placed label belongs to. A tool label goes on the contrast
+// base when the build has one and base labels are on; a drawer-level label
+// always stays on the sheet you can see.
+function layLabelLayer(L) {
+  return layLabelsOnBase() && L.src === 'item' ? 'base' : 'top';
+}
+// Flat list of glyph loops for one sheet. The exporters have to keep the two
+// apart: on a layered build the base glyphs sit inside the pocket footprints,
+// so engraving them into the top sheet would mark the inside of a hole.
+function layLabelLoopsFor(layer, pockets) {
+  return layPlacedLabels(pockets).filter(L => layLabelLayer(L) === layer)
+    .flatMap(L => L.loops);
+}
+// Flat list of glyph loops for the exporters (the visible sheet).
 function layLabelLoops() {
-  return layPlacedLabels().flatMap(L => L.loops);
+  return layLabelLoopsFor('top');
 }
 // Labels as buildSolid wants them. A tool label goes on the base sheet when
 // the construction has one and base labels are on; a drawer-level label
 // ("TOP DRAWER") always stays on the sheet you can see.
 function layLabelsForMesh() {
   const cfg = state.layout.labels || {};
-  const onBase = layLabelsOnBase();
   return layPlacedLabels().map(L => ({
     loops: L.loops, mode: cfg.mode || 'deboss', face: 'top',
-    layer: onBase && L.src === 'item' ? 'base' : 'top',
+    layer: layLabelLayer(L),
     size: Math.max(0.05, cfg.depth || 0.6),
   }));
 }
@@ -1668,6 +1680,18 @@ function layTilePlan(res) {
   if (!bed || !res || !res.template) return null;
   return splitTiles(res.template, bed.w, bed.h, layTileOpts());
 }
+// The contrast base of a layered build, split for the same bed. It is the
+// container outline with no pockets, cut on the seams the top sheet was cut
+// on and with no puzzle tabs (PRD Part D, open question 2): the glue holds
+// the sandwich together, and matching seams let the two sheets line up.
+// Null unless the build is layered and the top sheet actually tiled.
+function layBaseTilePlan(res, plan) {
+  const bed = layBedDims();
+  if (!bed || !plan || !res || !res.template) return null;
+  if (res.template.construction !== 'layered') return null;
+  return splitTiles({ ...res.template, pockets: [] }, bed.w, bed.h,
+    { labels: layLabelLoopsFor('base'), seams: { x: plan.seamsX, y: plan.seamsY } });
+}
 $('layTabs').addEventListener('change', e => {
   state.layout.bed.tabs.enabled = e.target.checked;
   syncBedFields();
@@ -1842,19 +1866,28 @@ $('layExportSvgBtn').addEventListener('click', () => {
   const res = buildLayoutNow();
   if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return; }
   if (!res.template) { toast('Template SVG is for flat drawer inserts (foam cutting) — export the bin as STL.'); return; }
+  const T = res.template;
+  const layered = T.construction === 'layered';
   const plan = layTilePlan(res);
   if (plan) {
-    deliverExport(toTiledSVG(plan.tiles, { name: state.fileName }),
+    const basePlan = layBaseTilePlan(res, plan);
+    deliverExport(toTiledSVG(plan.tiles, { name: state.fileName, base: basePlan && basePlan.tiles }),
       `${state.fileName}-drawer-tiles-${plan.nx}x${plan.ny}.svg`);
-    toast(`Exported ${plan.tiles.length} tiles for the ${fmtDim(layBedDims().w)} × ${fmtDim(layBedDims().h)} bed — cut one per bed load (labels A1, A2… mark the drawer position).`, 6500);
+    const both = basePlan
+      ? ` The second grid below is the contrast base: same tiles, no pockets, no tabs.` : '';
+    toast(`Exported ${plan.tiles.length} tiles for the ${fmtDim(layBedDims().w)} × ${fmtDim(layBedDims().h)} bed — cut one per bed load (labels A1, A2… mark the drawer position).${both}`, 6500);
     return;
   }
-  const T = res.template;
   const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
   const holes = T.pockets.flatMap(p => [shift(p.pocket), ...p.pillars.map(shift)]);
+  // A layered build is two sheets in one drawing: the through-cut top and,
+  // beside it, the plain base carrying the labels that read through the holes.
+  const base = layered
+    ? { outline: shift(T.slab), engrave: layLabelLoopsFor('base').map(shift) } : null;
   const blob = toSVG(shift(T.slab), holes, T.w, T.h,
-    { engrave: layLabelLoops().map(shift) });
+    { engrave: layLabelLoops().map(shift), base });
   deliverExport(blob, `${state.fileName}-drawer-template.svg`);
+  if (layered) toast('Two sheets in one file: the cut layer is the top sheet, the "base" layer is the contrast base.', 6000);
 });
 
 // ---------- wiring: step 1 ----------
