@@ -42,7 +42,10 @@ export class TraceEditor {
     this.mode = 'edit';      // 'edit' | 'addhole' | 'pan'
     // Which shape a select drag draws. Shift+drag in edit mode and (later) the
     // Select tool both go through it. 'box' is the historical behaviour.
-    this.selectSubMode = 'box'; // 'box' | 'lasso'
+    this.selectSubMode = 'box'; // 'box' | 'lasso' | 'brush'
+    // Brush radius in screen px, not mm: the trace is edited at whatever zoom
+    // makes the detail visible, and a mm brush would need resizing at each one.
+    this.brushRadiusPx = 12;
     this.showPoints = true;  // vertex control handles on/off
     this._placedIdx = null;  // circle being sized by a place-drag
     this._holeStart = null;
@@ -91,6 +94,8 @@ export class TraceEditor {
     this._groupDrag = null;     // {start, orig:[{x,y}]} while moving a vertex group
     this._marquee = null;       // {x0,y0,x1,y1} screen rect while Shift-dragging
     this._lasso = null;         // [{x,y}] screen path while lasso-dragging
+    this._brush = null;         // [{x,y}] swept screen path while brush-dragging
+    this._hoverPx = null;       // last pointer position, for the brush ring
 
     canvas.addEventListener('pointerdown', e => this._down(e));
     canvas.addEventListener('pointermove', e => this._move(e));
@@ -186,6 +191,12 @@ export class TraceEditor {
 
   setSelectSubMode(sub) {
     this.selectSubMode = sub;
+    this.draw();
+  }
+
+  setBrushRadius(r) {
+    const v = Math.round(Number(r));
+    this.brushRadiusPx = Math.max(4, Math.min(60, Number.isFinite(v) ? v : 12));
     this.draw();
   }
 
@@ -1132,6 +1143,7 @@ export class TraceEditor {
   _move(e) {
     if (!this.rectified) return;
     const sp = this.vp.eventPos(e);
+    this._hoverPx = sp;
     if (this.panning && this.lastPos) {
       this.vp.pan(sp.x - this.lastPos.x, sp.y - this.lastPos.y);
       this.lastPos = sp;
@@ -1158,6 +1170,15 @@ export class TraceEditor {
     // Marquee selection
     if (this.dragging && this._marquee) {
       this._marquee.x1 = sp.x; this._marquee.y1 = sp.y;
+      this.draw();
+      return;
+    }
+    // Brush selection: every pointer position joins the swept path.
+    if (this.dragging && this._brush) {
+      const last = this._brush[this._brush.length - 1];
+      if (!last || Math.abs(sp.x - last.x) > 0.5 || Math.abs(sp.y - last.y) > 0.5) {
+        this._brush.push({ x: sp.x, y: sp.y });
+      }
       this.draw();
       return;
     }
@@ -1225,6 +1246,8 @@ export class TraceEditor {
       this._changed(true);
       return;
     }
+    // The ring is the cursor in Brush sub-mode, so a plain hover repaints.
+    if (this._brushRingActive()) { this.draw(); return; }
     if (this.mode === 'edit') this._updateHoverCursor(sp);
     if (this.mode === 'measure' || this.mode === 'constrain') {
       this._hoverSnap = this._snapPick(sp, this.mode === 'measure');
@@ -1244,6 +1267,15 @@ export class TraceEditor {
   }
 
   _up() {
+    if (this._brush) {
+      const path = this._brush;
+      this._brush = null;
+      this.dragging = false;
+      // No stray guard here: a press with no drag is the circle select.
+      this._applySelection({ verts: this._verticesNearPath(path, this.brushRadiusPx) }, 'replace');
+      this.draw();
+      return;
+    }
     if (this._lasso) {
       const path = this._lasso;
       this._lasso = null;
@@ -1358,8 +1390,39 @@ export class TraceEditor {
   // Start whichever select drag the current sub-mode calls for.
   _beginSelectGesture(sp) {
     if (this.selectSubMode === 'lasso') this._lasso = [{ x: sp.x, y: sp.y }];
+    else if (this.selectSubMode === 'brush') this._brush = [{ x: sp.x, y: sp.y }];
     else this._marquee = { x0: sp.x, y0: sp.y, x1: sp.x, y1: sp.y };
     this.dragging = true;
+  }
+
+  // Every vertex within rPx of the swept path. Distance is measured to each
+  // segment, not to each sample, so a fast swipe still covers the gap between
+  // two pointermove events. A single-sample path degenerates to a distance
+  // from that point, which is the circle select.
+  _verticesNearPath(path, rPx) {
+    if (!path || !path.length) return [];
+    const r = rPx == null ? this.brushRadiusPx : rPx;
+    const near = (sp) => {
+      if (path.length === 1) return Math.hypot(sp.x - path[0].x, sp.y - path[0].y) <= r;
+      for (let i = 1; i < path.length; i++) {
+        if (pointSegDist(sp, path[i - 1], path[i]).d <= r) return true;
+      }
+      return false;
+    };
+    const sel = [];
+    this._eachSelectableLoop((loopIdx, pts) => {
+      for (let i = 0; i < pts.length; i++) {
+        if (near(this._mmToScreen(pts[i]))) sel.push({ loop: loopIdx, idx: i });
+      }
+    });
+    return sel;
+  }
+
+  // The ring stands in for the cursor: shown while a brush drag is in flight,
+  // and whenever the editor is sitting in the Brush sub-mode so the user can
+  // size it against the trace before painting.
+  _brushRingActive() {
+    return this.selectSubMode === 'brush' && (!!this._brush || this.mode === 'select');
   }
 
   // The only writer of the multi-selection. `result` is { verts }; `mode` is
@@ -2200,6 +2263,35 @@ export class TraceEditor {
       ctx.setLineDash([4, 3]);
       ctx.strokeRect(x, y, w, h);
       ctx.setLineDash([]);
+    }
+
+    // Brush stripe: the swept path stroked at the full brush width, so the
+    // covered area reads as painted.
+    if (this._brush && this._brush.length) {
+      const p = this._brush;
+      ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(83, 169, 255, 0.12)';
+      ctx.lineWidth = this.brushRadiusPx * 2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(p[0].x, p[0].y);
+      if (p.length === 1) ctx.lineTo(p[0].x, p[0].y);
+      else for (let i = 1; i < p.length; i++) ctx.lineTo(p[i].x, p[i].y);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+      ctx.lineJoin = 'miter';
+      ctx.lineWidth = 1;
+    }
+
+    // Brush ring under the cursor.
+    if (this._brushRingActive() && this._hoverPx) {
+      ctx.setLineDash([]);
+      ctx.strokeStyle = '#53a9ff';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(this._hoverPx.x, this._hoverPx.y, this.brushRadiusPx, 0, Math.PI * 2);
+      ctx.stroke();
     }
 
     // Lasso path: the polygon so far, plus a faint dashed closing segment.

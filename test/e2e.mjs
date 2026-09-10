@@ -1048,6 +1048,76 @@ check('a lasso release replaces the selection and ends the gesture',
 check('a concave C lasso excludes the vertex in its mouth',
   selLasso.cSel === '-1:0,-1:1,-1:3,-1:4', selLasso.cSel || '(none)');
 
+const selBrush = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+  const defaultR = te.brushRadiusPx;
+
+  // Two samples on the top edge's endpoints, a 3 px brush: the two corners it
+  // touches, and neither of the bottom pair 40 mm away.
+  const topEdge = key(te._verticesNearPath([S(20, 20), S(60, 20)], 3));
+
+  // One sample, no drag: the circle select.
+  const dot = key(te._verticesNearPath([S(20, 20)], 3));
+  const dotEmpty = key(te._verticesNearPath([S(40, 40)], 3));
+
+  // The segment test, not the sample test: a vertex mid-edge with the two
+  // samples 100 px away on either side of it.
+  te.setTrace([
+    { x: 20, y: 20 }, { x: 40, y: 20 }, { x: 60, y: 20 },
+    { x: 60, y: 60 }, { x: 20, y: 60 },
+  ], []);
+  const mid = S(40, 20);
+  const farPath = [{ x: mid.x - 100, y: mid.y }, { x: mid.x + 100, y: mid.y }];
+  const farSel = te._verticesNearPath(farPath, 3);
+  const farKeys = key(farSel);
+  const minSampleDist = Math.min(...farPath.map(p => Math.hypot(p.x - mid.x, p.y - mid.y)));
+  const bottom = S(20, 60);
+  const bottomFar = Math.abs(bottom.y - mid.y);
+
+  // Driving the gesture: the release resolves at the editor's own radius.
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+  te.setBrushRadius(3);
+  te.selectedVerts = [{ loop: -1, idx: 2 }];
+  te._brush = [S(20, 20), S(60, 20)];
+  te._up();
+  const gestureSel = key(te.selectedVerts);
+  const brushCleared = te._brush === null && te.dragging === false;
+
+  te.setBrushRadius(1);
+  const clampLo = te.brushRadiusPx;
+  te.setBrushRadius(500);
+  const clampHi = te.brushRadiusPx;
+  te.setBrushRadius(12);
+
+  te.selectedVerts = [];
+  te.selection = null;
+  return {
+    defaultR, topEdge, dot, dotEmpty, farKeys, minSampleDist, bottomFar,
+    gestureSel, brushCleared, clampLo, clampHi,
+  };
+});
+
+console.log('\nPart A step 3 — radius brush');
+check('brush radius defaults to 12 px and clamps to 4..60',
+  selBrush.defaultR === 12 && selBrush.clampLo === 4 && selBrush.clampHi === 60,
+  `${selBrush.defaultR}, ${selBrush.clampLo}, ${selBrush.clampHi}`);
+check('a 2-sample brush along the top edge takes its endpoints, not the far corners',
+  selBrush.topEdge === '-1:0,-1:1', selBrush.topEdge || '(none)');
+check('a single-sample brush path is the circle select',
+  selBrush.dot === '-1:0' && selBrush.dotEmpty === '', `${selBrush.dot} / "${selBrush.dotEmpty}"`);
+check('the brush tests the segment, not the samples: a vertex 100 px from either sample is caught',
+  selBrush.farKeys.split(',').includes('-1:1') && selBrush.minSampleDist > 3,
+  `${selBrush.farKeys}, nearest sample ${selBrush.minSampleDist.toFixed(0)} px`);
+check('the swept segment does not reach vertices off the line',
+  !selBrush.farKeys.split(',').includes('-1:4') && selBrush.bottomFar > 3,
+  `${selBrush.farKeys}, bottom row ${selBrush.bottomFar.toFixed(0)} px off`);
+check('a brush release replaces the selection and ends the gesture',
+  selBrush.gestureSel === '-1:0,-1:1' && selBrush.brushCleared, selBrush.gestureSel);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
