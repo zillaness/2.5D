@@ -1,9 +1,9 @@
 ---
 file: BURNDOWN.md
-version: 1.0
+version: 1.1
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-04
+last_updated: 2026-09-10
 description: Ledger for the 2026-09-04 token burndown on the 2.5D holders branch.
 ai_update: Update last_updated and version. Filename is fixed (the burndown skill expects BURNDOWN.md), so do not rename. Append a ledger line after every committed unit and keep the NEXT line current.
 ---
@@ -85,6 +85,19 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   top of the repo's front page. Conflict flagged, not resolved: no frontmatter
   was added to README.md or docs/holders-prd.md.
 
+- **Trace-editor selection modes** (raised 2026-09-09). Today the only
+  multi-select is a Shift+drag axis-aligned box that takes vertices fully
+  inside it, direction-blind. Sam wants more. Tabled so far:
+  - Lasso (freehand organic region): **yes**, point-in-polygon against the
+    drawn path, same `_applyMarquee` shape.
+  - Brush (drag, grab any point the cursor passes over): proposed, undecided.
+    A circle mode folds into this as brush radius rather than a separate mode.
+  - Directional box (left-to-right = window/enclosed, right-to-left =
+    crossing/touched): only meaningful once the marquee selects entities with
+    extent. Sam: fillet arcs probably yes, straight segments probably not.
+    Rejected for vertices alone, where enclosed and touched are the same test.
+  Not in the labelling, nesting, or HEIC scope; needs its own PRD and unit.
+
 ## Handoff
 
 **Done and pushed this run** (branch `claude/2.5d-photo-stl-s3-y0oodn`, from
@@ -114,3 +127,4 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 
 ## CHANGELOG
 - v1.0 (2026-09-04): Initial ledger for the 2026-09-04 burndown.
+- v1.1 (2026-09-10): Tabled trace-editor selection modes (lasso yes, brush and directional box open).
