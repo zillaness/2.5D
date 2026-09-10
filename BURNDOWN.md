@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.2
+version: 1.3
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-10
@@ -85,14 +85,16 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   top of the repo's front page. Conflict flagged, not resolved: no frontmatter
   was added to README.md or docs/holders-prd.md.
 
-- **Sign-off on `docs/selection_modes_prd_v1.0.md`** (drafted 2026-09-10 from
-  the 2026-09-09 chat). Settled in chat: lasso yes, brush with adjustable
+- **Sign-off on `docs/selection_and_organize_prd_v1.1.md`** (drafted 2026-09-10
+  from the 2026-09-09 chat; Part A selection modes, Part B a new Step 4
+  Organize with a folder-of-traces palette, Part C build instructions and
+  workflow scripts for the planned Opus + ultracode session). Settled in chat: lasso yes, brush with adjustable
   radius yes (circle select folds into it), directional box expands fillet
-  arcs on a right-to-left crossing drag but never plain segments. The PRD's
-  seven-step plan is shaped for the planned Opus + ultracode session: steps
-  2-4 (lasso, brush, directional box) are independent off step 1. Its open
-  questions 1 and 2 (crossing on managed straight lines; whether lasso and
-  brush expand arc runs) are the two that change the build; both recommend no.
+  arcs on a right-to-left crossing drag but never plain segments. Step 4 is
+  Sam's framing: after export, organize the drawer or toolbox, optionally
+  from a folder of trace files. Build-changing open questions: Part A 1 and
+  2 (crossing on managed lines; lasso/brush expanding arc runs), Part B 3
+  (offer a container-kind folder entry as the drawer outline).
 
 ## Handoff
 
@@ -125,3 +127,4 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.0 (2026-09-04): Initial ledger for the 2026-09-04 burndown.
 - v1.1 (2026-09-10): Tabled trace-editor selection modes (lasso and radius brush yes, directional box open).
 - v1.2 (2026-09-10): Selection modes PRD drafted at docs/selection_modes_prd_v1.0.md; ledger entry now points at it.
+- v1.3 (2026-09-10): PRD widened to docs/selection_and_organize_prd_v1.1.md (Step 4 Organize, ultracode build plan).
