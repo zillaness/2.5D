@@ -82,6 +82,15 @@ const state = {
   layout: {
     container: { type: 'rect', w: 220, h: 140, r: 6, n: 3, m: 2, name: null, outer: null },
     items: [], clearance: 0.5, floor: 3, border: 5,
+    // How the insert is made (PRD Part D). 'pocket' is the slab with a floor
+    // under every tool, which is what a router or a printer makes and what
+    // every project saved so far means. 'through' cuts each pocket clean
+    // through one sheet, which is what a laser does. 'layered' glues that
+    // sheet onto a contrast base. `sheet.top` is the sheet the laser cuts,
+    // `sheet.base` the contrast layer under it; both are ignored by 'pocket',
+    // which keeps using floor + the per-tool depths.
+    construction: 'pocket',
+    sheet: { top: 6, base: 3 },
     bed: { // laser / printer bed for tiling, and puzzle tabs on the seams
       preset: 'none', w: 300, h: 200,
       tabs: { enabled: false, head: 12, neck: 7, depth: 12, spacing: 80, fit: 0 },
@@ -1316,6 +1325,8 @@ function syncLayoutFields() {
   document.querySelector('label[for="layH"]').textContent = grid ? 'Cells deep (M)' : 'Depth (mm)';
   $('layW').value = grid ? String(L.container.n || 3) : fmtDim(L.container.w);
   $('layH').value = grid ? String(L.container.m || 2) : fmtDim(L.container.h);
+  $('layConstruction').value = L.construction || 'pocket';
+  $('layConstruction').disabled = grid;  // a Gridfinity bin is printed, not cut
   $('layClearance').value = fmtDim(L.clearance);
   $('layFloor').value = fmtDim(L.floor);
   $('layBorder').value = fmtDim(layBorderEff());
@@ -1463,6 +1474,12 @@ for (const [id, key, cells] of [['layW', 'w', 'n'], ['layH', 'h', 'm']]) {
     refreshLayoutEditor();
   });
 }
+$('layConstruction').addEventListener('change', e => {
+  const v = e.target.value;
+  if (['pocket', 'through', 'layered'].includes(v)) state.layout.construction = v;
+  syncLayoutFields();
+  refreshLayoutEditor();
+});
 for (const [id, key, min] of [['layClearance', 'clearance', 0], ['layFloor', 'floor', 0.5], ['layBorder', 'border', 0.5]]) {
   $(id).addEventListener('change', e => {
     const mm = parseDim(e.target.value);
@@ -2932,6 +2949,11 @@ function loadProject(p) {
       clearance: p.layout.clearance ?? state.layout.clearance,
       floor: p.layout.floor ?? state.layout.floor,
       border: p.layout.border ?? state.layout.border,
+      // Additive and optional: a project saved before laser constructions
+      // existed has no `construction` key and must load as a pocket insert.
+      construction: ['pocket', 'through', 'layered'].includes(p.layout.construction)
+        ? p.layout.construction : 'pocket',
+      sheet: { ...state.layout.sheet, ...(p.layout.sheet || {}) },
       bed: {
         ...state.layout.bed, ...(p.layout.bed || {}),
         tabs: { ...state.layout.bed.tabs, ...((p.layout.bed && p.layout.bed.tabs) || {}) },

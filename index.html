@@ -911,6 +911,15 @@
           <button id="layRemoveBtn" class="btn small">Remove tool</button>
         </div>
         <h3 style="margin:6px 0 0">Insert</h3>
+        <div class="field">
+          <label for="layConstruction">Construction</label>
+          <select id="layConstruction" title="How the insert is made. Pocket keeps a floor under every tool (routed or 3D printed). Through cuts every pocket clean through one sheet, the way a laser does. Layered glues that sheet onto a contrasting base, so a missing tool reads as a bright silhouette.">
+            <option value="pocket">Pocket — floor under each tool (routed / printed)</option>
+            <option value="through">Through cut — one laser-cut sheet</option>
+            <!-- Enabled by Part D plan step 3, which builds the base layer. -->
+            <option value="layered" disabled>Layered — top sheet + contrast base</option>
+          </select>
+        </div>
         <div class="field-row">
           <div class="field">
             <label for="layClearance">Clearance (mm)</label>

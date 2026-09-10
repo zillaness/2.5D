@@ -2353,6 +2353,75 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 300));
 });
 
+// ---------- Laser-cut foam constructions (holders.js, PRD Part D) ----------
+//
+// Everything this block touches is restored at its end: the layout is left
+// empty, the construction back at 'pocket', the holder type back at 'none'
+// and the layout modal hidden, so the checks after it see the page they
+// expect.
+
+const constrState = await page.evaluate(async () => {
+  const $ = id => document.getElementById(id);
+  const st = window.__app.state;
+
+  const holder = $('holderType');
+  holder.value = 'layout';
+  holder.dispatchEvent(new Event('change'));   // opens the panel, syncs fields
+  await new Promise(r => setTimeout(r, 200));
+
+  const sel = $('layConstruction');
+  const options = [...sel.options].map(o => o.value);
+  const dflt = { state: st.layout.construction, field: sel.value };
+
+  sel.value = 'through';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  const picked = { state: st.layout.construction, field: sel.value };
+
+  // Round-trip: 'through' survives save and load…
+  const saved = JSON.parse(window.__app.serializeProject(false));
+  st.layout.construction = 'pocket';
+  window.__app.loadProject(saved);
+  const roundTrip = st.layout.construction;
+
+  // …and a project written before laser constructions existed (no key at
+  // all) loads as the pocket insert it was drawn as.
+  const legacy = JSON.parse(window.__app.serializeProject(false));
+  delete legacy.layout.construction;
+  delete legacy.layout.sheet;
+  window.__app.loadProject(legacy);
+  const legacyLoad = { construction: st.layout.construction, sheet: st.layout.sheet };
+
+  // Junk in the file is not trusted either.
+  const junk = JSON.parse(window.__app.serializeProject(false));
+  junk.layout.construction = 'moulded';
+  window.__app.loadProject(junk);
+  const junkLoad = st.layout.construction;
+
+  $('layoutModal').hidden = true;
+  holder.value = 'none';
+  holder.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 300));
+  return { options, dflt, picked, roundTrip, legacyLoad, junkLoad };
+});
+
+console.log('\nLaser-cut foam constructions (holders.js)');
+check('layout construction defaults to pocket and offers all three',
+  constrState.dflt.state === 'pocket' && constrState.dflt.field === 'pocket' &&
+  constrState.options.join(',') === 'pocket,through,layered',
+  `${constrState.dflt.state} / ${constrState.options.join(',')}`);
+check('picking a construction in the panel writes it to state',
+  constrState.picked.state === 'through' && constrState.picked.field === 'through',
+  constrState.picked.state);
+check('construction round-trips through save and load',
+  constrState.roundTrip === 'through', constrState.roundTrip);
+check('a project saved before laser constructions loads as pocket',
+  constrState.legacyLoad.construction === 'pocket' &&
+  !!constrState.legacyLoad.sheet && constrState.legacyLoad.sheet.top > 0,
+  `${constrState.legacyLoad.construction}, sheet ${JSON.stringify(constrState.legacyLoad.sheet)}`);
+check('an unknown construction in a project file falls back to pocket',
+  constrState.junkLoad === 'pocket', constrState.junkLoad);
+
 // ---------- Gridfinity bin (holders.js) ----------
 
 const grid = await page.evaluate(async () => {
