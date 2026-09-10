@@ -85,7 +85,9 @@ const state = {
   // from the library or the live trace at add time) so projects stay
   // self-contained. Container: a rectangle, or a saved container outline.
   layout: {
-    container: { type: 'rect', w: 220, h: 140, r: 6, n: 3, m: 2, name: null, outer: null },
+    // `scale` is what Known width / Known depth have done to a traced
+    // container outline so far: additive, optional, and 1 : 1 until measured.
+    container: { type: 'rect', w: 220, h: 140, r: 6, n: 3, m: 2, name: null, outer: null, scale: { x: 1, y: 1 } },
     items: [], clearance: 0.5, floor: 3, border: 5,
     bed: { // laser / printer bed for tiling, and puzzle tabs on the seams
       preset: 'none', w: 300, h: 200,
@@ -1358,6 +1360,60 @@ function syncLayoutFields() {
   $('layFloor').disabled = grid;   // grid bins keep the spec base instead
   $('layBorder').disabled = grid;  // …and enforce the bin's minimum wall
   $('layRectFields').hidden = L.container.type === 'outline';
+  // Known width / depth belong to a traced outline: a rectangle's own width
+  // and depth fields are already the measured numbers.
+  const outline = L.container.type === 'outline';
+  $('layKnownFields').hidden = !outline;
+  if (outline) {
+    const box = layBox(layContainerLoop());
+    $('layKnownW').value = fmtDim(box.w);
+    $('layKnownD').value = fmtDim(box.h);
+  }
+  syncScaleInfo();
+}
+// What the measured numbers have done to the traced outline, and the warning
+// when the two axes disagree by more than 2 percent — which is usually a
+// mis-traced edge rather than the warp the per-axis scale is there to absorb.
+const SCALE_DIVERGENCE = 0.02;
+function syncScaleInfo() {
+  const el = $('layScaleInfo');
+  const c = state.layout.container;
+  const sc = c.scale;
+  if (c.type !== 'outline' || !sc || (sc.x === 1 && sc.y === 1)) {
+    el.textContent = ''; el.className = 'hint'; return;
+  }
+  // Only a container measured on BOTH axes has two factors to compare. With
+  // one field filled the other axis was never measured, and its 1 : 1 is an
+  // absence rather than a disagreement.
+  const both = sc.x !== 1 && sc.y !== 1;
+  const d = Math.abs(sc.x - sc.y) / Math.max(sc.x, sc.y);
+  const off = both && d > SCALE_DIVERGENCE;
+  el.textContent = `Traced outline scaled ×${sc.x.toFixed(3)} across and ×${sc.y.toFixed(3)} down.` +
+    (off
+      ? ` The two axes differ by ${(d * 100).toFixed(1)} percent — that is more than warp usually` +
+        ' explains, so check the traced edges before you cut. The original outline is still in the library.'
+      : ' The original outline is still in the library.');
+  el.className = off ? 'warn' : 'hint';
+}
+// Force a traced container to a measured dimension. The axis scales about the
+// bounding-box centre, so the container stays where it is and the other axis
+// is left alone; filling both absorbs the residual warp of a shot that was
+// not quite square.
+function layScaleContainer(axis, known) {
+  const c = state.layout.container;
+  if (c.type !== 'outline' || !c.outer || c.outer.length < 3) return false;
+  const box = layBox(c.outer);
+  const cur = axis === 'x' ? box.w : box.h;
+  if (!(cur > 0) || !(known > 1)) return false;
+  const f = known / cur;
+  if (!Number.isFinite(f) || Math.abs(f - 1) < 1e-9) return false;
+  const mid = axis === 'x' ? (box.minX + box.maxX) / 2 : (box.minY + box.maxY) / 2;
+  c.outer = c.outer.map(p => (axis === 'x'
+    ? { x: mid + (p.x - mid) * f, y: p.y }
+    : { x: p.x, y: mid + (p.y - mid) * f }));
+  if (!c.scale) c.scale = { x: 1, y: 1 };
+  c.scale[axis] = Math.round(c.scale[axis] * f * 1e6) / 1e6;
+  return true;
 }
 function refreshLayoutEditor() {
   layoutEditor.setBed(layBedView());
@@ -1492,6 +1548,9 @@ function openLayoutPanel() {
 }
 $('layContainerSel').addEventListener('change', e => {
   const v = e.target.value;
+  // A fresh pick is a fresh outline: whatever the last one was measured to
+  // does not carry over.
+  state.layout.container.scale = { x: 1, y: 1 };
   if (v === 'rect') {
     state.layout.container.type = 'rect';
     state.layout.container.name = null;
@@ -1503,7 +1562,7 @@ $('layContainerSel').addEventListener('change', e => {
     if (o) {
       state.layout.container = {
         ...state.layout.container, type: 'outline', name: o.name,
-        outer: structuredClone(o.outer),
+        outer: structuredClone(o.outer), scale: { x: 1, y: 1 },
       };
     }
   }
@@ -1519,6 +1578,14 @@ for (const [id, key, cells] of [['layW', 'w', 'n'], ['layH', 'h', 'm']]) {
       const mm = parseDim(e.target.value);
       if (mm > 10) state.layout.container[key] = mm;
     }
+    syncLayoutFields();
+    refreshLayoutEditor();
+  });
+}
+for (const [id, axis] of [['layKnownW', 'x'], ['layKnownD', 'y']]) {
+  $(id).addEventListener('change', e => {
+    const mm = parseDim(e.target.value);
+    if (mm !== null && mm > 1) layScaleContainer(axis, mm);
     syncLayoutFields();
     refreshLayoutEditor();
   });
@@ -3400,7 +3467,12 @@ function loadProject(p) {
   }
   if (p.layout && Array.isArray(p.layout.items)) {
     state.layout = {
-      container: { ...state.layout.container, ...(p.layout.container || {}) },
+      container: {
+        ...state.layout.container, ...(p.layout.container || {}),
+        // Defaulted, not inherited: a project saved before Known width existed
+        // must land on 1 : 1 rather than on whatever was last measured here.
+        scale: { x: 1, y: 1, ...((p.layout.container && p.layout.container.scale) || {}) },
+      },
       items: structuredClone(p.layout.items),
       clearance: p.layout.clearance ?? state.layout.clearance,
       floor: p.layout.floor ?? state.layout.floor,
@@ -3909,6 +3981,7 @@ window.__app = {
   backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,
+  scaleContainer: layScaleContainer,
   bed: {
     centre: layBedCentre, offset: layBedOffset, escapes: layBedEscapes,
     loop: () => { const v = layBedView(); return v ? bedLoop(layContainerLoop(), v) : null; },

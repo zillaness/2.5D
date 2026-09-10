@@ -4392,6 +4392,176 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 300));
 });
 
+// --- Known width and Known depth on the container ---
+
+// A traced 200 x 100 drawer, measured with a tape at 210 across: the outline
+// scales about its own centre, and only across.
+const knownOne = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  app.state.layout.items.length = 0;
+  const traced = () => [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }];
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: traced(), scale: { x: 1, y: 1 },
+  };
+  // Back out and in, so the panel syncs from the container just set.
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 200));
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const shown = !document.getElementById('layKnownFields').hidden;
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    el.value = v; el.dispatchEvent(new Event('change'));
+  };
+  set('layKnownW', '210');
+  await new Promise(r => setTimeout(r, 150));
+  const box = l => ({
+    w: Math.max(...l.map(p => p.x)) - Math.min(...l.map(p => p.x)),
+    h: Math.max(...l.map(p => p.y)) - Math.min(...l.map(p => p.y)),
+    cx: (Math.max(...l.map(p => p.x)) + Math.min(...l.map(p => p.x))) / 2,
+    cy: (Math.max(...l.map(p => p.y)) + Math.min(...l.map(p => p.y))) / 2,
+  });
+  return {
+    shown, b: box(app.state.layout.container.outer),
+    scale: { ...app.state.layout.container.scale },
+    field: document.getElementById('layKnownW').value,
+    info: document.getElementById('layScaleInfo').textContent,
+    cls: document.getElementById('layScaleInfo').className,
+  };
+});
+
+check('a known width of 210 makes a traced 200 × 100 container 210 × 100 about its centre',
+  knownOne.shown && Math.abs(knownOne.b.w - 210) < 1e-6 && Math.abs(knownOne.b.h - 100) < 1e-6 &&
+  Math.abs(knownOne.b.cx - 105) < 1e-6 && Math.abs(knownOne.b.cy - 55) < 1e-6 &&
+  knownOne.scale.x === 1.05 && knownOne.scale.y === 1 &&
+  knownOne.field === '210' && knownOne.cls === 'hint' && /×1\.050 across/.test(knownOne.info),
+  `${knownOne.b.w} × ${knownOne.b.h} at ${knownOne.b.cx},${knownOne.b.cy}, scale ${JSON.stringify(knownOne.scale)}`);
+
+// Both fields: each axis is forced on its own, which is how a shot that was
+// not quite square gets its residual warp taken out.
+const knownBoth = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }],
+    scale: { x: 1, y: 1 },
+  };
+  app.refreshLayoutEditor();
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    el.value = v; el.dispatchEvent(new Event('change'));
+  };
+  set('layKnownW', '210');
+  set('layKnownD', '105');
+  await new Promise(r => setTimeout(r, 150));
+  const l = app.state.layout.container.outer;
+  return {
+    w: Math.max(...l.map(p => p.x)) - Math.min(...l.map(p => p.x)),
+    h: Math.max(...l.map(p => p.y)) - Math.min(...l.map(p => p.y)),
+    scale: { ...app.state.layout.container.scale },
+    info: document.getElementById('layScaleInfo').textContent,
+    cls: document.getElementById('layScaleInfo').className,
+  };
+});
+
+check('known width and depth together scale each axis on its own',
+  Math.abs(knownBoth.w - 210) < 1e-6 && Math.abs(knownBoth.h - 105) < 1e-6 &&
+  knownBoth.scale.x === 1.05 && knownBoth.scale.y === 1.05 &&
+  knownBoth.cls === 'hint' && /×1\.050 across and ×1\.050 down/.test(knownBoth.info),
+  `${knownBoth.w} × ${knownBoth.h}, scale ${JSON.stringify(knownBoth.scale)}`);
+
+// 210 x 120 on the same trace is 5 percent one way and 20 the other: past the
+// 2 percent the readout stops agreeing with you.
+const knownWarn = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }],
+    scale: { x: 1, y: 1 },
+  };
+  app.refreshLayoutEditor();
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    el.value = v; el.dispatchEvent(new Event('change'));
+  };
+  set('layKnownW', '210');
+  set('layKnownD', '120');
+  await new Promise(r => setTimeout(r, 150));
+  const l = app.state.layout.container.outer;
+  const warned = {
+    w: Math.max(...l.map(p => p.x)) - Math.min(...l.map(p => p.x)),
+    h: Math.max(...l.map(p => p.y)) - Math.min(...l.map(p => p.y)),
+    info: document.getElementById('layScaleInfo').textContent,
+    cls: document.getElementById('layScaleInfo').className,
+  };
+  // Both axes measured and under two percent apart is warp, not a mistake:
+  // 210 across and 107 down is x1.05 against x1.07, 1.9 percent.
+  app.state.layout.container.outer = [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }];
+  app.state.layout.container.scale = { x: 1, y: 1 };
+  set('layKnownW', '210');
+  set('layKnownD', '107');
+  await new Promise(r => setTimeout(r, 150));
+  return {
+    warned,
+    edge: document.getElementById('layScaleInfo').className,
+    edgeScale: { ...app.state.layout.container.scale },
+  };
+});
+
+check('a 5 percent by 20 percent correction is warned about, a 2 percent one is not',
+  Math.abs(knownWarn.warned.w - 210) < 1e-6 && Math.abs(knownWarn.warned.h - 120) < 1e-6 &&
+  knownWarn.warned.cls === 'warn' && /differ by 12\.5 percent/.test(knownWarn.warned.info) &&
+  knownWarn.edge === 'hint' && knownWarn.edgeScale.x === 1.05 && knownWarn.edgeScale.y === 1.07,
+  `${knownWarn.warned.cls}: ${knownWarn.warned.info.slice(0, 90)} / edge ${knownWarn.edge} at ${JSON.stringify(knownWarn.edgeScale)}`);
+
+// The measured scale is an additive save-format field, and the fields belong
+// to a traced outline: a rectangular container already is its measurements.
+const knownSave = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: [{ x: 5, y: 5 }, { x: 215, y: 5 }, { x: 215, y: 110 }, { x: 5, y: 110 }],
+    scale: { x: 1.05, y: 1.05 },
+  };
+  const saved = JSON.parse(app.serializeProject(false));
+  const legacy = JSON.parse(app.serializeProject(false));
+  delete legacy.layout.container.scale;
+  await app.loadProject(saved);
+  const back = { ...app.state.layout.container.scale };
+  await app.loadProject(legacy);
+  const old = { ...app.state.layout.container.scale };
+  // A rectangle measures itself; the two fields have nothing to add.
+  const sel = document.getElementById('layContainerSel');
+  sel.value = 'rect'; sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 150));
+  return {
+    back, old, hiddenForRect: document.getElementById('layKnownFields').hidden,
+    cleared: { ...app.state.layout.container.scale },
+    info: document.getElementById('layScaleInfo').textContent,
+  };
+});
+
+check('the measured scale round-trips, defaults to 1 : 1 in an older project, and is hidden for a rectangle',
+  knownSave.back.x === 1.05 && knownSave.back.y === 1.05 &&
+  knownSave.old.x === 1 && knownSave.old.y === 1 &&
+  knownSave.hiddenForRect && knownSave.cleared.x === 1 && knownSave.info === '',
+  `back ${JSON.stringify(knownSave.back)}, legacy ${JSON.stringify(knownSave.old)}, hidden ${knownSave.hiddenForRect}`);
+
+// Leave the container as the blocks after this one expect it.
+await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'rect', w: 220, h: 140, r: 6,
+    name: null, outer: null, scale: { x: 1, y: 1 },
+  };
+  app.state.layout.items.length = 0;
+  app.refreshLayoutEditor();
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {

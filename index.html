@@ -802,6 +802,19 @@
             <input type="text" inputmode="decimal" id="layH" value="140">
           </div>
         </div>
+        <!-- Known width and depth: a tape measure beats a traced photo. Each
+             one forces its own axis, so filling both absorbs residual warp. -->
+        <div class="field-row" id="layKnownFields" hidden>
+          <div class="field">
+            <label for="layKnownW">Known width (mm)</label>
+            <input type="text" inputmode="decimal" id="layKnownW" title="Measured inside width of the drawer. The traced outline is scaled across to match.">
+          </div>
+          <div class="field">
+            <label for="layKnownD">Known depth (mm)</label>
+            <input type="text" inputmode="decimal" id="layKnownD" title="Measured inside depth of the drawer. The traced outline is scaled down the page to match.">
+          </div>
+        </div>
+        <p class="hint" id="layScaleInfo" style="margin:2px 0 0"></p>
         <h3 style="margin:6px 0 0">Tools</h3>
         <div class="btn-row">
           <select id="layToolSel" style="flex:1"></select>
