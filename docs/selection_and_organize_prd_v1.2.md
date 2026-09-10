@@ -1,10 +1,10 @@
 ---
-file: selection_and_organize_prd_v1.1.md
-version: 1.1
+file: selection_and_organize_prd_v1.2.md
+version: 1.2
 author: Sam Cao
 created: 2026-09-10
 last_updated: 2026-09-10
-description: PRD for trace-editor selection modes (lasso, radius brush, directional box) and a new Step 4 Organize that lays out a drawer or toolbox from the library or a folder of traces, with build instructions for an ultracode session.
+description: PRD for trace-editor selection modes, a new Step 4 Organize with folder access and container scaling, laser-cut foam constructions, and build instructions for an ultracode session.
 ai_update: Update last_updated and version. Rename file to match. Append changelog at bottom.
 ---
 
@@ -14,22 +14,26 @@ Status: **DRAFT, awaiting sign-off. Nothing here is built.** · 2026-09-10 ·
 target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 This document is the unit for the next session, which Sam intends to run on
-Opus with ultracode. It has three parts:
+Opus with ultracode. It has four parts:
 
 - **Part A, selection modes.** Lasso, radius brush, and a directional box in
   the trace editor. Decisions already made in chat: lasso yes, brush with an
   adjustable radius yes (circle select folds into it), directional box applies
-  to fillet arcs and not to straight segments.
+  to fillet arcs and circles, not to straight segments.
 - **Part B, Step 4 Organize.** A fourth top-level step after Model & export
   where a drawer or toolbox is laid out from the outline library or from a
   folder of trace files on disk. Today the drawer layout is a modal buried in
   Step 3's holder options and gated on having traced something first.
 - **Part C, build instructions.** How the next session should run: session
-  start, lanes, workflow scripts, verification, and commit discipline.
+  start, lanes, workflow scripts, verification, commit discipline, and the
+  version bump and deploy at the end.
+- **Part D, laser-cut foam constructions.** Through-cut single sheets and a
+  two-layer build with a contrast base, since most of Sam's foam will be
+  laser cut rather than routed.
 
-Parts A and B touch different files (`js/ui/traceEditor.js` versus
-`js/main.js`, `index.html`, and a new import module) and are independent.
-Part C depends on both being signed off.
+Parts A, B, and D touch different files (`js/ui/traceEditor.js`; `js/main.js`
+and `index.html` and a new import module; `js/holders.js` and the exporters)
+and are independent. Part C depends on all three being signed off.
 
 ---
 
@@ -100,8 +104,8 @@ the save format are untouched.
    catches the run.
 3. **Direction means something, only where it can.** A left-to-right box
    selects what is enclosed. A right-to-left box also selects the whole run of
-   any fillet arc it touches. Plain edges and managed straight lines are never
-   selected by touch, per Sam's call.
+   any fillet arc it touches and any circle it touches. Plain edges and
+   managed straight lines are never selected by touch, per Sam's call.
 4. **Add and subtract.** Any gesture can add to or remove from the existing
    selection, so a lasso around the handle followed by a brush-subtract along
    the ferrule is a legal two-step.
@@ -125,7 +129,14 @@ the save format are untouched.
   under the cursor while the tool is active.
 - Directional box: the existing box gains a crossing variant when dragged
   right-to-left, which expands to the full run of any fillet arc whose run has
-  at least one vertex inside the box or whose polyline crosses the box edge.
+  at least one vertex inside the box or whose polyline crosses the box edge,
+  and takes any circle whose rim the box touches. A window box takes a circle
+  only when its whole disc is enclosed.
+- Circles in the multi-selection. A new `selectedCircles` list of circle
+  indices beside `selectedVerts`. Group move, Delete, Escape, and the count
+  readout cover both lists; the arc and line tools stay vertex-only. Lasso
+  takes a circle whose centre is inside; brush takes one whose rim or centre
+  is within the radius.
 - A Select tool in the trace toolbar with a sub-mode picker (Box, Lasso,
   Brush) and a brush radius control. Shift+drag in plain Edit mode keeps
   working and uses the current sub-mode, so the existing muscle memory
@@ -142,8 +153,8 @@ the save format are untouched.
 
 - Crossing selection of plain edges or managed straight lines (`this.lines`).
   Sam's call: segments no. Recorded as an open question in case it reverses.
-- Selecting circles (screw holes) or labels with any of these gestures. They
-  have their own single-selection model and are not in `selectedVerts`.
+- Selecting labels with any of these gestures. They keep their own
+  single-selection model in label mode.
 - A separate circle-select mode. It is the brush with a radius and no drag.
 - Persisting sub-mode or brush radius across sessions. In-memory for v1.0; a
   localStorage key is a one-liner later if it turns out to matter.
@@ -190,14 +201,17 @@ in one place.
 A fourth helper, `_expandToArcRuns(list, rect)`, is the crossing rule: for
 each arc in `this.arcs`, if any vertex of its run is in `list`, or any segment
 of its run intersects a rect edge, add the whole run. It is applied only by the
-crossing box. Lasso and brush do not expand: an organic gesture that clips one
+crossing box. A fifth, `_circlesInGesture(kind, geom)`, returns circle indices
+for each gesture: window box requires the whole disc inside, crossing box
+accepts a rim intersection, lasso tests the centre, brush tests distance to
+the rim or centre. Lasso and brush do not expand: an organic gesture that clips one
 end of a fillet and silently grabs the other end would be the box's failure
 mode all over again.
 
 #### Applying a result
 
-`_applySelection(list, mode)` with `mode` in `replace | add | subtract` is the
-only writer. It dedupes by `loop:idx`, sets `this.selection = null` (a
+`_applySelection({ verts, circles }, mode)` with `mode` in `replace | add |
+subtract` is the only writer. It dedupes by `loop:idx`, sets `this.selection = null` (a
 multi-selection and a single selection are exclusive today and stay so), and
 calls `_notifySelect` so `refreshSelectionTools` repaints.
 
@@ -300,11 +314,14 @@ suite's own printed total in the message.
    corners; the same path with samples 200 px apart still selects a vertex
    lying between them (the segment test, not the sample test); a zero-length
    path is a circle select.
-4. **Directional box and arc expansion.** Direction read on release,
-   `_expandToArcRuns`, the crossing tint. Tests: on the Group B arc fixture
-   (five-point run fitted to an arc), a right-to-left box covering one vertex
-   of the run selects all five; the same box left-to-right selects one; a
-   right-to-left box touching only a plain edge selects nothing.
+4. **Directional box, arc expansion, and circles.** Direction read on
+   release, `_expandToArcRuns`, `_circlesInGesture`, `selectedCircles` with
+   group move and Delete, the crossing tint. Tests: on the Group B arc
+   fixture (five-point run fitted to an arc), a right-to-left box covering
+   one vertex of the run selects all five; the same box left-to-right selects
+   one; a right-to-left box touching only a plain edge selects nothing; a
+   window box clipping a circle's rim does not select it while a crossing box
+   does; group move shifts a selected circle's centre with the vertices.
 5. **Modifiers.** Shift add and Alt subtract through `_applySelection`,
    plus skipping the Alt-delete branch in Select mode. Tests: lasso replace
    then brush add is the union; then Alt-lasso is the difference; no
@@ -370,6 +387,11 @@ Sam's framing: after Step 3 export, Step 4 is the drawer or toolbox
 organization, and on that step you can open a folder filled with traces, and
 all the traces within the folder are what you are organizing.
 
+To be clear about what exists: the organize functionality Sam asked for in
+the holders roadmap is built and shipped (v1.11 to v1.23: the multi-tool
+drawer insert, per-tool depths, tiling, puzzle tabs, labels). Part B changes
+where it lives and where its tools come from, not what it does.
+
 #### Current workflow being replaced
 
 - Holder type `layout` under Step 3 opens the modal; closing the modal keeps
@@ -411,9 +433,12 @@ all the traces within the folder are what you are organizing.
    every readable trace in the palette, and one action places them all in
    the layout. Files that are not traces are skipped and counted, never an
    error.
-3. **Works in the offline single-file build.** Opening a folder must work
-   from a `file://` URL in Chrome, Firefox, Safari, and Edge. That rules out
-   depending on the File System Access API, which needs a secure context.
+3. **Works everywhere, best on GitHub Pages.** Sam launches the hosted copy
+   almost always, so on Chrome and Edge over https the folder is opened with
+   the File System Access API: it is remembered across reloads and projects
+   can be saved back into it. Firefox, Safari, and the offline `file://`
+   build fall back to the directory input, which reads once and cannot
+   write. Both paths feed the same reader.
 4. **Self-contained projects.** A saved project of a folder-sourced drawer
    reopens on a machine without the folder. Provenance is recorded; nothing
    is referenced.
@@ -436,9 +461,16 @@ all the traces within the folder are what you are organizing.
   The holder select keeps the option so existing projects load unchanged.
 - An export row on Step 4: STL of the insert, cut template SVG, tiled SVG
   when a bed is set. Same code paths as Step 3.
-- "Open folder…" using `<input type="file" webkitdirectory multiple>`. A
-  pure reader, `tracesFromFiles(files)` in `js/import/traceFolder.js`,
-  returns `{ entries, skipped }`. Accepted inputs: a 2.5D project JSON
+- "Open folder…" with two backends behind one button. Where
+  `window.showDirectoryPicker` exists (Chrome and Edge on https) it is used,
+  the handle is stored in IndexedDB under `2p5d.folder.v1`, and on the next
+  load the palette offers "Reopen <folder>" which re-requests permission.
+  Elsewhere, `<input type="file" webkitdirectory multiple>`. A pure reader,
+  `tracesFromFiles(files)` in `js/import/traceFolder.js`, takes a list of
+  `{ path, file }` from either backend and returns `{ entries, skipped }`.
+- "Save project to folder" when the folder came from the File System Access
+  backend: writes the current project JSON into the folder through the
+  handle, so the drawer lives next to its traces. Accepted inputs: a 2.5D project JSON
   (`app === '2.5D'` with `trace.outer` of at least 3 points) and a library
   export JSON (an array of library entries). Everything else is skipped.
 - Palette entries from a folder carry `source: { kind: 'folder', path }`
@@ -451,15 +483,32 @@ all the traces within the folder are what you are organizing.
   project file or `thickness` of a library entry, falling back to the
   current default the way library adds do today.
 - `state.layout.items[]` gains an optional `source` field, additive.
+- **Photos inside traces.** Each palette entry that came from a project file
+  carries a thumbnail: the rectified photo cropped to the outline's bounding
+  box, downscaled to 256 px on the long side, stored as a JPEG data URL in
+  `thumb` with its mm-per-pixel. The layout editor draws it clipped to the
+  outline, rotated with the item, under the pocket stroke, so the drawer
+  reads as the tools rather than as silhouettes. Library entries gain the
+  same field when saved from a project that has a rectified image.
+- **Bed as a build plate.** The bed gains a shape (rectangle, or a saved
+  container-kind outline, for a round or cut-cornered plate), a visible
+  outline in the layout editor, an Auto-centre button that centres the
+  layout on the bed when it fits on one tile, and drag plus arrow-key
+  nudge (1 mm, Shift 10 mm) of the bed window over the layout when it does
+  not. Seam positions follow the window.
 - README: the 3-step table becomes 4 steps; a Step 4 section describes the
   folder workflow. Screenshot placeholders for Sam to fill.
 
 #### Out
 
-- The File System Access API (`showDirectoryPicker`) for re-scanning a
-  folder or writing back. It fails on `file://` and in Firefox and Safari.
-  Recorded as a possible progressive enhancement in the open questions.
-- Persisting the folder across reloads. Open the folder again.
+- Persisting the folder across reloads on the directory-input backend.
+  There is no handle to keep; open the folder again.
+- Writing anything other than project JSON into the folder.
+- Thumbnails in the 3D preview. The 2D layout editor is where placement
+  happens; the 3D view stays geometry.
+- Non-rectangular tiling. A shaped bed clips the single-tile case and warns
+  when the layout does not fit its inscribed rectangle; multi-tile layouts
+  still tile against the bed's bounding rectangle.
 - Reading STL, DXF, or SVG from the folder. The folder reader accepts traces
   in the app's own formats; CAD import stays a Step 2 action per file.
 - Nesting itself. It stays in its own PRD; Part B only gives it a home.
@@ -467,9 +516,10 @@ all the traces within the folder are what you are organizing.
 
 ### Constraints
 
-- Single-file, fully client-side. `webkitdirectory` is the baseline because
-  it works from a `file://` URL in every desktop browser. On mobile browsers
-  it degrades to a multi-file picker, which is acceptable.
+- Single-file, fully client-side. The directory input is the baseline
+  because it works from a `file://` URL in every desktop browser; the File
+  System Access backend is feature-detected and never required. On mobile
+  the input degrades to a multi-file picker, which is acceptable.
 - Save format: `state.layout.items[].source` is the only new field and is
   optional. Projects without it load as before.
 - Element ids inside the layout panel do not change. `test/e2e.mjs` drives
@@ -516,6 +566,41 @@ with `arcs` and `lines` carried across since they are index-based and
 survive the shift. Reading is sequential to keep memory flat on a folder of
 hundreds of files; a progress count updates the palette header.
 
+#### Two folder backends
+
+| | Directory input | File System Access |
+|---|---|---|
+| Browsers | all desktop, `file://` included | Chrome, Edge, https only |
+| What you get | a one-shot `FileList`, every file already read | a `FileSystemDirectoryHandle` |
+| Re-scan | open the folder again | call `values()` on the stored handle |
+| Across reloads | nothing kept | handle in IndexedDB, one permission prompt to reuse |
+| Write back | impossible | `getFileHandle(name, { create: true })` then write |
+
+The reader is written against `{ path, file }` pairs so it does not know
+which backend produced them. The File System Access backend walks the
+handle recursively to build the same list. Persistence is the handle only;
+file contents are read fresh on every open.
+
+#### Container from a photo, and scaling it
+
+Photographing the drawer or toolbox and tracing its outline already works:
+Step 1 with a paper, card, or grid reference corrects warp, Step 2 traces the
+bottom, and saving the trace as kind `container` puts it in the layout's
+container list. A drawer is usually bigger than a sheet of paper, so the
+graph paper or cutting mat reference, whose edges need not be in frame, is
+the right one; the scale bar sets scale only and cannot correct warp.
+
+What is missing is Sam's "known x and y" correction: measure the drawer's
+inside width and depth with a tape and force the traced container to those
+numbers. Step 4 gets two fields, Known width and Known depth, on the
+container panel. Filling either scales the container outline about its
+bounding-box centre so that axis matches; filling both scales each axis
+independently, which absorbs residual warp from a shot that was not quite
+square. The readout shows the implied scale factors and warns when they
+differ by more than 2 percent, since that usually means a mis-traced edge
+rather than warp. The scaled outline is stored as the container's `outer`;
+the original stays in the library entry.
+
 #### The palette
 
 Two groups under one heading. Library rows are what `layToolSel` lists
@@ -536,6 +621,44 @@ A placed item copies the outline and records `source`. Saving the project
 serialises the copy. Reopening the folder later does not touch placed items.
 If Sam wants "refresh from folder" later it is a name-or-path match over
 `source.path`, which is why `path` and not just `name` is stored.
+
+#### Photos inside traces
+
+A project file carries `rectified` (a JPEG data URL of the warp-corrected
+photo) and `pxPerMm`. The folder reader crops the outline's bounding box out
+of it on a canvas, downscales to 256 px on the long side, and stores
+`thumb: { dataUrl, mmPerPx, origin }` on the entry, where `origin` is the
+outline's bounding-box corner in the entry's normalised mm space. The
+layout editor draws it with `clip()` on the outline path, transformed by the
+item's `x`, `y`, and `rot`, at reduced alpha so pocket strokes and conflict
+tints stay legible. A toggle, Show photos, defaults on.
+
+Size matters twice. localStorage holds the library in roughly 5 MB, and a
+256 px JPEG at quality 0.7 is 10 to 25 KB, so a library of a hundred tools
+stays under 3 MB; the save handler warns at 4 MB and offers to save without
+thumbnails. Project files embed the thumbnails of placed items, so a
+twelve-tool drawer grows by about 200 KB; the Save dialog's existing
+"include photo" checkbox gains a sibling for thumbnails.
+
+#### Bed as a build plate
+
+`state.layout.bed` today is `{ preset, w, h, tabs }` and tiling plans
+against a rectangle. It gains `shape: null | { name, outer }` and `offset:
+{ x, y }`, both additive. The layout editor draws the bed outline dashed
+under the container when the layout fits on one bed, at `offset`, so the
+user sees where the drawer sits on the plate. Auto-centre sets `offset` so
+the layout's bounding box is centred in the bed's; drag on the bed outline
+or arrow keys with the bed selected nudge it. When the layout is larger than
+one bed, the same offset shifts the tiling window before `splitTiles` scores
+seams, which gives manual control over where seams fall without touching the
+scoring. A shaped bed is honoured in the single-tile case by warning when
+any part of the layout leaves the shape; tiling against a shape is out of
+scope.
+
+Sam asked whether custom-sized and shaped plates already work. Custom width
+and depth do, through the Custom preset, and tiling against them is covered
+by synthetic tests. There is no shape, no visible bed in the editor, no
+centring, and no nudge; all four are new here.
 
 #### Export row
 
@@ -565,28 +688,160 @@ Each step is one commit, `node test/e2e.mjs` green, printed total quoted.
    skipped count. Test: after driving `tracesFromFiles` on a three-file
    fixture and clicking Add all, `state.layout.items.length === 3`, each
    with `source.kind === 'folder'`, and `serializeProject` round-trips them.
-5. **README and screenshots.** Four-step table, a Step 4 section, and
-   placeholder image paths for Sam to replace.
+5. **File System Access backend.** Feature-detected picker, recursive walk
+   into `{ path, file }`, IndexedDB handle store, Reopen, Save project to
+   folder. Tests: the walk over a synthetic handle tree yields the same list
+   the directory input yields; with the API absent the button still opens
+   the input.
+6. **Photos inside traces.** Thumbnail extraction in the reader and on
+   library save, the `thumb` field, the clipped draw, the toggle, the size
+   warning. Tests: a project fixture with a rectified image yields an entry
+   whose thumb is under 30 KB and whose `mmPerPx` matches; the editor draw
+   with photos on does not throw for an item without a thumb.
+7. **Bed as a build plate.** `shape` and `offset`, the dashed bed outline,
+   Auto-centre, drag and nudge, the shaped-bed warning, tiling window offset.
+   Tests: Auto-centre on a 200×100 layout in a 300×200 bed gives offset
+   50,50; a nudge of 10 mm shifts every tile's origin by 10 mm; a round bed
+   warns when a corner of the layout leaves it.
+8. **Known width and depth.** The two fields, per-axis scaling, the
+   readout and the 2 percent warning. Tests: a 200×100 container with known
+   width 210 becomes 210×100; both fields set to 210×105 scale each axis;
+   210×120 warns.
+9. **README and screenshots.** Four-step table, a Step 4 section including
+   the two folder backends, photos in traces, the build plate, and container
+   scaling, and placeholder image paths for Sam to replace.
 
-Steps 1 and 3 are independent. Step 2 depends on 1; step 4 depends on 1 and
-3; step 5 last.
+Steps 1, 3, 7, and 8 are independent. Step 2 depends on 1; step 4 depends
+on 1 and 3; step 5 and 6 depend on 3 and 4; step 9 last.
 
 ### Open questions (recommendation first)
 
 1. **Should the reader also accept a folder-level `library.json` export as
    the whole palette?** Recommendation: yes, it already does by the library
    export rule; no extra work.
-2. **Progressive enhancement with `showDirectoryPicker` on hosted Chrome
-   and Edge**, to remember the folder across reloads and write projects
-   back. Recommendation: defer. It doubles the code paths and the offline
-   build, which is the one Sam ships to a shop laptop, cannot use it.
+2. **Should the File System Access backend also save exported STL and SVG
+   into the folder?** Recommendation: not in v1.0; the browser download is
+   one click and the folder write needs a name-collision policy.
 3. **Should a container-kind entry in the folder be offered as the drawer
    outline?** Recommendation: yes, but as a follow-on once the palette
    exists; for v1.0 it is reported as skipped with reason `container`.
-4. **Does Step 4 belong before or after export?** Sam's framing is after,
+4. **Should thumbnails be stored in the library at all**, given the 5 MB
+   localStorage ceiling? Recommendation: yes with the warning; a library
+   without photos is what exists today and the user can decline.
+5. **Tiling against a shaped bed.** Recommendation: defer; a laser bed is a
+   rectangle and a shaped plate is a printer case that rarely needs tiles.
+6. **Does Step 4 belong before or after export?** Sam's framing is after,
    as Step 4. Recommendation: agree, because the common path is one tool
    through 1 to 3 and the drawer is a later, separate session over many
    tools.
+
+---
+
+## Part D: Laser-cut foam constructions
+
+### Problem
+
+`buildLayoutInsert` (`js/holders.js` line 423) always keeps a floor: the
+insert is a slab with pockets recessed from the top, which is what a CNC
+router or a 3D printer makes. That construction stays as it is, named
+`pocket`, and remains the right one for routed foam. Sam's foam will mostly be laser cut, and a laser cuts
+through. That gives two constructions the builder cannot express today:
+
+- **Through-cut, one layer.** Every pocket is a hole through the sheet. The
+  tool sits on whatever is under the foam.
+- **Two layers with a contrast base.** A through-cut top sheet glued onto a
+  plain sheet of a contrasting colour. The base shows through every pocket,
+  so a missing tool is a bright silhouette. This is the shadow-board look.
+
+The single-tool foam insert already supports `floor = 0` as a through pocket
+(`holders.js` line 986 onward), so the mesh capability exists; the layout
+path just never offers it.
+
+#### What this changes about labels
+
+The labelling PRD placed labels beside pockets because two recesses on one
+face cannot nest. In the two-layer construction the base sheet has no
+pockets, so a label recess anywhere on it is legal, including inside the
+pocket footprint. A label engraved on the base inside the silhouette is the
+classic shadow-board label and needs no new mesh work: it is a recess on a
+flat slab. Part D makes that placement available for the base layer only.
+
+### Success criteria
+
+1. A layout can be built as `pocket` (today, for routing and printing),
+   `through`, or `layered`, and the 3D preview shows the right thing for
+   each, including open holes for the through cut.
+2. `through` and `layered` STL exports are watertight by construction, using
+   `buildSolid` with holes for the top sheet and a plain slab for the base.
+3. The cut template SVG for `through` and `layered` puts pocket outlines on
+   the cut layer for the top sheet and, for `layered`, emits the base sheet
+   as a second sheet (or second page of tiles) carrying the container
+   outline and any base-layer label engraving.
+4. Per-item depths are honoured in `pocket`, ignored with a visible warning
+   in `through` and `layered` (a laser cuts the whole sheet; depth is the
+   sheet), and every existing project loads as `pocket`.
+
+### Scope
+
+#### In
+
+- `state.layout.construction` in `'pocket' | 'through' | 'layered'`, default
+  `pocket`, additive to the save format.
+- `layered` options: top sheet thickness, base sheet thickness, and whether
+  labels go on the top beside pockets (as now) or on the base inside the
+  pocket footprint.
+- `buildLayoutInsert` gains `opts.construction` and returns, for `layered`,
+  two parts with names so the STL exporter can write one file per part or a
+  combined preview.
+- `toSVG` and `toTiledSVG` emit the base sheet for `layered`.
+- The layout panel gains a construction select and the two thickness fields.
+- Tests: watertight checks for both new constructions; a layered export
+  yields two parts whose footprints match; the label-on-base case produces
+  a recess whose island lies inside a pocket footprint.
+
+#### Out
+
+- Stacking two or more top sheets to get deeper pockets for thick tools.
+  Recorded as an open question; v1.0 warns and uses one sheet.
+- Puzzle tabs on the base sheet. The base tiles with the same seams as the
+  top and no tabs; the glue holds it. Open question.
+- Any CSG. Everything here is `buildSolid` with islands and recesses.
+
+### Design
+
+`buildLayoutInsert` already computes `pockets` as islands. For `through`, the
+slab is built with those islands as holes and no recesses; thickness is the
+sheet. For `layered`, part one is the `through` result at top-sheet
+thickness; part two is the container outline as a plain slab at base
+thickness, with label recesses if labels are on the base. Labels on the
+base use the same `glyphIslands` recess path, with the label's centre
+placed at the pocket's centroid by default and editable through the existing
+label handlers.
+
+The exporters get a `parts` array instead of one mesh. STL export writes
+`<name>-top-2p5d.stl` and `<name>-base-2p5d.stl`; the STL header string is
+unchanged. SVG export adds a `base` layer group for the second sheet, with
+its own tile set when a bed is set.
+
+### Plan
+
+1. `construction` in state, save, load, and the panel select. Everything
+   still builds as `pocket`.
+2. `through` in `buildLayoutInsert` and the 3D preview, with the depth
+   warning.
+3. `layered`: second part, base thickness, STL per part.
+4. Base-layer labels inside the pocket footprint.
+5. SVG and tiled SVG for the base sheet.
+6. README section on laser constructions.
+
+### Open questions (recommendation first)
+
+1. **Multiple top sheets for deep tools.** Recommendation: defer; warn when
+   any item's depth exceeds the top sheet and let Sam stack by hand.
+2. **Tabs on the base sheet.** Recommendation: no tabs, same seams as the
+   top so the two tile sets align for gluing.
+3. **Default label placement in `layered`.** Recommendation: on the base
+   inside the pocket, since that is the point of the contrast layer.
 
 ---
 
@@ -610,17 +865,22 @@ not override the constraints in BURNDOWN.md or the handoff.
 
 ### Lanes
 
-Two lanes, independent, run as parallel worktrees:
+Three lanes, independent, run as parallel worktrees:
 
 - **Lane A** (Part A): `js/ui/traceEditor.js`, the Selection panel in
   `index.html`, `refreshSelectionTools` and the key handler in `js/main.js`,
   tests in `test/e2e.mjs` Group B area, README trace-editing section.
 - **Lane B** (Part B): `js/main.js` step navigation and layout wiring,
-  `index.html` step 4 panel, new `js/import/traceFolder.js`, tests in a new
-  e2e group, README workflow table.
+  `index.html` step 4 panel, new `js/import/traceFolder.js` and
+  `js/import/folderAccess.js`, tests in a new e2e group, README workflow
+  table.
+- **Lane C** (Part D): `js/holders.js`, `js/exporters.js`, the construction
+  select and thickness fields in the layout panel, tests beside the existing
+  holder checks, README laser section.
 
-Both lanes edit `index.html`, `js/main.js`, `test/e2e.mjs`, and `README.md`,
-in different regions. Merging is expected to be clean or to need trivial
+All lanes edit `index.html`, `js/main.js`, `test/e2e.mjs`, and `README.md`,
+in different regions. Lane C's panel additions land in the same panel Lane B
+moves, so the merge agent merges B before C. Merging is expected to be clean or to need trivial
 resolution; the merge agent handles it. Do not split a lane's steps across
 parallel agents: within Lane A, steps 2 to 4 all edit `_down`, `_move`,
 `_up`, and `draw` in the same file, and three concurrent rewrites of those
@@ -657,9 +917,10 @@ const LANE = {
 const lanes = [
   { key: 'A', part: 'Part A: Trace-editor selection modes' },
   { key: 'B', part: 'Part B: Step 4 Organize' },
+  { key: 'C', part: 'Part D: Laser-cut foam constructions' },
 ]
 const built = await pipeline(lanes, l =>
-  agent(`You are building ${l.part} of docs/selection_and_organize_prd_v1.1.md
+  agent(`You are building ${l.part} of docs/selection_and_organize_prd_v1.2.md
 in the 2.5D repo, on a worktree of branch claude/2.5d-photo-stl-s3-y0oodn.
 Follow that Part's Plan steps in order. One commit per step, committed with
 "git -c core.hooksPath=/dev/null commit", message ending with the e2e suite's
@@ -684,7 +945,7 @@ that two of three verifiers confirm goes back to a fix agent on that lane's
 branch, then the verifiers run again on the new head. Loop until a round
 returns nothing confirmed, capped at three rounds; log what remains.
 
-**Workflow 3, merge.** One agent merges lane A then lane B into
+**Workflow 3, merge.** One agent merges lane A, then B, then C into
 `claude/2.5d-photo-stl-s3-y0oodn` with merge commits (no rebase, no
 force-push), resolves conflicts, runs `node build.mjs` and `node test/e2e.mjs`,
 and pushes with `git push -u origin claude/2.5d-photo-stl-s3-y0oodn`. It
@@ -697,25 +958,31 @@ find it.
 - Update this PRD's status line to record what shipped, bump it to v1.2,
   and append the changelog line.
 - Append the ledger lines to BURNDOWN.md.
-- Do not bump `js/version.js` or deploy. Sam decides on the version and the
-  gh-pages push separately; the labelling work from S3 is also still
-  unreleased, so the next deploy is a combined one.
+- Bump `js/version.js` and deploy. Sam's call on 2026-09-10: these changes
+  uprev the app. The version is the next minor above whatever gh-pages
+  carries at that moment (1.24.0 if the S3 labelling work is still
+  unreleased, since it ships in the same deploy; 1.25.0 if Sam deployed
+  labelling as 1.24.0 in between). Deploy per the standing rule: rebase
+  first so Sam's landing commits survive, touch only `gh-pages/2.5d.html`
+  and the landing `?v=` bump.
 - Produce the handoff block: decisions made, open threads, next actions.
 
 ### What not to do
 
 - No new branches, no PR unless Sam asks.
 - No skipping or weakening a test to get green.
+- No deploy before the merge workflow's e2e run is green on the merged head.
 - No CSG, no mesh changes; both Parts are 2D editor and UI work.
 - No `Date.now()` or `Math.random()` inside a workflow script.
 - Do not let a lane agent "improve" the other lane's files in passing.
 
 ## Decision needed
 
-Sign-off on both Parts and on the lane plan in Part C. Part A open questions
-1 and 2 and Part B open question 3 are the ones that change what gets built;
-the rest are defaults.
+Sign-off on Parts A, B, and D and on the lane plan in Part C. Part A open
+questions 1 and 2, Part B open question 3, and Part D open question 1 are the
+ones that change what gets built; the rest are defaults.
 
 ## CHANGELOG
 - v1.0 (2026-09-10): Initial draft of the selection-modes PRD (as `selection_modes_prd_v1.0.md`) from the 2026-09-09 chat decisions.
+- v1.2 (2026-09-10): Sam's 2026-09-10 additions. Part A: crossing box and the other gestures also select circles. Part B: File System Access backend beside the directory input, container-from-photo path documented, known width and depth scaling, photos drawn inside traces, bed as a build plate with shape, auto-centre, and nudge. New Part D: through-cut and two-layer laser foam constructions with base-layer labels. Part C: third lane, and the session now uprevs and deploys.
 - v1.1 (2026-09-10): Renamed and widened. Added Part B, Step 4 Organize with a folder-of-traces palette, and Part C, build instructions and workflow scripts for the Opus + ultracode session. Written without em dashes per Sam's style guide; the repo's older docs use them and that conflict is still open in BURNDOWN.md.

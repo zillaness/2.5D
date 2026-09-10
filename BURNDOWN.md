@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.3
+version: 1.4
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-10
@@ -85,7 +85,7 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   top of the repo's front page. Conflict flagged, not resolved: no frontmatter
   was added to README.md or docs/holders-prd.md.
 
-- **Sign-off on `docs/selection_and_organize_prd_v1.1.md`** (drafted 2026-09-10
+- **Sign-off on `docs/selection_and_organize_prd_v1.2.md`** (drafted 2026-09-10
   from the 2026-09-09 chat; Part A selection modes, Part B a new Step 4
   Organize with a folder-of-traces palette, Part C build instructions and
   workflow scripts for the planned Opus + ultracode session). Settled in chat: lasso yes, brush with adjustable
@@ -127,4 +127,5 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.0 (2026-09-04): Initial ledger for the 2026-09-04 burndown.
 - v1.1 (2026-09-10): Tabled trace-editor selection modes (lasso and radius brush yes, directional box open).
 - v1.2 (2026-09-10): Selection modes PRD drafted at docs/selection_modes_prd_v1.0.md; ledger entry now points at it.
-- v1.3 (2026-09-10): PRD widened to docs/selection_and_organize_prd_v1.1.md (Step 4 Organize, ultracode build plan).
+- v1.4 (2026-09-10): PRD at v1.2: circles in crossing select, File System Access backend, container scaling, Part D laser constructions, session uprevs.
+- v1.3 (2026-09-10): PRD widened to docs/selection_and_organize_prd_v1.2.md (Step 4 Organize, ultracode build plan).
