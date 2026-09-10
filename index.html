@@ -807,6 +807,25 @@
           <select id="layToolSel" style="flex:1"></select>
           <button id="layAddBtn" class="btn small">＋ Add</button>
         </div>
+        <!-- Palette: the outline library and, once a folder is opened, the
+             traces read out of it. Both groups show at once. -->
+        <div id="layPalette" style="margin-top:8px">
+          <div class="pal-group">
+            <div class="pal-head" style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12px; opacity:.85">
+              <span>Library</span><span id="layPalLibCount" class="hint" style="margin:0"></span>
+            </div>
+            <div id="layPalLibList" style="max-height:150px; overflow:auto"></div>
+          </div>
+          <div class="pal-group" id="layPalFolderGroup" hidden style="margin-top:8px">
+            <div class="pal-head" style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12px; opacity:.85">
+              <span>Folder</span>
+              <span id="layPalFolderName" class="hint" style="margin:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"></span>
+              <button id="layPalAddAllBtn" class="btn small">Add all</button>
+            </div>
+            <p class="hint" id="layPalSkipped" style="margin:2px 0 0" hidden></p>
+            <div id="layPalFolderList" style="max-height:200px; overflow:auto"></div>
+          </div>
+        </div>
         <div id="laySelPanel" hidden>
           <p class="hint" id="laySelName" style="margin:0"></p>
           <div class="field">

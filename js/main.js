@@ -1321,6 +1321,7 @@ function refreshLaySelects() {
     if (o.name === keep) opt.selected = true;
     contSel.appendChild(opt);
   });
+  refreshLayPalette();
 }
 function syncLayoutFields() {
   const L = state.layout;
@@ -1621,6 +1622,163 @@ for (const [id, key] of [['layBedW', 'w'], ['layBedH', 'h']]) {
     updateLayoutInfo();
   });
 }
+// Place one palette entry into the layout. Both the quick-add select and the
+// palette rows go through here, so a tool lands in the same seeded grid slot
+// however it was picked: offset by the item's index, never by chance.
+// `source` is provenance only — a placed item is a self-contained copy.
+function layPlaceTool(src) {
+  const loop = layContainerLoop();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of loop) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const n = state.layout.items.length;
+  const it = {
+    name: src.name, outer: src.outer, holes: src.holes || [], circles: src.circles || [],
+    thickness: src.thickness || state.regions[0].thickness, depth: null, rot: 0,
+    x: (minX + maxX) / 2 + (n % 3) * 12 - 12,
+    y: (minY + maxY) / 2 + Math.floor(n / 3) * 12,
+  };
+  if (src.source) it.source = structuredClone(src.source);
+  state.layout.items.push(it);
+  return state.layout.items.length - 1;
+}
+
+// ---------- the Step 4 palette: Library and Folder ----------
+
+// What the last opened folder read. Replaced wholesale by the folder
+// backends; empty until one of them runs.
+let layFolder = { entries: [], skipped: [], label: '' };
+
+const SKIP_WORDS = {
+  'not-json': 'not a .json file',
+  'parse-error': 'not readable JSON',
+  'not-a-trace': 'JSON, but no trace in it',
+  container: 'a container outline, not a tool',
+};
+
+function layPaletteRow(name, hint, buttons) {
+  const row = document.createElement('div');
+  row.className = 'pal-row';
+  row.style.cssText = 'display:flex; align-items:center; gap:6px; padding:2px 0';
+  const label = document.createElement('span');
+  label.style.cssText = 'flex:1; min-width:0; display:flex; gap:6px; align-items:baseline';
+  const nm = document.createElement('span');
+  nm.className = 'pal-name';
+  nm.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap';
+  nm.textContent = name;
+  label.appendChild(nm);
+  if (hint) {
+    const h = document.createElement('span');
+    h.className = 'hint';
+    h.style.cssText = 'margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.7';
+    h.textContent = hint;
+    label.appendChild(h);
+    row.title = hint;
+  }
+  row.appendChild(label);
+  for (const [text, title, fn] of buttons) {
+    const b = document.createElement('button');
+    b.className = 'btn small';
+    b.textContent = text;
+    if (title) b.title = title;
+    b.addEventListener('click', fn);
+    row.appendChild(b);
+  }
+  return row;
+}
+
+// A folder entry saved into the library keeps its geometry and drops its
+// provenance: the library is this browser's own copy, not a pointer at a file.
+function layPaletteSaveToLibrary(entry) {
+  const { source, ...rest } = entry;
+  const o = structuredClone(rest);
+  o.kind = 'tool';
+  if (!o.thickness) o.thickness = state.regions[0].thickness;
+  o.measurements = o.measurements || [];
+  o.constraints = o.constraints || [];
+  o.arcs = o.arcs || [];
+  o.lines = o.lines || [];
+  const list = libLoad();
+  const at = list.findIndex(e => e.name === o.name);
+  if (at >= 0) list[at] = o; else list.push(o);
+  if (libSave(list)) { toast(`Saved \u201c${o.name}\u201d to the outline library.`); refreshLibList(); }
+  else toast('Could not save \u2014 storage is unavailable here.');
+}
+
+function refreshLayPalette() {
+  const lib = libLoad().filter(o => o.kind !== 'container');
+  const libList = $('layPalLibList');
+  libList.innerHTML = '';
+  $('layPalLibCount').textContent = lib.length ? `${lib.length}` : '';
+  if (!lib.length) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.style.margin = '2px 0';
+    p.textContent = 'Nothing saved yet.';
+    libList.appendChild(p);
+  }
+  for (const o of lib) {
+    libList.appendChild(layPaletteRow(o.name, '', [
+      ['\uff0b Add', 'Place this tool in the drawer', () => {
+        const i = layPlaceTool(structuredClone(o));
+        layoutEditor.sel = i;
+        syncLaySelPanel(i);
+        refreshLayoutEditor();
+      }],
+    ]));
+  }
+
+  const group = $('layPalFolderGroup');
+  const has = layFolder.entries.length > 0 || layFolder.skipped.length > 0;
+  group.hidden = !has;
+  $('layPalFolderName').textContent = layFolder.label || '';
+  $('layPalAddAllBtn').disabled = layFolder.entries.length === 0;
+  const skip = $('layPalSkipped');
+  skip.hidden = layFolder.skipped.length === 0;
+  skip.textContent = layFolder.skipped.length
+    ? `${layFolder.skipped.length} file${layFolder.skipped.length === 1 ? '' : 's'} skipped`
+    : '';
+  skip.title = layFolder.skipped
+    .map(s => `${s.name ? `${s.path} \u203a ${s.name}` : s.path}: ${SKIP_WORDS[s.reason] || s.reason}`)
+    .join('\n');
+  const folderList = $('layPalFolderList');
+  folderList.innerHTML = '';
+  // Two traces can share a name, so the path is what tells them apart.
+  for (const e of layFolder.entries) {
+    folderList.appendChild(layPaletteRow(e.name, e.source ? e.source.path : '', [
+      ['\uff0b Add', 'Place this tool in the drawer', () => {
+        const i = layPlaceTool(structuredClone(e));
+        layoutEditor.sel = i;
+        syncLaySelPanel(i);
+        refreshLayoutEditor();
+      }],
+      ['\u2606 Library', 'Save this trace to the outline library', () => layPaletteSaveToLibrary(e)],
+    ]));
+  }
+}
+
+// Called by the folder backends once a folder has been read.
+function laySetFolder(read, label) {
+  layFolder = {
+    entries: (read && read.entries) || [],
+    skipped: (read && read.skipped) || [],
+    label: label || '',
+  };
+  refreshLayPalette();
+}
+
+$('layPalAddAllBtn').addEventListener('click', () => {
+  if (!layFolder.entries.length) { toast('Open a folder of traces first.'); return; }
+  // One redraw at the end, not one per tool.
+  for (const e of layFolder.entries) layPlaceTool(structuredClone(e));
+  layoutEditor.sel = state.layout.items.length - 1;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+  toast(`Added ${layFolder.entries.length} tool${layFolder.entries.length === 1 ? '' : 's'} from the folder.`);
+});
+
 $('layAddBtn').addEventListener('click', () => {
   const v = $('layToolSel').value;
   let src = null;
@@ -1643,21 +1801,9 @@ $('layAddBtn').addEventListener('click', () => {
     src = structuredClone(o);
     if (!src.thickness) src.thickness = state.regions[0].thickness;
   }
-  const loop = layContainerLoop();
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of loop) {
-    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-  }
-  const n = state.layout.items.length;
-  state.layout.items.push({
-    name: src.name, outer: src.outer, holes: src.holes || [], circles: src.circles || [],
-    thickness: src.thickness, depth: null, rot: 0,
-    x: (minX + maxX) / 2 + (n % 3) * 12 - 12,
-    y: (minY + maxY) / 2 + Math.floor(n / 3) * 12,
-  });
-  layoutEditor.sel = state.layout.items.length - 1;
-  syncLaySelPanel(layoutEditor.sel);
+  const i = layPlaceTool(src);
+  layoutEditor.sel = i;
+  syncLaySelPanel(i);
   refreshLayoutEditor();
 });
 $('layRemoveBtn').addEventListener('click', () => {
@@ -3436,6 +3582,7 @@ window.__app = {
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,
   layoutExports: { stl: layoutStlExport, svg: layoutSvgExport },
+  palette: { setFolder: laySetFolder, refresh: refreshLayPalette, get folder() { return layFolder; } },
   serializeProject, loadProject,
   get viewer() { return viewer; },
 };

@@ -3576,6 +3576,189 @@ check('files are read one at a time, so a progress count can climb',
 check('a bare File is accepted as well as a { path, file } pair',
   folder.barePath === 'copy.json', String(folder.barePath));
 
+// --- the Step 4 palette: Library and Folder groups ---
+
+const libBackup = await page.evaluate(() => localStorage.getItem('2p5d.library.v1'));
+
+const palette = await page.evaluate(async () => {
+  const app = window.__app;
+  const { tracesFromFiles } = await import('/js/import/traceFolder.js');
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const mk = (path, body) => ({
+    path,
+    file: new File([typeof body === 'string' ? body : JSON.stringify(body)],
+      path.split('/').pop(), { type: 'application/json' }),
+  });
+  const proj = (name, w, h, thickness) => ({
+    app: '2.5D', version: 1, fileName: name,
+    regions: [{ thickness }],
+    trace: { outer: rect(30, 40, w, h), holes: [], circles: [] },
+  });
+  // One library seeded by hand, so the Library group has something to list.
+  localStorage.setItem('2p5d.library.v1', JSON.stringify([
+    { name: 'seeded mallet', kind: 'tool', thickness: 9, outer: rect(5, 5, 50, 25), holes: [], circles: [] },
+    { name: 'seeded drawer', kind: 'container', outer: rect(5, 5, 400, 300), holes: [], circles: [] },
+  ]));
+  const read = await tracesFromFiles([
+    mk('bench/chisel.json', proj('chisel', 60, 20, 7)),
+    mk('bench/mallet.json', proj('mallet', 40, 40, 11)),
+    mk('bench/sub/rasp.json', proj('rasp', 80, 15, 6)),
+    mk('bench/readme.txt', 'ignore me'),
+  ]);
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  app.palette.setFolder(read, 'bench');
+  const rowsOf = id => Array.from(document.querySelectorAll(`#${id} .pal-name`))
+    .map(r => r.textContent);
+  return {
+    readCount: read.entries.length,
+    folderShown: !document.getElementById('layPalFolderGroup').hidden,
+    folderRows: rowsOf('layPalFolderList'),
+    folderHints: Array.from(document.querySelectorAll('#layPalFolderList .pal-row')).map(r => r.title),
+    libRows: rowsOf('layPalLibList'),
+    libCount: document.getElementById('layPalLibCount').textContent,
+    skipText: document.getElementById('layPalSkipped').textContent,
+    skipTitle: document.getElementById('layPalSkipped').title,
+    skipShown: !document.getElementById('layPalSkipped').hidden,
+  };
+});
+
+check('the palette lists the library and the folder side by side, containers left out',
+  palette.readCount === 3 && palette.folderShown &&
+  palette.folderRows.join(',') === 'chisel,mallet,rasp' &&
+  palette.libRows.join(',') === 'seeded mallet' && palette.libCount === '1',
+  `folder ${palette.folderRows.join(',')} / library ${palette.libRows.join(',')}`);
+
+check('a folder row carries its relative path, so two traces of one name stay apart',
+  palette.folderHints.join(',') === 'bench/chisel.json,bench/mallet.json,bench/sub/rasp.json',
+  palette.folderHints.join(','));
+
+check('the skipped count is shown, with the reasons in its tooltip',
+  palette.skipShown && palette.skipText === '1 file skipped' &&
+  palette.skipTitle === 'bench/readme.txt: not a .json file',
+  `${palette.skipText} / ${palette.skipTitle}`);
+
+const addAll = await page.evaluate(async () => {
+  const app = window.__app;
+  document.getElementById('layPalAddAllBtn').click();
+  await new Promise(r => setTimeout(r, 250));
+  const items = app.state.layout.items;
+  return {
+    n: items.length,
+    names: items.map(i => i.name),
+    sources: items.map(i => i.source && i.source.kind),
+    paths: items.map(i => i.source && i.source.path),
+    thicknesses: items.map(i => i.thickness),
+    dx: items.map(i => i.x - items[0].x),
+    sameY: items.every(i => i.y === items[0].y),
+    hasOuter: items.every(i => Array.isArray(i.outer) && i.outer.length === 4),
+  };
+});
+
+check('Add all places every folder trace, in order, on the same seeded grid',
+  addAll.n === 3 && addAll.names.join(',') === 'chisel,mallet,rasp' &&
+  addAll.dx.join(',') === '0,12,24' && addAll.sameY && addAll.hasOuter,
+  `${addAll.n} items, dx ${addAll.dx.join(',')}, same row ${addAll.sameY}`);
+
+check('a placed folder tool keeps its own thickness and records where it came from',
+  addAll.sources.every(k => k === 'folder') &&
+  addAll.paths.join(',') === 'bench/chisel.json,bench/mallet.json,bench/sub/rasp.json' &&
+  addAll.thicknesses.join(',') === '7,11,6',
+  `${addAll.sources.join(',')} / ${addAll.thicknesses.join(',')}`);
+
+const libAdd = await page.evaluate(async () => {
+  const app = window.__app;
+  const before = app.state.layout.items.length;
+  document.querySelector('#layPalLibList .pal-row button').click();
+  await new Promise(r => setTimeout(r, 200));
+  const last = app.state.layout.items[app.state.layout.items.length - 1];
+  // "Save to library" is the second button on a folder row.
+  document.querySelectorAll('#layPalFolderList .pal-row')[2].querySelectorAll('button')[1].click();
+  await new Promise(r => setTimeout(r, 200));
+  const lib = JSON.parse(localStorage.getItem('2p5d.library.v1'));
+  const saved = lib.find(o => o.name === 'rasp');
+  return {
+    grew: app.state.layout.items.length === before + 1,
+    name: last.name, noSource: !('source' in last),
+    savedKind: saved && saved.kind,
+    savedStripped: saved ? !('source' in saved) : false,
+    savedThickness: saved && saved.thickness,
+    savedOrigin: saved && saved.outer[0],
+    libNames: lib.map(o => o.name).join(','),
+  };
+});
+
+check('the Library group places a saved outline, with no folder provenance on it',
+  libAdd.grew && libAdd.name === 'seeded mallet' && libAdd.noSource,
+  `${libAdd.name} added ${libAdd.grew}, source-free ${libAdd.noSource}`);
+
+check('Save to library writes a folder trace into the library with its provenance stripped',
+  libAdd.savedKind === 'tool' && libAdd.savedStripped && libAdd.savedThickness === 6 &&
+  libAdd.savedOrigin && libAdd.savedOrigin.x === 5 && libAdd.savedOrigin.y === 5 &&
+  libAdd.libNames === 'seeded mallet,seeded drawer,rasp',
+  `${libAdd.libNames} / stripped ${libAdd.savedStripped} / ${JSON.stringify(libAdd.savedOrigin)}`);
+
+// Round-trip through the save format, on a page of its own so the load
+// cannot leave residue in the suite's main page.
+const roundTrip = await (async () => {
+  const saved = await page.evaluate(() => {
+    const p = JSON.parse(window.__app.serializeProject(false));
+    // The rectified copy stays, so this is a normal photo-less save; only the
+    // extra images go, to keep the payload small.
+    p.photo = null; p.back = null;
+    return JSON.stringify(p);
+  });
+  const fresh = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+  fresh.on('console', m => { if (m.type() === 'error') consoleErrors.push('[step4 round trip] ' + m.text()); });
+  fresh.on('pageerror', e => consoleErrors.push('[step4 round trip] ' + String(e)));
+  await fresh.goto(`http://127.0.0.1:${port}/`);
+  await fresh.waitForFunction(() => window.__app && window.ClipperLib);
+  const out = await fresh.evaluate(async json => {
+    window.__app.loadProject(JSON.parse(json));
+    await new Promise(r => setTimeout(r, 500));
+    const items = window.__app.state.layout.items;
+    return {
+      n: items.length,
+      names: items.map(i => i.name).join(','),
+      paths: items.map(i => (i.source || {}).path).join(','),
+      pts: items.map(i => i.outer.length).join(','),
+    };
+  }, saved);
+  await fresh.close();
+  return out;
+})();
+
+check('a saved project reopens its folder-sourced drawer, provenance and all',
+  roundTrip.n === 4 && roundTrip.names === 'chisel,mallet,rasp,seeded mallet' &&
+  roundTrip.paths === 'bench/chisel.json,bench/mallet.json,bench/sub/rasp.json,' &&
+  roundTrip.pts === '4,4,4,4',
+  `${roundTrip.n}: ${roundTrip.names} / ${roundTrip.paths}`);
+
+// Put the page back the way the blocks after this one found it: no folder, no
+// items, the library as it was, back on Step 3.
+await page.evaluate(async backup => {
+  window.__app.palette.setFolder({ entries: [], skipped: [] }, '');
+  window.__app.state.layout.items.length = 0;
+  window.__app.layoutEditor.sel = -1;
+  window.__app.syncLaySelPanel(-1);
+  if (backup === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', backup);
+  // A trip back through Step 4 repopulates every list from the restored
+  // library, so no seeded entry is left in a select.
+  window.__app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  window.__app.refreshLayoutEditor();
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+}, libBackup);
+
+check('closing the folder empties its group again, leaving the library alone',
+  await page.evaluate(() => document.getElementById('layPalFolderGroup').hidden &&
+    window.__app.state.layout.items.length === 0),
+  'folder group hidden and the layout cleared');
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {
