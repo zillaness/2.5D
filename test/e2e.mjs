@@ -4179,6 +4179,219 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 300));
 });
 
+// --- the bed as a build plate ---
+
+// A 200 x 100 layout on a 300 x 200 plate: Auto-centre puts it 50 mm in from
+// every edge, and the dashed outline that gets drawn is that plate.
+const plateCentre = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 200, h: 100, r: 6, name: null };
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  const bed = document.getElementById('layBed');
+  bed.value = '300x200'; bed.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  const before = app.bed.loop();
+  document.getElementById('layBedCentreBtn').click();
+  await new Promise(r => setTimeout(r, 200));
+  const off = app.bed.offset();
+  const loop = app.bed.loop();
+  const box = l => ({
+    minX: Math.min(...l.map(p => p.x)), minY: Math.min(...l.map(p => p.y)),
+    maxX: Math.max(...l.map(p => p.x)), maxY: Math.max(...l.map(p => p.y)),
+  });
+  return {
+    off, n: loop.length, plate: box(loop), zero: box(before),
+    info: document.getElementById('layBedInfo').textContent,
+    drawn: !!app.layoutEditor.bedLoop(),
+  };
+});
+
+check('Auto-centre puts a 200 × 100 layout in the middle of a 300 × 200 plate',
+  plateCentre.off.x === 50 && plateCentre.off.y === 50 && plateCentre.n === 4 &&
+  plateCentre.plate.minX === -45 && plateCentre.plate.minY === -45 &&
+  plateCentre.plate.maxX === 255 && plateCentre.plate.maxY === 155 &&
+  plateCentre.zero.minX === 5 && plateCentre.zero.minY === 5 && plateCentre.drawn,
+  `offset ${JSON.stringify(plateCentre.off)}, plate ${JSON.stringify(plateCentre.plate)}`);
+
+// Dragging the dashed outline moves the plate, not the layout: the offset
+// runs the other way, and the drag selects the plate rather than a tool.
+const plateDrag = await page.evaluate(async () => {
+  const app = window.__app, ed = app.layoutEditor;
+  const cv = ed.canvas;
+  const r = cv.getBoundingClientRect();
+  const client = mm => {
+    const s = ed.mmToScreen(mm);
+    return { x: r.left + s.x * (r.width / cv.width), y: r.top + s.y * (r.height / cv.height) };
+  };
+  // Left edge of the plate, halfway down: a point on the outline and on no tool.
+  const grab = client({ x: -45, y: 55 });
+  const drop = client({ x: -45 + 20, y: 55 + 8 });
+  const cap = cv.setPointerCapture, rel = cv.releasePointerCapture;
+  cv.setPointerCapture = () => {}; cv.releasePointerCapture = () => {};
+  const ev = (type, p) => cv.dispatchEvent(new PointerEvent(type, {
+    clientX: p.x, clientY: p.y, pointerId: 1, bubbles: true,
+  }));
+  ev('pointerdown', grab);
+  const selected = ed.bedSel;
+  ev('pointermove', drop);
+  ev('pointerup', drop);
+  cv.setPointerCapture = cap; cv.releasePointerCapture = rel;
+  await new Promise(r2 => setTimeout(r2, 150));
+  return { selected, off: app.bed.offset() };
+});
+
+check('dragging the dashed plate outline moves the plate under the layout',
+  plateDrag.selected && Math.abs(plateDrag.off.x - 30) < 1.5 &&
+  Math.abs(plateDrag.off.y - 42) < 1.5,
+  `selected ${plateDrag.selected}, offset ${JSON.stringify(plateDrag.off)}`);
+
+// Arrow keys nudge the selected plate: 1 mm, 10 mm with Shift.
+const plateNudge = await page.evaluate(async () => {
+  const app = window.__app;
+  app.layoutEditor.bedSel = true;
+  app.state.layout.bed.offset = { x: 50, y: 50 };
+  app.refreshLayoutEditor();
+  const key = (k, shift) => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, shiftKey: !!shift, bubbles: true }));
+  key('ArrowRight');
+  const one = { ...app.bed.offset() };
+  key('ArrowDown', true);
+  const ten = { ...app.bed.offset() };
+  // With nothing selected the arrow keys are somebody else's to use.
+  app.layoutEditor.bedSel = false;
+  key('ArrowRight');
+  const idle = { ...app.bed.offset() };
+  return { one, ten, idle, readout: document.getElementById('layBedOffsetInfo').textContent };
+});
+
+check('arrow keys nudge the plate 1 mm, and 10 mm with Shift, only while it is selected',
+  plateNudge.one.x === 49 && plateNudge.one.y === 50 &&
+  plateNudge.ten.x === 49 && plateNudge.ten.y === 40 &&
+  plateNudge.idle.x === 49 && plateNudge.idle.y === 40 &&
+  /across and/.test(plateNudge.readout) && /nudge with the arrow keys/.test(plateNudge.readout),
+  `${JSON.stringify(plateNudge.one)} then ${JSON.stringify(plateNudge.ten)}, readout ${plateNudge.readout.slice(0, 60)}`);
+
+// A layout wider than the bed tiles, and the plate offset is the tiling
+// window: pushing the plate 10 mm takes 10 mm off the first tile and carries
+// every seam with it.
+const tileWindow = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 400, h: 140, r: 6, name: null };
+  app.state.layout.items.length = 0;
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  app.state.layout.items.push({
+    name: 'wide', outer: rect(180, 60), holes: [], circles: [],
+    x: 105, y: 75, rot: 0, depth: 4, thickness: 5,
+  });
+  app.refreshLayoutEditor();
+  await new Promise(r => setTimeout(r, 200));
+  const at = off => {
+    app.state.layout.bed.offset = { x: off, y: 0 };
+    const plan = app.bed.plan();
+    return plan ? plan.tiles.map(t => t.x0) : null;
+  };
+  const zero = at(0), ten = at(10);
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.refreshLayoutEditor();
+  return { zero, ten };
+});
+
+check('the tiling window follows the plate: a 10 mm nudge shifts every tile origin by 10 mm',
+  tileWindow.zero && tileWindow.ten && tileWindow.zero.length === 2 &&
+  tileWindow.ten.length === tileWindow.zero.length &&
+  tileWindow.ten.every((x, i) => Math.abs(x - (tileWindow.zero[i] - 10)) < 1e-6),
+  `${JSON.stringify(tileWindow.zero)} -> ${JSON.stringify(tileWindow.ten)}`);
+
+// A round plate is honoured in the single-tile case: the layout fits its
+// bounding square and still has four corners hanging off the circle.
+const roundPlate = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 200, h: 100, r: 6, name: null };
+  const disc = d => {
+    const out = [];
+    for (let i = 0; i < 64; i++) {
+      const a = (i / 64) * Math.PI * 2;
+      out.push({ x: d / 2 + (d / 2) * Math.cos(a), y: d / 2 + (d / 2) * Math.sin(a) });
+    }
+    return out;
+  };
+  const on = d => {
+    app.state.layout.bed.shape = { name: `${d} mm disc`, outer: disc(d) };
+    app.state.layout.bed.preset = 'custom';
+    app.state.layout.bed.w = d; app.state.layout.bed.h = d;
+    app.bed.centre();
+    app.refreshLayoutEditor();
+    return {
+      escapes: app.bed.escapes(),
+      info: document.getElementById('layBedInfo').textContent,
+      cls: document.getElementById('layBedInfo').className,
+    };
+  };
+  const tight = on(200);
+  const roomy = on(240);
+  return { tight, roomy };
+});
+
+check('a round plate warns when the corners of the layout leave it, and stays quiet when they do not',
+  roundPlate.tight.escapes >= 4 && roundPlate.tight.cls === 'warn' &&
+  /outside the 200 mm disc plate/.test(roundPlate.tight.info) &&
+  roundPlate.roomy.escapes === 0 && roundPlate.roomy.cls === 'hint' &&
+  /Shaped plate: 240 mm disc/.test(roundPlate.roomy.info),
+  `${roundPlate.tight.escapes} out on the small disc, ${roundPlate.roomy.escapes} on the large one`);
+
+// The plate shape and offset are additive save-format fields: they survive a
+// round trip, and a project saved before they existed still loads.
+const plateSave = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.bed.offset = { x: 12, y: 7 };
+  const saved = JSON.parse(app.serializeProject(false));
+  const legacy = JSON.parse(app.serializeProject(false));
+  delete legacy.layout.bed.offset;
+  delete legacy.layout.bed.shape;
+  await app.loadProject(saved);
+  const back = { off: app.bed.offset(), shape: app.state.layout.bed.shape && app.state.layout.bed.shape.name };
+  // loadProject merges the file's bed onto the live one, so a pre-build-plate
+  // project is only interesting against a state that has no plate either:
+  // the merge must leave a usable offset rather than an undefined one.
+  app.state.layout.bed.shape = null;
+  delete app.state.layout.bed.offset;
+  await app.loadProject(legacy);
+  const old = {
+    off: app.bed.offset(), shape: app.state.layout.bed.shape,
+    defined: !!app.state.layout.bed.offset,
+  };
+  return { back, old, hadShape: !!saved.layout.bed.shape };
+});
+
+check('the plate shape and offset round-trip through a project, and an older project still loads',
+  plateSave.hadShape && plateSave.back.off.x === 12 && plateSave.back.off.y === 7 &&
+  plateSave.back.shape === '240 mm disc' &&
+  plateSave.old.off.x === 0 && plateSave.old.off.y === 0 && !plateSave.old.shape &&
+  plateSave.old.defined,
+  `back ${JSON.stringify(plateSave.back)}, legacy ${JSON.stringify(plateSave.old)}`);
+
+// Leave the plate as the blocks after this one expect it: no bed, no shape,
+// no offset, nothing placed, back on Step 3.
+await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 220, h: 140, r: 6, name: null };
+  app.layoutEditor.bedSel = false;
+  app.layoutEditor.sel = -1;
+  const bed = document.getElementById('layBed');
+  bed.value = 'none'; bed.dispatchEvent(new Event('change'));
+  app.syncLaySelPanel(-1);
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {

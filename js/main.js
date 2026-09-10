@@ -25,7 +25,7 @@ import {
   layoutPockets, layoutLabelGeometry, layoutLabelConflicts, labelMinHeight,
 } from './holders.js';
 import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
-import { LayoutEditor } from './ui/layoutEditor.js';
+import { LayoutEditor, bedLoop } from './ui/layoutEditor.js';
 import { APP_VERSION } from './version.js';
 
 // Export quality presets: chord tolerance (mm) for round features and the
@@ -89,6 +89,10 @@ const state = {
     items: [], clearance: 0.5, floor: 3, border: 5,
     bed: { // laser / printer bed for tiling, and puzzle tabs on the seams
       preset: 'none', w: 300, h: 200,
+      // Build-plate extras, both additive and optional: `shape` is a saved
+      // container outline for a round or cut-cornered plate, and `offset` is
+      // where the layout's bounding box sits on the plate.
+      shape: null, offset: { x: 0, y: 0 },
       tabs: { enabled: false, head: 12, neck: 7, depth: 12, spacing: 80, fit: 0 },
     },
     // Tool labels. Off by default: an unlabelled layout must export exactly
@@ -1326,6 +1330,19 @@ function refreshLaySelects() {
     if (o.name === keep) opt.selected = true;
     contSel.appendChild(opt);
   });
+  // The same container outlines double as build-plate shapes.
+  const shapeSel = $('layBedShape');
+  const shape = state.layout.bed.shape;
+  shapeSel.innerHTML = '<option value="rect">Rectangular plate</option>' +
+    (shape ? '<option value="__shape">⬚ ' + shape.name + '</option>' : '');
+  list.forEach((o, i) => {
+    if (o.kind !== 'container') return;
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = `⬚ ${o.name}`;
+    shapeSel.appendChild(opt);
+  });
+  shapeSel.value = shape ? '__shape' : 'rect';
   refreshLayPalette();
 }
 function syncLayoutFields() {
@@ -1343,6 +1360,7 @@ function syncLayoutFields() {
   $('layRectFields').hidden = L.container.type === 'outline';
 }
 function refreshLayoutEditor() {
+  layoutEditor.setBed(layBedView());
   layoutEditor.setLayout(layContainerLoop(), state.layout.items,
     state.layout.clearance, layBorderEff());
   updateLayoutInfo();
@@ -1374,14 +1392,31 @@ function updateLayoutInfo() {
   const bed = layBedDims();
   const bw = maxX - minX, bh = maxY - minY;
   const bedEl = $('layBedInfo');
+  const off = layBedOffset();
+  const ox = Math.max(0, off.x), oy = Math.max(0, off.y);
   let tiled = false; // drives the explicit tiled-SVG button in the export row
   if (!bed) {
     bedEl.textContent = '';
-  } else if (bw <= bed.w + 1e-6 && bh <= bed.h + 1e-6) {
-    bedEl.textContent = `Fits the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed in one piece.`;
-    bedEl.className = 'hint';
+  } else if (bw + ox <= bed.w + 1e-6 && bh + oy <= bed.h + 1e-6) {
+    // One plate load. A shaped plate is the only case where fitting the
+    // bounding rectangle is not the whole story, so it is checked here.
+    const escaped = layBedEscapes();
+    const shape = state.layout.bed.shape;
+    if (escaped && shape) {
+      bedEl.textContent = `${escaped} point${escaped === 1 ? '' : 's'} of the layout sit outside the ` +
+        `${shape.name} plate — auto-centre it, nudge the plate, or shrink the container.`;
+      bedEl.className = 'warn';
+    } else if (escaped) {
+      bedEl.textContent = `Fits the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed, but the offset pushes it ` +
+        'off the plate — auto-centre it or nudge the plate back.';
+      bedEl.className = 'warn';
+    } else {
+      bedEl.textContent = `Fits the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed in one piece.` +
+        (shape ? ` Shaped plate: ${shape.name}.` : '');
+      bedEl.className = 'hint';
+    }
   } else {
-    const plan = splitTiles({
+    const plan = laySplitWithOffset({
       slab: loop, pockets: layoutPocketsForPlan(), origin: { x: minX, y: minY }, w: bw, h: bh,
     }, bed.w, bed.h, layTileOpts());
     const tiles = plan ? plan.tiles.length : 0;
@@ -1391,13 +1426,17 @@ function updateLayoutInfo() {
         (plan.crossings ? `, ${plan.crossings} seam${plan.crossings === 1 ? '' : 's'} through a pocket (no clear line available)` : ', seams clear of every pocket') +
         (plan.tabs ? `, ${plan.tabCount} puzzle tab${plan.tabCount === 1 ? '' : 's'}` +
           (plan.tabless ? ` (${plan.tabless} seam segment${plan.tabless === 1 ? '' : 's'} too crowded for one)` : '') : '') +
-        (grid ? '. STL tiling isn\'t available yet — the bin exports whole.' : '.')
+        (grid ? '. STL tiling isn\'t available yet — the bin exports whole.' : '.') +
+        (state.layout.bed.shape
+          ? ` The ${state.layout.bed.shape.name} plate shape is ignored while tiling — the tiles plan against its bounding rectangle.`
+          : '')
       : (state.layout.bed.tabs.enabled
           ? 'Larger than the bed, but the puzzle tabs\' reach leaves no room to tile it — shrink the reach or pick a bigger bed.'
           : '');
     bedEl.className = 'hint';
   }
   $('layExportTilesBtn').disabled = !tiled;
+  syncBedOffsetInfo();
   updateLabelInfo();
   if (state.holder.type === 'layout') rebuildHolder();
 }
@@ -1500,12 +1539,96 @@ function layBedDims() {
   const m = /^(\d+)x(\d+)$/.exec(b.preset);
   return m ? { w: +m[1], h: +m[2] } : null;
 }
+// The bounding box of a loop in layout mm.
+function layBox(loop) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of loop) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+}
+// Where the layout sits on the plate, as a plain pair of numbers.
+function layBedOffset() {
+  const o = (state.layout.bed && state.layout.bed.offset) || {};
+  return { x: Number.isFinite(o.x) ? o.x : 0, y: Number.isFinite(o.y) ? o.y : 0 };
+}
+// The bed as the layout editor and the plate arithmetic want it, sharing the
+// offset object so a drag on the outline writes straight back into the state.
+function layBedView() {
+  const bed = layBedDims();
+  if (!bed) return null;
+  if (!state.layout.bed.offset) state.layout.bed.offset = { x: 0, y: 0 };
+  return { w: bed.w, h: bed.h, shape: state.layout.bed.shape, offset: state.layout.bed.offset };
+}
+// Centre the layout on the plate. A 200 x 100 layout on a 300 x 200 plate
+// lands at 50, 50.
+function layBedCentre() {
+  const bed = layBedDims();
+  if (!bed) return false;
+  const box = layBox(layContainerLoop());
+  state.layout.bed.offset = {
+    x: Math.round((bed.w - box.w) / 2 * 1000) / 1000,
+    y: Math.round((bed.h - box.h) / 2 * 1000) / 1000,
+  };
+  return true;
+}
+// How much of the layout is off the plate. A rectangular plate is compared
+// box to box; a shaped one is tested point by point, which is what catches a
+// square drawer overhanging a round plate at the corners.
+function layBedEscapes() {
+  const view = layBedView();
+  if (!view) return 0;
+  const loop = layContainerLoop();
+  const plate = bedLoop(loop, view);
+  if (view.shape && view.shape.outer && view.shape.outer.length >= 3) {
+    let n = 0;
+    for (const p of loop) if (!pointInPolygon(p, plate)) n++;
+    return n;
+  }
+  const box = layBox(loop), pb = layBox(plate);
+  return (box.minX < pb.minX - 1e-6 || box.minY < pb.minY - 1e-6 ||
+    box.maxX > pb.maxX + 1e-6 || box.maxY > pb.maxY + 1e-6) ? 1 : 0;
+}
+// The tiling window. By default the grid of bed-sized cells starts at the
+// layout's top-left corner; a plate offset slides the layout into the first
+// cell, so every seam moves with it. `splitTiles` plans from zero, so the
+// shift goes onto the template it is handed and comes back off the tiles.
+function laySplitWithOffset(template, bedW, bedH, opts) {
+  const off = layBedOffset();
+  const ox = Math.max(0, off.x), oy = Math.max(0, off.y);
+  if (!(ox > 0) && !(oy > 0)) return splitTiles(template, bedW, bedH, opts);
+  const plan = splitTiles({
+    ...template,
+    origin: { x: template.origin.x - ox, y: template.origin.y - oy },
+    w: template.w + ox, h: template.h + oy,
+  }, bedW, bedH, opts);
+  if (!plan) return null;
+  for (const t of plan.tiles) { t.x0 -= ox; t.y0 -= oy; }
+  plan.seamsX = plan.seamsX.map(v => v - ox);
+  plan.seamsY = plan.seamsY.map(v => v - oy);
+  return plan;
+}
+// Where the layout sits on the plate, and how to move it. Refreshed on every
+// layout change, because dragging the plate outline never touches the fields.
+function syncBedOffsetInfo() {
+  const b = state.layout.bed;
+  const plate = layBedDims();
+  $('layBedCentreBtn').disabled = !plate;
+  const off = layBedOffset();
+  $('layBedOffsetInfo').textContent = !plate ? ''
+    : `Layout sits ${fmtDimL(off.x)} across and ${fmtDimL(off.y)} down the plate` +
+      `${b.shape ? ` (${b.shape.name})` : ''}. Drag the dashed outline, or select it and ` +
+      'nudge with the arrow keys (Shift for 10 mm).';
+}
 function syncBedFields() {
   const b = state.layout.bed;
   $('layBed').value = b.preset;
   $('layBedCustom').hidden = b.preset !== 'custom';
   $('layBedW').value = fmtDim(b.w);
   $('layBedH').value = fmtDim(b.h);
+  $('layBedShape').value = b.shape ? '__shape' : 'rect';
+  syncBedOffsetInfo();
   const t = b.tabs;
   $('layTabs').checked = !!t.enabled;
   $('layTabFields').hidden = !t.enabled;
@@ -1591,7 +1714,7 @@ function layTileOpts() {
 function layTilePlan(res) {
   const bed = layBedDims();
   if (!bed || !res || !res.template) return null;
-  return splitTiles(res.template, bed.w, bed.h, layTileOpts());
+  return laySplitWithOffset(res.template, bed.w, bed.h, layTileOpts());
 }
 $('layTabs').addEventListener('change', e => {
   state.layout.bed.tabs.enabled = e.target.checked;
@@ -1617,14 +1740,51 @@ for (const [id, key, min] of [
 $('layBed').addEventListener('change', e => {
   state.layout.bed.preset = e.target.value;
   syncBedFields();
-  updateLayoutInfo();
+  refreshLayoutEditor();
+});
+// A plate shape: a saved container outline standing in for a round or
+// cut-cornered build plate. Choosing one sizes the bed to the shape, since a
+// plate and its bounding rectangle must agree about how much room there is.
+$('layBedShape').addEventListener('change', e => {
+  const b = state.layout.bed;
+  const o = e.target.value === 'rect' ? null : libLoad()[+e.target.value];
+  if (!o || !o.outer || o.outer.length < 3) {
+    b.shape = null;
+  } else {
+    b.shape = { name: o.name, outer: structuredClone(o.outer) };
+    const box = layBox(b.shape.outer);
+    b.preset = 'custom';
+    b.w = Math.round(box.w * 1000) / 1000;
+    b.h = Math.round(box.h * 1000) / 1000;
+  }
+  syncBedFields();
+  refreshLayoutEditor();
+});
+$('layBedCentreBtn').addEventListener('click', () => {
+  if (!layBedCentre()) return;
+  syncBedFields();
+  refreshLayoutEditor();
+});
+// Arrow keys nudge the plate once its outline is selected: 1 mm, or 10 mm
+// with Shift. Nothing else on Step 4 uses the arrow keys.
+document.addEventListener('keydown', e => {
+  if (state.step !== 4 || !layoutEditor.bedSel) return;
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
+  const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (!d) return;
+  e.preventDefault();
+  const mm = e.shiftKey ? 10 : 1;
+  layoutEditor.nudgeBed(d[0] * mm, d[1] * mm);
+  syncBedFields();
+  refreshLayoutEditor();
 });
 for (const [id, key] of [['layBedW', 'w'], ['layBedH', 'h']]) {
   $(id).addEventListener('change', e => {
     const mm = parseDim(e.target.value);
     if (mm > 10) state.layout.bed[key] = mm;
     syncBedFields();
-    updateLayoutInfo();
+    refreshLayoutEditor();
   });
 }
 // Place one palette entry into the layout. Both the quick-add select and the
@@ -3248,6 +3408,9 @@ function loadProject(p) {
       bed: {
         ...state.layout.bed, ...(p.layout.bed || {}),
         tabs: { ...state.layout.bed.tabs, ...((p.layout.bed && p.layout.bed.tabs) || {}) },
+        // Merged onto the default the same way, so a project saved before the
+        // build plate existed lands on offset zero rather than undefined.
+        offset: { ...state.layout.bed.offset, ...((p.layout.bed && p.layout.bed.offset) || {}) },
       },
       // Merged onto the defaults, not taken from the file: a project saved
       // before labels existed has no `labels` key, and rebuilding state.layout
@@ -3746,6 +3909,19 @@ window.__app = {
   backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,
+  bed: {
+    centre: layBedCentre, offset: layBedOffset, escapes: layBedEscapes,
+    loop: () => { const v = layBedView(); return v ? bedLoop(layContainerLoop(), v) : null; },
+    plan: () => {
+      const b = layBedDims();
+      if (!b) return null;
+      const loop = layContainerLoop(), box = layBox(loop);
+      return laySplitWithOffset({
+        slab: loop, pockets: layoutPocketsForPlan(),
+        origin: { x: box.minX, y: box.minY }, w: box.w, h: box.h,
+      }, b.w, b.h, layTileOpts());
+    },
+  },
   layoutExports: { stl: layoutStlExport, svg: layoutSvgExport },
   palette: { setFolder: laySetFolder, refresh: refreshLayPalette, get folder() { return layFolder; } },
   libFitThumbs,

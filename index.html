@@ -912,6 +912,15 @@
             <input type="text" inputmode="decimal" id="layBedH" value="200">
           </div>
         </div>
+        <!-- The bed as a build plate: an optional non-rectangular outline, and
+             where the layout sits on it. -->
+        <div class="btn-row" style="margin-top:6px">
+          <select id="layBedShape" style="flex:1" title="A saved container outline standing in for a round or cut-cornered build plate. Tiling still plans against its bounding rectangle.">
+            <option value="rect">Rectangular plate</option>
+          </select>
+          <button id="layBedCentreBtn" class="btn small" title="Centre the layout on the plate">⊹ Auto-centre</button>
+        </div>
+        <p class="hint" id="layBedOffsetInfo" style="margin:2px 0 0"></p>
         <div class="field" style="margin-top:6px">
           <label><input type="checkbox" id="layTabs"> Puzzle tabs on the seams</label>
         </div>
