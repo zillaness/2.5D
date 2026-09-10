@@ -10,8 +10,16 @@ ai_update: Update last_updated and version. Rename file to match. Append changel
 
 # PRD: Selection modes and Step 4 Organize
 
-Status: **DRAFT, awaiting sign-off. Nothing here is built.** · 2026-09-10 ·
+Status: **SIGNED OFF by Sam, 2026-09-10. Build in progress.** · 2026-09-10 ·
 target branch `claude/2.5d-photo-stl-s3-y0oodn`
+
+Sam signed off Parts A, B, and D and the lane plan in Part C as written, with
+no overrides. Every open question in this document takes its stated
+recommendation, including the four that change what gets built: Part A 1 (a
+crossing box does not expand managed straight lines), Part A 2 (lasso and
+brush do not expand arc runs), Part B 3 (a container-kind folder entry is
+reported as skipped, not offered as the drawer outline), and Part D 1 (one top
+sheet, with a warning when an item is deeper than it).
 
 This document is the unit for the next session, which Sam intends to run on
 Opus with ultracode. It has four parts:
