@@ -487,6 +487,44 @@ a warning with the ratio when it doesn't (counting 9 squares as 10 shows up
 as a clean 111%). If the grid is too fine or washed out to read back, it
 says so rather than staying quiet.
 
+### Selecting points in the trace editor
+
+Every cleanup tool acts on a selection, and a rectangle is the wrong shape for
+most real outlines. The **⬚ Select** tool in step 2 draws the selection in one
+of three shapes, picked in the **Selection** panel:
+
+- **Box** is the rectangle the editor has always had, now with a direction.
+  Dragged left to right it is a *window* and takes only what it fully
+  encloses. Dragged right to left it is a *crossing* box, tinted green while
+  you drag, and it also takes the whole run of any live fillet arc it touches
+  plus any hole whose rim it cuts. Plain edges and managed straight lines are
+  never selected by touch, so a crossing box over a straight run still takes
+  only the points inside it.
+- **Lasso** is a freehand loop. Everything inside the closed loop is selected,
+  and a hole counts when its centre is inside. This is the quick way to take a
+  screwdriver handle without taking the shaft next to it.
+- **Brush** paints over points with a round brush. Any point within the radius
+  of the path the cursor swept is selected, gaps between pointer events
+  included, so one fast swipe along a dense edge catches the whole edge. The
+  radius is a pixel slider, 4 to 60, and the ring under the cursor shows it at
+  the current zoom. A click with no drag is a circle select.
+
+The modifiers are the same in all three shapes: a plain drag replaces the
+selection, **Shift** adds to it, **Alt** removes from it, **Escape** clears it,
+and **Delete** removes the selected points and holes. Ctrl/⌘-click still
+toggles one point at a time, and **Shift-drag in the ✎ Edit tool** still
+selects, using whichever shape is currently picked, so the old habit keeps
+working.
+
+Holes now sit in the same selection as points. Dragging any selected point or
+hole moves the whole group. The arc and line tools stay vertex-only and stay
+disabled unless the selected points form a single run on one outline, which is
+also why the lasso and the brush never quietly extend a selection to the unseen
+end of a fillet the way a crossing box does.
+
+The sub-mode and the brush radius last for the session and go back to Box and
+12 px when the page reloads.
+
 ## Tips for good photos
 
 - Shoot from directly above, with the object roughly centred over the paper.
