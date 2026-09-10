@@ -3468,6 +3468,114 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 300));
 });
 
+// --- the folder reader: js/import/traceFolder.js ---
+
+const folder = await page.evaluate(async () => {
+  const { tracesFromFiles } = await import('/js/import/traceFolder.js');
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const mk = (path, body) => ({
+    path,
+    file: new File([typeof body === 'string' ? body : JSON.stringify(body)],
+      path.split('/').pop(), { type: 'application/json' }),
+  });
+  const project = {
+    app: '2.5D', version: 1, fileName: 'chisel',
+    regions: [{ thickness: 7.5 }],
+    trace: {
+      outer: rect(120, 240, 60, 30),
+      holes: [rect(130, 250, 10, 10)],
+      circles: [{ cx: 170, cy: 260, r: 4 }],
+    },
+    arcs: [{ i: 2, r: 6 }, { i: 3, r: 2.5 }],
+    lines: [{ a: 0, b: 1 }],
+  };
+  const library = [
+    { name: 'plane', kind: 'tool', thickness: 12, outer: rect(0, 0, 40, 20), holes: [], circles: [] },
+    { name: 'drawer', kind: 'container', outer: rect(0, 0, 400, 300), holes: [], circles: [] },
+    { name: 'square', outer: rect(50, 50, 30, 30) },
+  ];
+  const files = [
+    mk('tools/chisel.json', project),
+    mk('tools/library.json', library),
+    mk('tools/notes.txt', 'plainly not json'),
+    mk('tools/broken.json', '{ "app": "2.5D", '),
+    mk('tools/settings.json', { app: 'something-else', hello: 1 }),
+  ];
+  const progress = [];
+  const out = await tracesFromFiles(files, { onProgress: (d, t) => progress.push(d + '/' + t) });
+  // A bare File must work too; its path falls back to the file's own name.
+  const bare = await tracesFromFiles([new File([JSON.stringify(project)], 'copy.json')]);
+  const box = pts => {
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const p of pts) { a = Math.min(a, p.x); b = Math.min(b, p.y); c = Math.max(c, p.x); d = Math.max(d, p.y); }
+    return { x: a, y: b, w: c - a, h: d - b };
+  };
+  return {
+    names: out.entries.map(e => e.name),
+    kinds: out.entries.map(e => e.kind),
+    paths: out.entries.map(e => e.source.path),
+    thicknesses: out.entries.map(e => e.thickness),
+    chisel: {
+      box: box(out.entries[0].outer),
+      hole: out.entries[0].holes[0] ? box(out.entries[0].holes[0]) : null,
+      circle: out.entries[0].circles[0] || null,
+      arcs: out.entries[0].arcs,
+      lines: out.entries[0].lines,
+    },
+    squareBox: box(out.entries[2].outer),
+    skipped: out.skipped,
+    progress,
+    barePath: bare.entries.length === 1 ? bare.entries[0].source.path : null,
+  };
+});
+
+check('a folder of traces reads into one tool entry per trace, in file order',
+  folder.names.join(',') === 'chisel,plane,square' &&
+  folder.kinds.every(k => k === 'tool') &&
+  folder.paths.join(',') === 'tools/chisel.json,tools/library.json,tools/library.json',
+  `${folder.names.join(',')} / ${folder.paths.join(',')}`);
+
+check('thickness comes from regions[0] of a project and thickness of a library row, else null',
+  folder.thicknesses.length === 3 && folder.thicknesses[0] === 7.5 &&
+  folder.thicknesses[1] === 12 && folder.thicknesses[2] === null,
+  JSON.stringify(folder.thicknesses));
+
+check('outlines are origin-normalised to a 5 mm margin, with holes and circles moved with them',
+  folder.chisel.box.x === 5 && folder.chisel.box.y === 5 &&
+  folder.chisel.box.w === 60 && folder.chisel.box.h === 30 &&
+  folder.chisel.hole && folder.chisel.hole.x === 15 && folder.chisel.hole.y === 15 &&
+  folder.chisel.circle && folder.chisel.circle.cx === 55 && folder.chisel.circle.cy === 25 &&
+  folder.chisel.circle.r === 4 &&
+  folder.squareBox.x === 5 && folder.squareBox.y === 5,
+  JSON.stringify(folder.chisel.box) + ' hole ' + JSON.stringify(folder.chisel.hole) +
+  ' circle ' + JSON.stringify(folder.chisel.circle));
+
+check('arcs and lines are carried across with their indices intact',
+  JSON.stringify(folder.chisel.arcs) === JSON.stringify([{ i: 2, r: 6 }, { i: 3, r: 2.5 }]) &&
+  JSON.stringify(folder.chisel.lines) === JSON.stringify([{ a: 0, b: 1 }]),
+  JSON.stringify(folder.chisel.arcs) + ' ' + JSON.stringify(folder.chisel.lines));
+
+check('a container-kind library row is reported as skipped, not offered as a tool',
+  folder.skipped.some(s => s.reason === 'container' && s.name === 'drawer' && s.path === 'tools/library.json') &&
+  !folder.names.includes('drawer'),
+  JSON.stringify(folder.skipped));
+
+check('a .txt, a malformed .json and a JSON with no trace each get their own reason',
+  folder.skipped.length === 4 &&
+  folder.skipped.find(s => s.path === 'tools/notes.txt').reason === 'not-json' &&
+  folder.skipped.find(s => s.path === 'tools/broken.json').reason === 'parse-error' &&
+  folder.skipped.find(s => s.path === 'tools/settings.json').reason === 'not-a-trace',
+  JSON.stringify(folder.skipped));
+
+check('files are read one at a time, so a progress count can climb',
+  folder.progress.join(' ') === '1/5 2/5 3/5 4/5 5/5',
+  folder.progress.join(' '));
+
+check('a bare File is accepted as well as a { path, file } pair',
+  folder.barePath === 'copy.json', String(folder.barePath));
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {
