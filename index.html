@@ -920,6 +920,7 @@
             <option value="layered" disabled>Layered — top sheet + contrast base</option>
           </select>
         </div>
+        <p id="layConstructionWarn" class="warn" hidden></p>
         <div class="field-row">
           <div class="field">
             <label for="layClearance">Clearance (mm)</label>
@@ -928,6 +929,12 @@
           <div class="field">
             <label for="layFloor">Floor (mm)</label>
             <input type="text" inputmode="decimal" id="layFloor" value="3">
+          </div>
+        </div>
+        <div class="field-row" id="laySheetRow" hidden>
+          <div class="field">
+            <label for="laySheetTop">Sheet thickness (mm)</label>
+            <input type="text" inputmode="decimal" id="laySheetTop" value="6">
           </div>
         </div>
         <div class="field">

@@ -416,7 +416,19 @@ export function layoutConflicts(containerOuter, pockets, border) {
 // pocket recess per placed tool, each at its own depth.
 //
 // container: { outer } in layout mm; items: [{ outer, holes, circles, x, y,
-// rot, depth }]; opts: { clearance, floor, border, defaultDepth }.
+// rot, depth }]; opts: { clearance, floor, border, defaultDepth,
+// construction, sheet }.
+//
+// `construction` picks how the insert is made (PRD Part D):
+//   'pocket'  (default) — the routed / printed slab: a floor under every
+//                         tool, each pocket recessed to its own depth.
+//   'through'           — the laser-cut sheet: every pocket is a hole clean
+//                         through it, so the thickness IS `sheet` and the
+//                         per-tool depths have nothing to control.
+// Both are single watertight shells out of buildSolid; the through cut uses
+// the pockets as traced holes instead of as recesses, which is the same
+// route the single-tool foam insert already takes at floor 0. No CSG.
+//
 // Returns { positions, indices, stats, template } or null. The layout must
 // be conflict-free (run layoutConflicts first) — conflicts return null with
 // a reason in `reason`.
@@ -425,6 +437,13 @@ export function buildLayoutInsert(container, items, opts = {}) {
   if (!container || !container.outer || container.outer.length < 3) return null;
   if (!items || !items.length) return { reason: 'empty' };
   const warnings = [];
+  // 'layered' is accepted by the state but not built yet (its base layer is a
+  // later step), so it falls back to the pocket slab rather than pretending.
+  const through = opts.construction === 'through';
+  if (opts.construction === 'layered') {
+    warnings.push('The layered construction is not built yet — showing the pocket insert.');
+  }
+  const sheet = Math.max(0.5, opts.sheet || 6);
 
   const pockets = layoutPockets(items, clearance);
   const { collisions, escaped } = layoutConflicts(container.outer, pockets, border);
@@ -434,11 +453,23 @@ export function buildLayoutInsert(container, items, opts = {}) {
 
   const depths = items.map(it => Math.max(0.3, it.depth || it.thickness || defaultDepth));
   const maxDepth = Math.max(...depths);
-  const thickness = Math.max(0.5, floor) + maxDepth; // layouts always keep a floor
-  if (floor < 1) warnings.push(`Thin insert floor (${Math.max(0.5, floor).toFixed(1)} mm).`);
+  // A pocket insert keeps a floor; a through cut has none, and its thickness
+  // is whatever sheet went on the laser bed.
+  const thickness = through ? sheet : Math.max(0.5, floor) + maxDepth;
+  if (through) {
+    warnings.push(`Through cut: per-tool pocket depths are ignored — every pocket is cut clean through the ${sheet.toFixed(1)} mm sheet.`);
+    if (maxDepth > sheet + 1e-6) {
+      warnings.push(`The deepest tool wants ${maxDepth.toFixed(1)} mm but the sheet is ${sheet.toFixed(1)} mm — it will stand proud. Use a thicker sheet, or stack a second one by hand.`);
+    }
+    if (pockets.some(p => p.pillars && p.pillars.length)) {
+      warnings.push('Through cut: support pillars would float free and were dropped.');
+    }
+  } else if (floor < 1) {
+    warnings.push(`Thin insert floor (${Math.max(0.5, floor).toFixed(1)} mm).`);
+  }
 
   const none = { mode: 'none', size: 0 };
-  const recesses = pockets.map((p, i) => ({
+  const recesses = through ? [] : pockets.map((p, i) => ({
     islands: [{ outer: p.pocket, holes: p.pillars }],
     depth: depths[i], face: 'top',
   }));
@@ -454,22 +485,28 @@ export function buildLayoutInsert(container, items, opts = {}) {
     }
     const islands = glyphIslands(L.loops);
     if (!islands.length) { warnings.push('A label produced no geometry and was skipped.'); continue; }
-    const d = Math.min(Math.max(0.05, L.size || 0.6), Math.max(0.5, floor) * 0.8);
+    // An engraved label may not eat the part it is cut into: a pocket insert
+    // has only its floor to spare, a through-cut sheet half its thickness.
+    const cap = through ? sheet * 0.5 : Math.max(0.5, floor) * 0.8;
+    const d = Math.min(Math.max(0.05, L.size || 0.6), cap);
     recesses.push({ islands, depth: d, face: L.face === 'bottom' ? 'bottom' : 'top' });
   }
 
-  const mesh = buildSolid(container.outer, [], [], {
+  // The pockets are holes in a through cut and recesses in a pocket insert.
+  const mesh = buildSolid(container.outer, through ? pockets.map(p => p.pocket) : [], [], {
     thickness, zBase: 0, top: none, bottom: none, recesses,
   });
   if (!mesh) return null;
   mesh.stats.warnings = [...warnings, ...(mesh.stats.warnings || [])];
+  mesh.stats.construction = through ? 'through' : 'pocket';
   const bb = bboxOf(container.outer);
-  mesh.stats.slab = { w: bb.w, h: bb.h, thickness, pocketDepth: maxDepth };
+  mesh.stats.slab = { w: bb.w, h: bb.h, thickness, pocketDepth: through ? thickness : maxDepth };
   return {
     ...mesh,
     template: {
+      construction: through ? 'through' : 'pocket',
       slab: container.outer,
-      pockets: pockets.map(p => ({ pocket: p.pocket, pillars: p.pillars })),
+      pockets: pockets.map(p => ({ pocket: p.pocket, pillars: through ? [] : p.pillars })),
       origin: { x: bb.minX, y: bb.minY }, w: bb.w, h: bb.h,
     },
   };

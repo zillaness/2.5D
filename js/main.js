@@ -1058,9 +1058,12 @@ function rebuildHolder() {
     const cellNote = !s.cells ? ''
       : s.cells.u ? ` (${s.cells.n}×${s.cells.m} grid, ${s.cells.u}u)`
       : ` (${s.cells.count} socket${s.cells.count === 1 ? '' : 's'})`;
+    const cutThrough = isLayout && s.construction === 'through';
     $('meshInfo').textContent =
-      `${label}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}${cellNote}\n` +
-      (['plate', 'holster'].includes(state.holder.type) ? '' : `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n`) +
+      `${label}${cutThrough ? ' (through cut)' : ''}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}${cellNote}\n` +
+      (['plate', 'holster'].includes(state.holder.type) ? ''
+        : cutThrough ? `Pockets cut through the full ${fmtDimL(s.slab.thickness)} sheet\n`
+        : `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n`) +
       `Triangles: ${s.triangles}`;
     const warns = s.warnings || [];
     $('meshWarn').hidden = !warns.length;
@@ -1284,6 +1287,7 @@ function buildLayoutNow() {
       labels: layLabelsForMesh(),
       clearance: L.clearance, floor: L.floor, border: L.border,
       defaultDepth: state.regions[0].thickness,
+      construction: L.construction || 'pocket', sheet: L.sheet.top,
     });
   } catch (err) { console.error('layout build failed', err); return null; }
 }
@@ -1330,9 +1334,18 @@ function syncLayoutFields() {
   $('layClearance').value = fmtDim(L.clearance);
   $('layFloor').value = fmtDim(L.floor);
   $('layBorder').value = fmtDim(layBorderEff());
-  $('layFloor').disabled = grid;   // grid bins keep the spec base instead
-  $('layBorder').disabled = grid;  // …and enforce the bin's minimum wall
+  $('laySheetTop').value = fmtDim(L.sheet.top);
+  $('laySheetRow').hidden = grid || layConstruction() === 'pocket';
+  // A cut sheet has no floor and no per-pocket depth: the sheet is the depth.
+  $('layFloor').disabled = grid || layConstruction() !== 'pocket';
+  $('layBorder').disabled = grid;  // grid bins enforce the bin's minimum wall
   $('layRectFields').hidden = L.container.type === 'outline';
+}
+// The construction actually in force. A Gridfinity container is a printed
+// bin, so it stays a pocket build whatever the select last said.
+function layConstruction() {
+  if (state.layout.container.type === 'grid') return 'pocket';
+  return state.layout.construction || 'pocket';
 }
 function refreshLayoutEditor() {
   layoutEditor.setLayout(layContainerLoop(), state.layout.items,
@@ -1353,10 +1366,27 @@ function updateLayoutInfo() {
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
   const grid = L.container.type === 'grid';
+  const constr = layConstruction();
+  const sheetT = Math.max(0.5, L.sheet.top);
   $('layoutInfo').textContent = grid
     ? `Gridfinity ${L.container.n}×${L.container.m} (${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm) · ${n} tool${n === 1 ? '' : 's'}`
     : `Container ${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm · ${n} tool${n === 1 ? '' : 's'}` +
-      (n ? ` · insert ${fmtDimL(Math.max(0.5, L.floor) + maxD)} thick` : '');
+      (n ? constr === 'through'
+        ? ` · ${fmtDimL(sheetT)} sheet, cut through`
+        : ` · insert ${fmtDimL(Math.max(0.5, L.floor) + maxD)} thick` : '');
+  // A laser cuts the whole sheet, so the per-tool depths stop meaning
+  // anything the moment the construction leaves 'pocket'. Say so where the
+  // depths are typed, not only on the 3D preview.
+  const cw = $('layConstructionWarn');
+  const notes = [];
+  if (constr === 'through') {
+    notes.push('Through cut: per-tool pocket depths are ignored — every pocket is cut clean through the sheet.');
+    if (n && maxD > sheetT + 1e-6) {
+      notes.push(`Deepest tool wants ${fmtDimL(maxD)} but the sheet is ${fmtDimL(sheetT)} — it will stand proud.`);
+    }
+  }
+  cw.hidden = !notes.length;
+  cw.textContent = notes.join(' ');
   $('layoutWarn').hidden = !bad;
   $('layoutWarn').textContent = bad
     ? `${bad} tool${bad === 1 ? '' : 's'} in red — overlapping another pocket or crossing the border. Drag to fix.`
@@ -1474,6 +1504,12 @@ for (const [id, key, cells] of [['layW', 'w', 'n'], ['layH', 'h', 'm']]) {
     refreshLayoutEditor();
   });
 }
+$('laySheetTop').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm !== null && mm >= 0.5) state.layout.sheet.top = mm;
+  syncLayoutFields();
+  refreshLayoutEditor();
+});
 $('layConstruction').addEventListener('change', e => {
   const v = e.target.value;
   if (['pocket', 'through', 'layered'].includes(v)) state.layout.construction = v;

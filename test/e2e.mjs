@@ -2422,6 +2422,207 @@ check('a project saved before laser constructions loads as pocket',
 check('an unknown construction in a project file falls back to pocket',
   constrState.junkLoad === 'pocket', constrState.junkLoad);
 
+// The through cut itself: pockets become holes, the sheet is the thickness.
+// Volume is the real proof that a hole goes all the way through — a recess
+// of the same footprint would leave the floor behind and weigh more.
+const cutThrough = await page.evaluate(async () => {
+  const { buildLayoutInsert, layoutPockets, roundedRect } = await import('/js/holders.js');
+  const badEdges = m => {
+    const use = new Map();
+    const k = i => `${m.positions[i*3].toFixed(4)},${m.positions[i*3+1].toFixed(4)},${m.positions[i*3+2].toFixed(4)}`;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const ks = [k(m.indices[t]), k(m.indices[t+1]), k(m.indices[t+2])];
+      if (ks[0] === ks[1] || ks[1] === ks[2] || ks[0] === ks[2]) continue;
+      for (let e = 0; e < 3; e++) {
+        const a = ks[e], b = ks[(e+1)%3], key = a < b ? a+'|'+b : b+'|'+a;
+        use.set(key, (use.get(key) || 0) + 1);
+      }
+    }
+    let bad = 0;
+    for (const v of use.values()) if (v !== 2) bad++;
+    return bad;
+  };
+  const volume = m => {
+    let v = 0;
+    const P = m.positions;
+    for (let t = 0; t < m.indices.length; t += 3) {
+      const a = m.indices[t] * 3, b = m.indices[t+1] * 3, c = m.indices[t+2] * 3;
+      v += (P[a] * (P[b+1] * P[c+2] - P[c+1] * P[b+2])
+          - P[a+1] * (P[b] * P[c+2] - P[c] * P[b+2])
+          + P[a+2] * (P[b] * P[c+1] - P[c] * P[b+1])) / 6;
+    }
+    return Math.abs(v);
+  };
+  const area = pts => {
+    let a = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], q = pts[(i + 1) % pts.length];
+      a += p.x * q.y - q.x * p.y;
+    }
+    return Math.abs(a) / 2;
+  };
+  const zSet = m => {
+    const zs = new Set();
+    for (let i = 2; i < m.positions.length; i += 3) zs.add(m.positions[i].toFixed(3));
+    return [...zs].sort();
+  };
+
+  const toolOutline = [{ x: 5, y: 5 }, { x: 45, y: 5 }, { x: 45, y: 25 }, { x: 5, y: 25 }]; // 40×20
+  const mk = (x, y, rot, depth, holes) =>
+    ({ name: 't', outer: toolOutline, holes: holes || [], circles: [], x, y, rot, depth, thickness: 6 });
+  const container = { outer: roundedRect(5 + 105, 5 + 40, 210, 80, 4) }; // 210×80
+  const base = { clearance: 0.5, floor: 3, border: 5, defaultDepth: 6 };
+  const items = [mk(60, 45, 0, null), mk(150, 45, 90, 2.5)];
+
+  const cut = buildLayoutInsert(container, items, { ...base, construction: 'through', sheet: 6 });
+  const slab = buildLayoutInsert(container, items, base);
+  const pk = layoutPockets(items, 0.5);
+  const holeArea = pk.reduce((a, p) => a + area(p.pocket), 0);
+  const wantCut = (area(container.outer) - holeArea) * 6;
+
+  // Depth deeper than the sheet: built anyway, warned about.
+  const deep = buildLayoutInsert(container, [mk(60, 45, 0, 12), mk(150, 45, 90, 2.5)],
+    { ...base, construction: 'through', sheet: 6 });
+  // A tool hole would leave a pillar standing in mid-air once the floor goes.
+  const holed = mk(60, 45, 0, null, [[{ x: 15, y: 10 }, { x: 35, y: 10 }, { x: 35, y: 20 }, { x: 15, y: 20 }]]);
+  const pillared = buildLayoutInsert(container, [holed], { ...base, construction: 'through', sheet: 6 });
+  const pillarSlab = buildLayoutInsert(container, [holed], base);
+  // 'layered' is not built yet: it must fall back rather than break.
+  const layered = buildLayoutInsert(container, items, { ...base, construction: 'layered', sheet: 6 });
+
+  return {
+    ok: !!cut && !cut.reason,
+    bad: cut && cut.positions ? badEdges(cut) : -1,
+    zs: cut ? zSet(cut) : [],
+    sizeX: cut?.stats?.sizeX || 0, sizeY: cut?.stats?.sizeY || 0, sizeZ: cut?.stats?.sizeZ || 0,
+    vol: cut ? volume(cut) : 0, wantCut,
+    slabVol: slab ? volume(slab) : 0,
+    construction: cut?.stats?.construction,
+    pocketDepth: cut?.stats?.slab?.pocketDepth,
+    warns: (cut?.stats?.warnings || []).join(' | '),
+    deepWarns: (deep?.stats?.warnings || []).join(' | '),
+    pillarBad: pillared && pillared.positions ? badEdges(pillared) : -1,
+    pillarWarns: (pillared?.stats?.warnings || []).join(' | '),
+    pillarVol: pillared ? volume(pillared) : 0,
+    pillarSlabTris: pillarSlab?.stats?.triangles || 0,
+    pillarTemplate: pillared?.template?.pockets?.[0]?.pillars?.length,
+    slabTemplate: pillarSlab?.template?.pockets?.[0]?.pillars?.length,
+    layeredThick: layered?.stats?.slab?.thickness,
+    layeredWarns: (layered?.stats?.warnings || []).join(' | '),
+  };
+});
+
+check('through-cut insert builds watertight',
+  cutThrough.ok && cutThrough.bad === 0, `${cutThrough.bad} open edges`);
+check('the sheet is the thickness and the footprint is unchanged (210 × 80 × 6)',
+  near(cutThrough.sizeX, 210, 0.2) && near(cutThrough.sizeY, 80, 0.2) &&
+  near(cutThrough.sizeZ, 6, 1e-6),
+  `${cutThrough.sizeX.toFixed(1)} × ${cutThrough.sizeY.toFixed(1)} × ${cutThrough.sizeZ}`);
+check('every pocket is a hole clean through — volume matches the sheet minus the pockets',
+  Math.abs(cutThrough.vol - cutThrough.wantCut) < cutThrough.wantCut * 0.002 &&
+  cutThrough.slabVol > cutThrough.vol * 1.2,
+  `${cutThrough.vol.toFixed(0)} mm³ vs ${cutThrough.wantCut.toFixed(0)} wanted; pocket slab ${cutThrough.slabVol.toFixed(0)}`);
+check('a through cut has no intermediate floors — every vertex is on one face or the other',
+  cutThrough.zs.join(',') === '0.000,6.000', cutThrough.zs.join(','));
+check('per-item depths are ignored in a through cut, with a visible warning',
+  cutThrough.pocketDepth === 6 && /depths are ignored/.test(cutThrough.warns) &&
+  cutThrough.construction === 'through',
+  cutThrough.warns);
+check('a tool deeper than the sheet is warned about, not silently flattened',
+  /stand proud/.test(cutThrough.deepWarns) && /depths are ignored/.test(cutThrough.deepWarns),
+  cutThrough.deepWarns);
+check('support pillars are dropped from a through cut, mesh and template alike',
+  cutThrough.pillarBad === 0 && /pillars/.test(cutThrough.pillarWarns) &&
+  cutThrough.pillarTemplate === 0 && cutThrough.slabTemplate === 1,
+  `${cutThrough.pillarBad} open edges, template pillars ${cutThrough.pillarTemplate} vs ${cutThrough.slabTemplate}`);
+check('the unbuilt layered construction falls back to the pocket insert and says so',
+  cutThrough.layeredThick === 9 && /not built yet/.test(cutThrough.layeredWarns),
+  `${cutThrough.layeredThick} mm — ${cutThrough.layeredWarns}`);
+
+// The panel and the 3D preview: the select drives the build, the sheet field
+// appears, the floor field goes dead, and the warning is on screen.
+const cutUI = await page.evaluate(async () => {
+  const $ = id => document.getElementById(id);
+  const st = window.__app.state;
+  st.layout.items = [{
+    name: 'deep tool', outer: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 16 }, { x: 0, y: 16 }],
+    holes: [], circles: [], thickness: 5, depth: 12, rot: 0, x: 110, y: 55,
+  }];
+  const holder = $('holderType');
+  holder.value = 'layout';
+  holder.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 250));
+  const asPocket = {
+    sheetRow: !$('laySheetRow').hidden, floorOff: $('layFloor').disabled,
+    warn: !$('layConstructionWarn').hidden, info: $('meshInfo').textContent,
+  };
+
+  $('layConstruction').value = 'through';
+  $('layConstruction').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 400));
+  const asThrough = {
+    sheetRow: !$('laySheetRow').hidden, floorOff: $('layFloor').disabled,
+    warn: $('layConstructionWarn').hidden ? '' : $('layConstructionWarn').textContent,
+    panel: $('layoutInfo').textContent,
+    info: $('meshInfo').textContent,
+    meshWarn: $('meshWarn').hidden ? '' : $('meshWarn').textContent,
+    thick: st.holderMesh ? st.holderMesh.stats.slab.thickness : 0,
+    construction: st.holderMesh ? st.holderMesh.stats.construction : '',
+  };
+
+  // A thicker sheet flows straight into the build.
+  $('laySheetTop').value = '15';
+  $('laySheetTop').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 400));
+  const thicker = {
+    thick: st.holderMesh ? st.holderMesh.stats.slab.thickness : 0,
+    warn: $('layConstructionWarn').hidden ? '' : $('layConstructionWarn').textContent,
+  };
+
+  // Restore: pocket, default sheet, no items, no holder.
+  $('laySheetTop').value = '6';
+  $('laySheetTop').dispatchEvent(new Event('change'));
+  $('layConstruction').value = 'pocket';
+  $('layConstruction').dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  st.layout.items.length = 0;
+  window.__app.refreshLayoutEditor();
+  $('layoutModal').hidden = true;
+  holder.value = 'none';
+  holder.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 300));
+  const restored = {
+    construction: st.layout.construction, sheet: st.layout.sheet.top,
+    items: st.layout.items.length, sheetRow: !$('laySheetRow').hidden,
+    warn: !$('layConstructionWarn').hidden, floorOff: $('layFloor').disabled,
+  };
+  return { asPocket, asThrough, thicker, restored };
+});
+
+check('the sheet field and the depth warning are hidden for a pocket insert',
+  !cutUI.asPocket.sheetRow && !cutUI.asPocket.floorOff && !cutUI.asPocket.warn,
+  `sheet row ${cutUI.asPocket.sheetRow}, floor disabled ${cutUI.asPocket.floorOff}`);
+check('choosing through shows the sheet field and retires the floor field',
+  cutUI.asThrough.sheetRow && cutUI.asThrough.floorOff,
+  `sheet row ${cutUI.asThrough.sheetRow}, floor disabled ${cutUI.asThrough.floorOff}`);
+check('the panel warns in place that per-item depths are ignored',
+  /depths are ignored/.test(cutUI.asThrough.warn) && /stand proud/.test(cutUI.asThrough.warn) &&
+  /cut through/.test(cutUI.asThrough.panel),
+  `${cutUI.asThrough.warn} — ${cutUI.asThrough.panel}`);
+check('the 3D preview builds the through cut and reports the sheet, not a depth',
+  cutUI.asThrough.construction === 'through' && cutUI.asThrough.thick === 6 &&
+  /through cut/.test(cutUI.asThrough.info) && /cut through the full/.test(cutUI.asThrough.info) &&
+  /depths are ignored/.test(cutUI.asThrough.meshWarn),
+  cutUI.asThrough.info.split('\n')[0]);
+check('a thicker sheet rebuilds thicker and clears the stands-proud warning',
+  cutUI.thicker.thick === 15 && !/stand proud/.test(cutUI.thicker.warn),
+  `${cutUI.thicker.thick} mm — ${cutUI.thicker.warn}`);
+check('leaving the through cut restores the pocket panel',
+  cutUI.restored.construction === 'pocket' && cutUI.restored.sheet === 6 &&
+  cutUI.restored.items === 0 && !cutUI.restored.sheetRow && !cutUI.restored.warn &&
+  !cutUI.restored.floorOff,
+  JSON.stringify(cutUI.restored));
+
 // ---------- Gridfinity bin (holders.js) ----------
 
 const grid = await page.evaluate(async () => {
