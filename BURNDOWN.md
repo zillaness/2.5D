@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.1
+version: 1.2
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-10
@@ -85,18 +85,14 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   top of the repo's front page. Conflict flagged, not resolved: no frontmatter
   was added to README.md or docs/holders-prd.md.
 
-- **Trace-editor selection modes** (raised 2026-09-09). Today the only
-  multi-select is a Shift+drag axis-aligned box that takes vertices fully
-  inside it, direction-blind. Sam wants more. Tabled so far:
-  - Lasso (freehand organic region): **yes**, point-in-polygon against the
-    drawn path, same `_applyMarquee` shape.
-  - Brush (drag, grab any point the cursor passes over): **yes**, with an
-    adjustable brush radius. Circle select folds into this; no separate mode.
-  - Directional box (left-to-right = window/enclosed, right-to-left =
-    crossing/touched): only meaningful once the marquee selects entities with
-    extent. Sam: fillet arcs probably yes, straight segments probably not.
-    Rejected for vertices alone, where enclosed and touched are the same test.
-  Not in the labelling, nesting, or HEIC scope; needs its own PRD and unit.
+- **Sign-off on `docs/selection_modes_prd_v1.0.md`** (drafted 2026-09-10 from
+  the 2026-09-09 chat). Settled in chat: lasso yes, brush with adjustable
+  radius yes (circle select folds into it), directional box expands fillet
+  arcs on a right-to-left crossing drag but never plain segments. The PRD's
+  seven-step plan is shaped for the planned Opus + ultracode session: steps
+  2-4 (lasso, brush, directional box) are independent off step 1. Its open
+  questions 1 and 2 (crossing on managed straight lines; whether lasso and
+  brush expand arc runs) are the two that change the build; both recommend no.
 
 ## Handoff
 
@@ -128,3 +124,4 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 ## CHANGELOG
 - v1.0 (2026-09-04): Initial ledger for the 2026-09-04 burndown.
 - v1.1 (2026-09-10): Tabled trace-editor selection modes (lasso and radius brush yes, directional box open).
+- v1.2 (2026-09-10): Selection modes PRD drafted at docs/selection_modes_prd_v1.0.md; ledger entry now points at it.
