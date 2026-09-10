@@ -18,6 +18,11 @@ export class LayoutEditor {
     this.sel = -1;
     this.view = { scale: 2, ox: 0, oy: 0 };
     this.conflicts = { collisions: new Set(), escaped: new Set() };
+    // Photos inside traces: each item may carry a thumb cropped from the
+    // photo it was traced from. Decoded images are cached by data URL, so a
+    // redraw never re-decodes and a folder of a hundred tools decodes once.
+    this.showPhotos = true;
+    this._thumbs = new Map();
     this._drag = null;
     canvas.addEventListener('pointerdown', e => this._down(e));
     canvas.addEventListener('pointermove', e => this._move(e));
@@ -67,6 +72,60 @@ export class LayoutEditor {
     const pockets = layoutPockets(this.items, this.clearance);
     this.conflicts = layoutConflicts(this.container, pockets, this.border);
     this._pockets = pockets;
+  }
+
+  // The decoded thumbnail for an item, or null while it is still decoding
+  // (the load handler redraws once) or if it will never decode.
+  _thumbImage(thumb) {
+    if (!thumb || !thumb.dataUrl || typeof Image === 'undefined') return null;
+    const key = thumb.dataUrl;
+    if (this._thumbs.has(key)) {
+      const cached = this._thumbs.get(key);
+      return cached && cached.naturalWidth ? cached : null;
+    }
+    const im = new Image();
+    this._thumbs.set(key, im);
+    im.onload = () => this.draw();
+    im.onerror = () => this._thumbs.set(key, null);
+    im.src = key;
+    return im.naturalWidth ? im : null;
+  }
+
+  // The item's own outline centre: what placeLoop rotates about.
+  _itemCentre(item) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of item.outer) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  }
+
+  // The photo, clipped to the outline and carried through the item's own
+  // rotation and position, drawn at reduced alpha under everything else so
+  // the pocket stroke and the conflict tint stay legible on top of it.
+  _drawPhoto(item) {
+    const im = this._thumbImage(item.thumb);
+    if (!im) return;
+    const c = this._itemCentre(item);
+    const s = this.view.scale;
+    const { ctx } = this;
+    ctx.save();
+    ctx.translate(item.x * s + this.view.ox, item.y * s + this.view.oy);
+    ctx.rotate(((item.rot || 0) * Math.PI) / 180);
+    ctx.scale(s, s);
+    ctx.beginPath();
+    item.outer.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x - c.x, p.y - c.y); else ctx.lineTo(p.x - c.x, p.y - c.y);
+    });
+    ctx.closePath();
+    ctx.clip();
+    const o = (item.thumb.origin && Number.isFinite(item.thumb.origin.x))
+      ? item.thumb.origin : { x: 0, y: 0 };
+    const mpp = item.thumb.mmPerPx;
+    ctx.globalAlpha = 0.85;
+    ctx.drawImage(im, o.x - c.x, o.y - c.y, im.naturalWidth * mpp, im.naturalHeight * mpp);
+    ctx.restore();
   }
 
   _centroid(item) {
@@ -184,6 +243,8 @@ export class LayoutEditor {
     this.items.forEach((item, i) => {
       const conflicted = this.conflicts.collisions.has(i) || this.conflicts.escaped.has(i);
       const selected = i === this.sel;
+      // Photo first, so everything below draws over it.
+      if (this.showPhotos && item.thumb) this._drawPhoto(item);
       // Pocket (clearance) outline.
       const p = pockets[i] && pockets[i].pocket;
       if (p) {

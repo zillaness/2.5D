@@ -3972,6 +3972,213 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 300));
 });
 
+// --- photos inside traces ---
+
+const readerThumb = await page.evaluate(async () => {
+  const { tracesFromFiles } = await import('/js/import/traceFolder.js');
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  // A stand-in rectified photo: 400 x 300 px at 4 px/mm, so 100 x 75 mm.
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 300;
+  const g = c.getContext('2d');
+  g.fillStyle = '#1f3f7f'; g.fillRect(0, 0, 400, 300);
+  g.fillStyle = '#e0c060'; g.fillRect(80, 120, 240, 120);
+  g.fillStyle = '#ffffff'; g.fillRect(120, 150, 40, 40);
+  const rectified = c.toDataURL('image/jpeg', 0.85);
+  window.__photoCanvas = c;
+
+  const mk = (path, body) => ({
+    path,
+    file: new File([JSON.stringify(body)], path.split('/').pop(), { type: 'application/json' }),
+  });
+  // The outline's box is 20,30 to 80,60 mm, which is 80,120 to 320,240 px:
+  // 240 x 120, already inside the 256 px cap, so the crop is not downscaled.
+  const withPhoto = {
+    app: '2.5D', version: 1, fileName: 'photo tool',
+    regions: [{ thickness: 6 }],
+    trace: { outer: rect(20, 30, 60, 30), holes: [], circles: [] },
+    rectified, pxPerMm: 4,
+  };
+  const noPhoto = {
+    app: '2.5D', version: 1, fileName: 'bare tool',
+    regions: [{ thickness: 6 }],
+    trace: { outer: rect(20, 30, 60, 30), holes: [], circles: [] },
+  };
+  // A library row that already carries a thumb of its own, at an origin that
+  // has to move with the outline when the row is re-normalised.
+  const libRow = [{
+    name: 'saved row', kind: 'tool', thickness: 4,
+    outer: rect(100, 200, 20, 20), holes: [], circles: [],
+    thumb: { dataUrl: 'data:image/jpeg;base64,/9j/', mmPerPx: 0.5, origin: { x: 100, y: 200 } },
+  }];
+  const out = await tracesFromFiles([
+    mk('shed/photo.json', withPhoto),
+    mk('shed/bare.json', noPhoto),
+    mk('shed/rows.json', libRow),
+  ]);
+  const bare = await tracesFromFiles([mk('shed/photo.json', withPhoto)], { thumbs: false });
+  const t = out.entries[0].thumb;
+  window.__photoThumb = t;
+  return {
+    mmPerPx: t && t.mmPerPx,
+    origin: t && t.origin,
+    isJpeg: !!t && t.dataUrl.startsWith('data:image/jpeg'),
+    bytes: t ? t.dataUrl.length : -1,
+    noPhotoHasThumb: 'thumb' in out.entries[1],
+    rowThumb: out.entries[2].thumb,
+    optedOut: 'thumb' in bare.entries[0],
+  };
+});
+
+check('a project photo becomes a thumb whose mm-per-pixel and origin line up with the outline',
+  readerThumb.mmPerPx === 0.25 &&
+  readerThumb.origin.x === 5 && readerThumb.origin.y === 5 &&
+  readerThumb.isJpeg && readerThumb.bytes > 0 && readerThumb.bytes < 30 * 1024 &&
+  !readerThumb.noPhotoHasThumb && !readerThumb.optedOut,
+  `${readerThumb.mmPerPx} mm/px, origin ${JSON.stringify(readerThumb.origin)}, ${readerThumb.bytes} bytes`);
+
+check('a library row’s own thumb survives the reader, shifted with its outline',
+  readerThumb.rowThumb && readerThumb.rowThumb.mmPerPx === 0.5 &&
+  readerThumb.rowThumb.origin.x === 5 && readerThumb.rowThumb.origin.y === 5,
+  JSON.stringify(readerThumb.rowThumb && readerThumb.rowThumb.origin));
+
+// The clipped, rotated draw. One item with a photo, one without: the second
+// must not throw, and turning photos on must visibly change the canvas.
+const drawPhotos = await page.evaluate(async () => {
+  const app = window.__app;
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const items = app.state.layout.items;
+  items.length = 0;
+  items.push({
+    name: 'photo', outer: rect(5, 5, 60, 30), holes: [], circles: [],
+    thickness: 6, depth: null, rot: 20, x: 60, y: 50, thumb: window.__photoThumb,
+  });
+  items.push({
+    name: 'plain', outer: rect(5, 5, 30, 30), holes: [], circles: [],
+    thickness: 6, depth: null, rot: 0, x: 150, y: 95,
+  });
+  const ed = app.layoutEditor;
+  const canvas = document.getElementById('layoutCanvas');
+  let threw = null;
+  let off = '', on = '';
+  try {
+    ed.showPhotos = false;
+    app.refreshLayoutEditor();
+    off = canvas.toDataURL();
+    ed.showPhotos = true;
+    ed.draw();                                  // kicks off the decode
+    await new Promise(r => setTimeout(r, 500));  // the load handler redraws
+    ed.draw();
+    on = canvas.toDataURL();
+  } catch (err) { threw = String(err); }
+  return { threw, painted: off !== '' && on !== off, cached: ed._thumbs.size };
+});
+
+check('photos draw clipped into their outlines, and an item with no photo draws anyway',
+  drawPhotos.threw === null && drawPhotos.painted && drawPhotos.cached === 1,
+  `threw ${drawPhotos.threw} / changed the canvas ${drawPhotos.painted} / ${drawPhotos.cached} decoded`);
+
+const photoToggle = await page.evaluate(async () => {
+  const cb = document.getElementById('layShowPhotos');
+  const defaultOn = cb.checked && window.__app.layoutEditor.showPhotos === true;
+  cb.checked = false; cb.dispatchEvent(new Event('change'));
+  const offNow = window.__app.layoutEditor.showPhotos;
+  cb.checked = true; cb.dispatchEvent(new Event('change'));
+  const onNow = window.__app.layoutEditor.showPhotos;
+  return { defaultOn, offNow, onNow };
+});
+
+check('Show photos defaults on and drives the editor both ways',
+  photoToggle.defaultOn && photoToggle.offNow === false && photoToggle.onNow === true,
+  `default ${photoToggle.defaultOn}, off ${photoToggle.offNow}, on ${photoToggle.onNow}`);
+
+// Saving a trace to the outline library crops the photo the same way.
+const libThumb = await page.evaluate(async () => {
+  const app = window.__app;
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const libBefore = localStorage.getItem('2p5d.library.v1');
+  const rectBefore = app.state.rect;
+  const traceBefore = app.traceEditor.getTrace();
+  localStorage.setItem('2p5d.library.v1', '[]');
+  app.state.rect = { canvas: window.__photoCanvas, pxPerMm: 4 };
+  app.traceEditor.setTrace(rect(20, 30, 60, 30), []);
+  document.getElementById('libName').value = 'photo tool';
+  document.getElementById('libKind').value = 'tool';
+  document.getElementById('libSaveBtn').click();
+  const saved = JSON.parse(localStorage.getItem('2p5d.library.v1') || '[]')
+    .find(o => o.name === 'photo tool') || null;
+  // Put every borrowed piece of state back before anything else runs.
+  app.traceEditor.setTrace(traceBefore.outer, traceBefore.holes);
+  app.traceEditor.setCircles(traceBefore.circles);
+  app.state.rect = rectBefore;
+  if (libBefore === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', libBefore);
+  app.palette.refresh();
+  return {
+    had: !!saved,
+    mmPerPx: saved && saved.thumb && saved.thumb.mmPerPx,
+    origin: saved && saved.thumb && saved.thumb.origin,
+    bytes: saved && saved.thumb ? saved.thumb.dataUrl.length : -1,
+  };
+});
+
+check('saving to the outline library stores the photo cropped to the outline',
+  libThumb.had && libThumb.mmPerPx === 0.25 &&
+  libThumb.origin.x === 5 && libThumb.origin.y === 5 &&
+  libThumb.bytes > 0 && libThumb.bytes < 30 * 1024,
+  `${libThumb.mmPerPx} mm/px, origin ${JSON.stringify(libThumb.origin)}, ${libThumb.bytes} bytes`);
+
+// Near the 5 MB localStorage ceiling the photos come out rather than the save
+// failing outright; a library that is nowhere near it is left exactly alone.
+const budget = await page.evaluate(() => {
+  const app = window.__app;
+  const big = 'data:image/jpeg;base64,' + 'A'.repeat(2 * 1024 * 1024);
+  const thumb = { dataUrl: big, mmPerPx: 0.25, origin: { x: 5, y: 5 } };
+  const heavy = app.libFitThumbs([
+    { name: 'a', kind: 'tool', outer: [], thumb },
+    { name: 'b', kind: 'tool', outer: [], thumb },
+    { name: 'c', kind: 'tool', outer: [] },
+  ]);
+  const light = app.libFitThumbs([
+    { name: 'a', kind: 'tool', outer: [], thumb: { dataUrl: 'data:image/jpeg;base64,/9j/', mmPerPx: 1, origin: { x: 5, y: 5 } } },
+  ]);
+  return {
+    dropped: heavy.dropped,
+    anyLeft: heavy.list.some(o => o.thumb),
+    names: heavy.list.map(o => o.name).join(','),
+    kept: light.dropped === 0 && !!light.list[0].thumb,
+  };
+});
+
+check('past 4 MB the library is saved without photos, and a small library keeps them',
+  budget.dropped === 2 && !budget.anyLeft && budget.names === 'a,b,c' && budget.kept,
+  `${budget.dropped} photos dropped, rows ${budget.names}, small library kept ${budget.kept}`);
+
+// Leave the page as the blocks after this one expect it.
+await page.evaluate(async () => {
+  window.__app.state.layout.items.length = 0;
+  window.__app.layoutEditor.sel = -1;
+  window.__app.layoutEditor.showPhotos = true;
+  document.getElementById('layShowPhotos').checked = true;
+  window.__app.syncLaySelPanel(-1);
+  delete window.__photoThumb;
+  delete window.__photoCanvas;
+  // A trip through Step 4 repopulates every list from the restored library.
+  window.__app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  window.__app.refreshLayoutEditor();
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {

@@ -40,7 +40,7 @@ import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
 import { Viewer3D } from './viewer3d.js';
 import { importCad } from './import/cadImport.js';
-import { tracesFromFiles } from './import/traceFolder.js';
+import { tracesFromFiles, thumbFromImage } from './import/traceFolder.js';
 import {
   hasDirectoryPicker, pickFolder, walkFolder, ensurePermission,
   rememberFolder, recallFolder, writeProjectFile,
@@ -1646,6 +1646,9 @@ function layPlaceTool(src) {
     y: (minY + maxY) / 2 + Math.floor(n / 3) * 12,
   };
   if (src.source) it.source = structuredClone(src.source);
+  // The photo rides along with the copy, so a saved project shows the tools
+  // even on a machine that has never seen the folder they came from.
+  if (src.thumb) it.thumb = structuredClone(src.thumb);
   state.layout.items.push(it);
   return state.layout.items.length - 1;
 }
@@ -1708,8 +1711,13 @@ function layPaletteSaveToLibrary(entry) {
   const list = libLoad();
   const at = list.findIndex(e => e.name === o.name);
   if (at >= 0) list[at] = o; else list.push(o);
-  if (libSave(list)) { toast(`Saved \u201c${o.name}\u201d to the outline library.`); refreshLibList(); }
-  else toast('Could not save \u2014 storage is unavailable here.');
+  const fitted = libFitThumbs(list);
+  if (libSave(fitted.list)) {
+    toast(fitted.dropped
+      ? `Saved \u201c${o.name}\u201d. The library is near the browser's 5 MB limit, so it was saved without photos.`
+      : `Saved \u201c${o.name}\u201d to the outline library.`);
+    refreshLibList();
+  } else toast('Could not save \u2014 storage is unavailable here.');
 }
 
 function refreshLayPalette() {
@@ -1922,6 +1930,14 @@ $('layAddBtn').addEventListener('click', () => {
   syncLaySelPanel(i);
   refreshLayoutEditor();
 });
+// Photos inside traces. On by default: the point of the thumbnails is that
+// the drawer reads as the tools rather than as silhouettes.
+layoutEditor.showPhotos = $('layShowPhotos').checked;
+$('layShowPhotos').addEventListener('change', e => {
+  layoutEditor.showPhotos = e.target.checked;
+  layoutEditor.draw();
+});
+
 $('layRemoveBtn').addEventListener('click', () => {
   if (layoutEditor.sel < 0) return;
   state.layout.items.splice(layoutEditor.sel, 1);
@@ -3393,6 +3409,23 @@ function libLoad() {
 function libSave(list) {
   try { localStorage.setItem(LIB_KEY, JSON.stringify(list)); return true; } catch { return false; }
 }
+// localStorage holds roughly 5 MB. A 256 px thumbnail is 10 to 25 KB, so a
+// hundred tools stay under 3 MB, but a library closing on the ceiling would
+// fail its next write outright. Past 4 MB the photos come out: the outlines
+// are what the library is for, and a library without photos is exactly what
+// existed before they did.
+const LIB_WARN_BYTES = 4 * 1024 * 1024;
+function libFitThumbs(list) {
+  if (JSON.stringify(list).length <= LIB_WARN_BYTES) return { list, dropped: 0 };
+  let dropped = 0;
+  const trimmed = list.map(o => {
+    if (!o || !o.thumb) return o;
+    dropped++;
+    const { thumb, ...rest } = o;
+    return rest;
+  });
+  return { list: trimmed, dropped };
+}
 function refreshLibList() {
   const sel = $('libList');
   const cur = sel.value;
@@ -3434,11 +3467,27 @@ $('libSaveBtn').addEventListener('click', () => {
     arcs: structuredClone(traceEditor.arcs),
     lines: structuredClone(traceEditor.lines),
   };
+  // The rectified photo, cropped to this outline, so the layout editor can
+  // draw the tool rather than its silhouette.
+  if (state.rect) {
+    const t = thumbFromImage(state.rect.canvas, state.rect.pxPerMm, outer);
+    if (t) {
+      entry.thumb = {
+        dataUrl: t.dataUrl, mmPerPx: t.mmPerPx,
+        origin: { x: t.origin.x - minX + M, y: t.origin.y - minY + M },
+      };
+    }
+  }
   const list = libLoad();
   const existing = list.findIndex(o => o.name === name);
   if (existing >= 0) list[existing] = entry; else list.push(entry);
-  if (libSave(list)) { toast(`Saved “${name}” to the outline library.`); refreshLibList(); }
-  else toast('Could not save — storage is unavailable here.');
+  const fitted = libFitThumbs(list);
+  if (libSave(fitted.list)) {
+    toast(fitted.dropped
+      ? `Saved “${name}”. The library is near the browser's 5 MB limit, so it was saved without photos.`
+      : `Saved “${name}” to the outline library.`);
+    refreshLibList();
+  } else toast('Could not save — storage is unavailable here.');
 });
 
 $('libDeleteBtn').addEventListener('click', () => {
@@ -3699,6 +3748,7 @@ window.__app = {
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,
   layoutExports: { stl: layoutStlExport, svg: layoutSvgExport },
   palette: { setFolder: laySetFolder, refresh: refreshLayPalette, get folder() { return layFolder; } },
+  libFitThumbs,
   folderBackend: {
     use: layUseHandle, sync: syncFolderButtons,
     get handle() { return layFolderHandle; },
