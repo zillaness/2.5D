@@ -926,6 +926,67 @@ check('fit arc replaces a run with a smooth arc (>5 pts)',
 check('fit line straightens a run to 2 endpoints (7 -> 4 pts)',
   groupB.lineOk && groupB.lineLen === 4, `${groupB.lineLen} pts`);
 
+// ---------- 10b. Part A: selection gesture resolvers ----------
+
+// Every gesture resolver takes screen-space geometry and returns a plain
+// [{loop, idx}] list, so each one is driven here without a mouse. The fixture
+// is a 40 x 40 mm square whose corners are, in order:
+//   0 (20,20)  1 (60,20)  2 (60,60)  3 (20,60)
+
+const selA = await page.evaluate(() => {
+  const app = window.__app;
+  const te = app.traceEditor;
+  const ppm = 4;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 400; // 100 x 100 mm of trace space
+  const g = c.getContext('2d');
+  g.fillStyle = '#eee'; g.fillRect(0, 0, 400, 400);
+  app.state.rect = { canvas: c, pxPerMm: ppm };
+  app.state.diffMap = null;
+  te.setRectified(c, ppm);
+  te.setCircles([]);
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+
+  // A box over the top half of the square: corners 0 and 1, nothing else.
+  const a = S(15, 15), b = S(65, 40);
+  const topHalf = key(te._verticesInRect({ x0: a.x, y0: a.y, x1: b.x, y1: b.y }));
+
+  // The same rect drawn in the opposite corner order resolves the same way.
+  const reversed = key(te._verticesInRect({ x0: b.x, y0: b.y, x1: a.x, y1: a.y }));
+
+  // A box over the whole square takes all four.
+  const w0 = S(10, 10), w1 = S(70, 70);
+  const all = key(te._verticesInRect({ x0: w0.x, y0: w0.y, x1: w1.x, y1: w1.y }));
+
+  // Stray-click guard: a sub-3 px box leaves the selection alone.
+  te.selectedVerts = [{ loop: -1, idx: 2 }];
+  te._applyMarquee({ x0: a.x, y0: a.y, x1: a.x + 2, y1: a.y + 2 });
+  const strayKept = key(te.selectedVerts);
+
+  // A real box release replaces through the single writer.
+  te._applyMarquee({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
+  const applied = key(te.selectedVerts);
+  const clearedSingle = te.selection === null;
+
+  te.selectedVerts = [];
+  te.selection = null;
+  return { topHalf, reversed, all, strayKept, applied, clearedSingle };
+});
+
+console.log('\nPart A step 1 — rect resolver + the single selection writer');
+check('_verticesInRect returns exactly the enclosed corners',
+  selA.topHalf === '-1:0,-1:1', selA.topHalf || '(none)');
+check('_verticesInRect ignores the drag corner order', selA.reversed === '-1:0,-1:1', selA.reversed);
+check('_verticesInRect over the whole square takes all four corners',
+  selA.all === '-1:0,-1:1,-1:2,-1:3', selA.all);
+check('a sub-3 px marquee is a stray click and leaves the selection alone',
+  selA.strayKept === '-1:2', selA.strayKept || '(cleared)');
+check('_applySelection replace sets the multi-selection and clears the single one',
+  selA.applied === '-1:0,-1:1' && selA.clearedSingle, `${selA.applied}, single=${selA.clearedSingle}`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {

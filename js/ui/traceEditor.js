@@ -1263,26 +1263,71 @@ export class TraceEditor {
     this._circleResize = false;
   }
 
-  // Select every vertex whose screen position falls inside the marquee rect.
-  _applyMarquee(m) {
-    const xa = Math.min(m.x0, m.x1), xb = Math.max(m.x0, m.x1);
-    const ya = Math.min(m.y0, m.y1), yb = Math.max(m.y0, m.y1);
-    if (xb - xa < 3 && yb - ya < 3) return; // ignore a stray click
+  // ---- selection gesture resolvers ----
+  // Each resolver takes screen-space geometry and returns [{loop, idx}]
+  // without touching editor state, so a test can drive it directly.
+
+  // The one place that knows which loops can hold a selectable vertex, and
+  // how each is addressed (-1 = outer, 0..n-1 = traced hole,
+  // REGION_LOOP_BASE + s = section footprint). A new loop kind is added here.
+  _eachSelectableLoop(fn) {
+    fn(-1, this.outer);
+    for (let h = 0; h < this.holes.length; h++) fn(h, this.holes[h]);
+    for (let s = 1; s < this.sections.length; s++) {
+      if (this.sections[s].pts) fn(REGION_LOOP_BASE + s, this.sections[s].pts);
+    }
+  }
+
+  // Every vertex whose screen position falls inside the screen rect.
+  _verticesInRect(r) {
+    const xa = Math.min(r.x0, r.x1), xb = Math.max(r.x0, r.x1);
+    const ya = Math.min(r.y0, r.y1), yb = Math.max(r.y0, r.y1);
     const sel = [];
-    const scan = (loopIdx, pts) => {
+    this._eachSelectableLoop((loopIdx, pts) => {
       for (let i = 0; i < pts.length; i++) {
         const s = this._mmToScreen(pts[i]);
         if (s.x >= xa && s.x <= xb && s.y >= ya && s.y <= yb) sel.push({ loop: loopIdx, idx: i });
       }
-    };
-    scan(-1, this.outer);
-    for (let h = 0; h < this.holes.length; h++) scan(h, this.holes[h]);
-    for (let s = 1; s < this.sections.length; s++) {
-      if (this.sections[s].pts) scan(REGION_LOOP_BASE + s, this.sections[s].pts);
+    });
+    return sel;
+  }
+
+  // A rect small enough in both axes is a stray click, not a drag.
+  _rectIsStray(r) {
+    return Math.abs(r.x1 - r.x0) < 3 && Math.abs(r.y1 - r.y0) < 3;
+  }
+
+  // The only writer of the multi-selection. `result` is { verts }; `mode` is
+  // 'replace' | 'add' | 'subtract'. Dedupes by loop:idx, since a gesture can
+  // reach the same vertex twice.
+  _applySelection(result, mode = 'replace') {
+    const verts = (result && result.verts) || [];
+    let out;
+    if (mode === 'subtract') {
+      const drop = new Set(verts.map(v => this._vertKey(v)));
+      out = this.selectedVerts.filter(v => !drop.has(this._vertKey(v)));
+    } else {
+      const seen = new Set();
+      out = [];
+      const push = v => {
+        const k = this._vertKey(v);
+        if (seen.has(k)) return;
+        seen.add(k);
+        out.push({ loop: v.loop, idx: v.idx });
+      };
+      if (mode === 'add') this.selectedVerts.forEach(push);
+      verts.forEach(push);
     }
-    this.selectedVerts = sel;
+    this.selectedVerts = out;
     this.selection = null;
     this._notifySelect();
+  }
+
+  // Shift+drag box release: today's behaviour, now routed through the
+  // resolver and the single writer.
+  _applyMarquee(m) {
+    if (this._rectIsStray(m)) return; // ignore a stray click
+    this._applySelection({ verts: this._verticesInRect(m) }, 'replace');
   }
 
   // ---- edit ops ----
