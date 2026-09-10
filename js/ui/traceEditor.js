@@ -40,6 +40,9 @@ export class TraceEditor {
     this._draftRegion = null; // in-progress region polygon (mode 'region')
 
     this.mode = 'edit';      // 'edit' | 'addhole' | 'pan'
+    // Which shape a select drag draws. Shift+drag in edit mode and (later) the
+    // Select tool both go through it. 'box' is the historical behaviour.
+    this.selectSubMode = 'box'; // 'box' | 'lasso'
     this.showPoints = true;  // vertex control handles on/off
     this._placedIdx = null;  // circle being sized by a place-drag
     this._holeStart = null;
@@ -87,6 +90,7 @@ export class TraceEditor {
     this._circleResize = false; // true when dragging a hole's rim (resize)
     this._groupDrag = null;     // {start, orig:[{x,y}]} while moving a vertex group
     this._marquee = null;       // {x0,y0,x1,y1} screen rect while Shift-dragging
+    this._lasso = null;         // [{x,y}] screen path while lasso-dragging
 
     canvas.addEventListener('pointerdown', e => this._down(e));
     canvas.addEventListener('pointermove', e => this._move(e));
@@ -177,6 +181,11 @@ export class TraceEditor {
       : (mode === 'region' || mode === 'measure' || mode === 'constrain' || mode === 'label')
         ? 'crosshair' : 'default';
     if (this.cb.onPicksChanged) this.cb.onPicksChanged();
+    this.draw();
+  }
+
+  setSelectSubMode(sub) {
+    this.selectSubMode = sub;
     this.draw();
   }
 
@@ -1046,10 +1055,10 @@ export class TraceEditor {
       return;
     }
 
-    // Shift+drag on empty space starts a marquee multi-selection.
+    // Shift+drag on empty space starts a multi-selection in the current
+    // sub-mode.
     if (e.shiftKey) {
-      this._marquee = { x0: sp.x, y0: sp.y, x1: sp.x, y1: sp.y };
-      this.dragging = true;
+      this._beginSelectGesture(sp);
       return;
     }
 
@@ -1152,6 +1161,15 @@ export class TraceEditor {
       this.draw();
       return;
     }
+    // Lasso selection: every pointer position joins the path.
+    if (this.dragging && this._lasso) {
+      const last = this._lasso[this._lasso.length - 1];
+      if (!last || Math.abs(sp.x - last.x) > 0.5 || Math.abs(sp.y - last.y) > 0.5) {
+        this._lasso.push({ x: sp.x, y: sp.y });
+      }
+      this.draw();
+      return;
+    }
     // Group move of a vertex multi-selection
     if (this.dragging && this._groupDrag) {
       const mm = this._screenToMm(sp);
@@ -1226,6 +1244,18 @@ export class TraceEditor {
   }
 
   _up() {
+    if (this._lasso) {
+      const path = this._lasso;
+      this._lasso = null;
+      this.dragging = false;
+      // Too few points or too small an area is a stray click: change nothing,
+      // which leaves a plain click in lasso mode behaving like edit mode.
+      if (!this._lassoIsStray(path)) {
+        this._applySelection({ verts: this._verticesInPolygon(path) }, 'replace');
+      }
+      this.draw();
+      return;
+    }
     if (this._marquee) {
       this._applyMarquee(this._marquee);
       this._marquee = null;
@@ -1295,6 +1325,41 @@ export class TraceEditor {
   // A rect small enough in both axes is a stray click, not a drag.
   _rectIsStray(r) {
     return Math.abs(r.x1 - r.x0) < 3 && Math.abs(r.y1 - r.y0) < 3;
+  }
+
+  // Signed area of a screen-space path, in px2 (shoelace).
+  _pathAreaPx(path) {
+    let a = 0;
+    for (let i = 0, j = path.length - 1; i < path.length; j = i++) {
+      a += (path[j].x + path[i].x) * (path[j].y - path[i].y);
+    }
+    return a / 2;
+  }
+
+  // The lasso's version of the box's stray-click guard: a path that is not a
+  // polygon, or encloses under about 9 px2, means nothing.
+  _lassoIsStray(path) {
+    return !path || path.length < 3 || Math.abs(this._pathAreaPx(path)) < 9;
+  }
+
+  // Every vertex whose screen position falls inside the lasso path, which is
+  // treated as closed back to its first point.
+  _verticesInPolygon(path) {
+    if (this._lassoIsStray(path)) return [];
+    const sel = [];
+    this._eachSelectableLoop((loopIdx, pts) => {
+      for (let i = 0; i < pts.length; i++) {
+        if (pointInPolygon(this._mmToScreen(pts[i]), path)) sel.push({ loop: loopIdx, idx: i });
+      }
+    });
+    return sel;
+  }
+
+  // Start whichever select drag the current sub-mode calls for.
+  _beginSelectGesture(sp) {
+    if (this.selectSubMode === 'lasso') this._lasso = [{ x: sp.x, y: sp.y }];
+    else this._marquee = { x0: sp.x, y0: sp.y, x1: sp.x, y1: sp.y };
+    this.dragging = true;
   }
 
   // The only writer of the multi-selection. `result` is { verts }; `mode` is
@@ -2134,6 +2199,32 @@ export class TraceEditor {
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 3]);
       ctx.strokeRect(x, y, w, h);
+      ctx.setLineDash([]);
+    }
+
+    // Lasso path: the polygon so far, plus a faint dashed closing segment.
+    if (this._lasso && this._lasso.length > 1) {
+      const p = this._lasso;
+      const trace = () => {
+        ctx.beginPath();
+        ctx.moveTo(p[0].x, p[0].y);
+        for (let i = 1; i < p.length; i++) ctx.lineTo(p[i].x, p[i].y);
+      };
+      trace();
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(83, 169, 255, 0.12)';
+      ctx.fill();
+      ctx.strokeStyle = '#53a9ff';
+      ctx.lineWidth = 1;
+      trace();
+      ctx.stroke();
+      ctx.setLineDash([3, 4]);
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      ctx.moveTo(p[p.length - 1].x, p[p.length - 1].y);
+      ctx.lineTo(p[0].x, p[0].y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
       ctx.setLineDash([]);
     }
 

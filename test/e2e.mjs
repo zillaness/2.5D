@@ -987,6 +987,67 @@ check('a sub-3 px marquee is a stray click and leaves the selection alone',
 check('_applySelection replace sets the multi-selection and clears the single one',
   selA.applied === '-1:0,-1:1' && selA.clearedSingle, `${selA.applied}, single=${selA.clearedSingle}`);
 
+const selLasso = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const path = mm => mm.map(([x, y]) => S(x, y));
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+
+  // A triangle over the top of the square catches corners 0 and 1 only.
+  const tri = path([[5, 5], [75, 5], [40, 45]]);
+  const triSel = key(te._verticesInPolygon(tri));
+
+  // Under the area guard: a 2.8 x 2.8 px square sitting right on corner 0.
+  const c0 = S(20, 20);
+  const tiny = [
+    { x: c0.x - 1.4, y: c0.y - 1.4 }, { x: c0.x + 1.4, y: c0.y - 1.4 },
+    { x: c0.x + 1.4, y: c0.y + 1.4 }, { x: c0.x - 1.4, y: c0.y + 1.4 },
+  ];
+  const tinySel = key(te._verticesInPolygon(tiny));
+  const tinyArea = Math.abs(te._pathAreaPx(tiny));
+  const twoPtSel = key(te._verticesInPolygon([S(5, 5), S(75, 5)]));
+
+  // Driving the gesture: a stray lasso leaves the selection alone, a real one
+  // replaces it.
+  te.selectedVerts = [{ loop: -1, idx: 2 }];
+  te._lasso = tiny.slice();
+  te._up();
+  const strayKept = key(te.selectedVerts);
+  te._lasso = tri.slice();
+  te._up();
+  const gestureSel = key(te.selectedVerts);
+  const lassoCleared = te._lasso === null && te.dragging === false;
+
+  // Concave: a C opening to the right, with vertex 2 sitting in its mouth.
+  te.setTrace([
+    { x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 40 },
+    { x: 60, y: 60 }, { x: 20, y: 60 },
+  ], []);
+  const cShape = path([
+    [10, 10], [70, 10], [70, 30], [40, 30], [40, 50], [70, 50], [70, 70], [10, 70],
+  ]);
+  const cSel = key(te._verticesInPolygon(cShape));
+
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+  te.selectedVerts = [];
+  te.selection = null;
+  return { triSel, tinySel, tinyArea, twoPtSel, strayKept, gestureSel, lassoCleared, cSel };
+});
+
+console.log('\nPart A step 2 — lasso');
+check('a triangle lasso takes the two corners it encloses',
+  selLasso.triSel === '-1:0,-1:1', selLasso.triSel || '(none)');
+check('a lasso under the ~9 px2 area guard resolves to nothing',
+  selLasso.tinySel === '' && selLasso.tinyArea < 9, `area ${selLasso.tinyArea.toFixed(2)} px2, got "${selLasso.tinySel}"`);
+check('a lasso with fewer than 3 points resolves to nothing', selLasso.twoPtSel === '');
+check('a stray lasso release changes nothing', selLasso.strayKept === '-1:2', selLasso.strayKept);
+check('a lasso release replaces the selection and ends the gesture',
+  selLasso.gestureSel === '-1:0,-1:1' && selLasso.lassoCleared, selLasso.gestureSel);
+check('a concave C lasso excludes the vertex in its mouth',
+  selLasso.cSel === '-1:0,-1:1,-1:3,-1:4', selLasso.cSel || '(none)');
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
