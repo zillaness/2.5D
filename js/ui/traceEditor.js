@@ -115,6 +115,9 @@ export class TraceEditor {
     this._lasso = null;         // [{x,y}] screen path while lasso-dragging
     this._brush = null;         // [{x,y}] swept screen path while brush-dragging
     this._hoverPx = null;       // last pointer position, for the brush ring
+    // Which way the in-flight select gesture will be applied. Read from the
+    // modifier keys at pointerdown, because _up sees no event.
+    this._selectGestureMode = 'replace';
 
     canvas.addEventListener('pointerdown', e => this._down(e));
     canvas.addEventListener('pointermove', e => this._move(e));
@@ -1021,12 +1024,17 @@ export class TraceEditor {
     const vHit = this._hitVertex(sp);
     const cHit = vHit ? null : this._hitCircle(sp);
 
-    if (e.button === 2 || e.altKey) {
+    // Right-click or Alt+click deletes what is under the cursor. In the Select
+    // tool that branch is skipped: Alt is the subtract modifier there, and the
+    // tool's whole job is selecting. Deleting is still Delete on the group, or
+    // a right-click back in Edit mode.
+    if ((e.button === 2 || e.altKey) && this.mode !== 'select') {
       if (vHit) { this._deleteVertex(vHit); return; }
       if (cHit) { this._deleteCircle(cHit.idx); return; }
       this.panning = true;
       return;
     }
+    if (e.button === 2) { this.panning = true; return; }
 
     // Ctrl/Cmd+click on a vertex toggles it in the multi-selection.
     if (vHit && (e.ctrlKey || e.metaKey)) {
@@ -1087,9 +1095,10 @@ export class TraceEditor {
     }
 
     // Shift+drag on empty space starts a multi-selection in the current
-    // sub-mode.
+    // sub-mode. In Edit mode it keeps the meaning every hint and README line
+    // gives it, replace; in the Select tool the modifiers choose.
     if (e.shiftKey) {
-      this._beginSelectGesture(sp);
+      this._beginSelectGesture(sp, this.mode === 'select' ? this._gestureSelectMode(e) : 'replace');
       return;
     }
 
@@ -1329,7 +1338,7 @@ export class TraceEditor {
       this._applySelection({
         verts: this._verticesNearPath(path, this.brushRadiusPx),
         circles: this._circlesInGesture('brush', { path, r: this.brushRadiusPx }),
-      }, 'replace');
+      }, this._takeGestureMode());
       this.draw();
       return;
     }
@@ -1339,17 +1348,18 @@ export class TraceEditor {
       this.dragging = false;
       // Too few points or too small an area is a stray click: change nothing,
       // which leaves a plain click in lasso mode behaving like edit mode.
+      const mode = this._takeGestureMode();
       if (!this._lassoIsStray(path)) {
         this._applySelection({
           verts: this._verticesInPolygon(path),
           circles: this._circlesInGesture('lasso', path),
-        }, 'replace');
+        }, mode);
       }
       this.draw();
       return;
     }
     if (this._marquee) {
-      this._applyMarquee(this._marquee);
+      this._applyMarquee(this._marquee, this._takeGestureMode());
       this._marquee = null;
       this.dragging = false;
       this.draw();
@@ -1447,8 +1457,27 @@ export class TraceEditor {
     return sel;
   }
 
+  // How a gesture will be applied, from the modifier keys held at pointerdown.
+  // The same map for every sub-mode: plain drag replaces, Shift adds, Alt
+  // subtracts. Alt wins when both are down, since subtracting is the rarer
+  // intent and the one a user reaches for deliberately.
+  _gestureSelectMode(e) {
+    if (e && e.altKey) return 'subtract';
+    if (e && e.shiftKey) return 'add';
+    return 'replace';
+  }
+
+  // Read the stashed mode once, at release, and go back to replace so a
+  // cancelled or stray gesture cannot leak its modifier into the next one.
+  _takeGestureMode() {
+    const m = this._selectGestureMode || 'replace';
+    this._selectGestureMode = 'replace';
+    return m;
+  }
+
   // Start whichever select drag the current sub-mode calls for.
-  _beginSelectGesture(sp) {
+  _beginSelectGesture(sp, mode = 'replace') {
+    this._selectGestureMode = mode;
     if (this.selectSubMode === 'lasso') this._lasso = [{ x: sp.x, y: sp.y }];
     else if (this.selectSubMode === 'brush') this._brush = [{ x: sp.x, y: sp.y }];
     else this._marquee = { x0: sp.x, y0: sp.y, x1: sp.x, y1: sp.y };

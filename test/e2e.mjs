@@ -1268,6 +1268,128 @@ check('Delete removes the selected holes and clears the multi-selection',
   selBox.leftCount === 1 && selBox.leftCx === 70 && selBox.clearedAfterDelete === 0,
   `${selBox.leftCount} left, first at ${selBox.leftCx}`);
 
+const selMod = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const topTri = () => [S(5, 5), S(75, 5), S(40, 45)];   // encloses corners 0 and 1
+  const wholeSheet = () => [S(5, 5), S(75, 5), S(75, 75), S(5, 75)];
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+
+  // The modifier map, the same for every sub-mode.
+  const modes = [
+    te._gestureSelectMode({}),
+    te._gestureSelectMode({ shiftKey: true }),
+    te._gestureSelectMode({ altKey: true }),
+    te._gestureSelectMode({ altKey: true, shiftKey: true }),
+  ].join(',');
+
+  // Lasso replace, then brush add: the union.
+  te._lasso = topTri();
+  te._up();
+  const afterLasso = key(te.selectedVerts);
+  te.setBrushRadius(4);
+  te._selectGestureMode = 'add';
+  te._brush = [S(20, 60)];
+  te._up();
+  const afterAdd = key(te.selectedVerts);
+
+  // Then Alt-lasso over the same two corners: the difference.
+  te._selectGestureMode = 'subtract';
+  te._lasso = topTri();
+  te._up();
+  const afterSub = key(te.selectedVerts);
+
+  // Overlapping gestures never duplicate.
+  te._lasso = wholeSheet();
+  te._up();
+  const allCount = te.selectedVerts.length;
+  te._selectGestureMode = 'add';
+  te._lasso = wholeSheet();
+  te._up();
+  const dupCount = te.selectedVerts.length;
+
+  // The modifier is consumed at release, so the next gesture is a plain
+  // replace even though the one before it added.
+  te._lasso = topTri();
+  te._up();
+  const afterConsumed = key(te.selectedVerts);
+
+  // Subtract takes holes out of the selection too.
+  te.setCircles([{ cx: 40, cy: 40, d: 10, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } }]);
+  te._clearMulti();
+  te._lasso = [S(30, 30), S(50, 30), S(50, 50), S(30, 50)];
+  te._up();
+  const holeIn = te.selectedCircles.join(',');
+  te._selectGestureMode = 'subtract';
+  te._lasso = [S(30, 30), S(50, 30), S(50, 50), S(30, 50)];
+  te._up();
+  const holeOut = te.selectedCircles.join(',');
+
+  // Alt+click deletes a vertex in Edit mode, and is skipped in Select mode.
+  te.setCircles([]);
+  te._clearMulti();
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, o) => Object.assign({
+    pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false,
+  }, o || {});
+
+  te.setTrace(square(), []);
+  te.mode = 'edit';
+  te._down(ev(S(20, 20), { altKey: true }));
+  te._up();
+  const editDeleted = te.outer.length;
+
+  te.setTrace(square(), []);
+  te.mode = 'select';
+  te._down(ev(S(20, 20), { altKey: true }));
+  te._up();
+  const selectKept = te.outer.length;
+
+  te.mode = 'edit';
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te.setBrushRadius(12);
+  te._clearMulti();
+  te.selection = null;
+  te._selectGestureMode = 'replace';
+  return {
+    modes, afterLasso, afterAdd, afterSub, allCount, dupCount, afterConsumed,
+    holeIn, holeOut, editDeleted, selectKept,
+  };
+});
+
+console.log('\nPart A step 5 — add and subtract modifiers');
+check('drag replaces, Shift adds, Alt subtracts (Alt wins when both are down)',
+  selMod.modes === 'replace,add,subtract,subtract', selMod.modes);
+check('a lasso replace followed by a brush add is the union',
+  selMod.afterLasso === '-1:0,-1:1' && selMod.afterAdd === '-1:0,-1:1,-1:3',
+  `${selMod.afterLasso} then ${selMod.afterAdd}`);
+check('an Alt lasso over the same corners leaves the difference',
+  selMod.afterSub === '-1:3', selMod.afterSub || '(empty)');
+check('overlapping gestures never duplicate a vertex',
+  selMod.allCount === 4 && selMod.dupCount === 4,
+  `${selMod.allCount} then ${selMod.dupCount}`);
+check('the modifier is consumed at release, so the next gesture replaces',
+  selMod.afterConsumed === '-1:0,-1:1', selMod.afterConsumed);
+check('subtract takes holes out of the selection too',
+  selMod.holeIn === '0' && selMod.holeOut === '', `"${selMod.holeIn}" then "${selMod.holeOut}"`);
+check('Alt+click deletes a vertex in Edit mode and is skipped in Select mode',
+  selMod.editDeleted === 3 && selMod.selectKept === 4,
+  `edit ${selMod.editDeleted} pts, select ${selMod.selectKept} pts`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
