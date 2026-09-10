@@ -3381,6 +3381,79 @@ check('the drawer-insert holder type on Step 3 jumps to Step 4 instead of openin
   jump.step === 4 && jump.type === 'layout' && jump.panel3Hidden && jump.panel4Shown && jump.controlsShown,
   `step ${jump.step}, holder ${jump.type}`);
 
+// The Step 4 export row: the same shared functions, whichever row calls them.
+await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 220, h: 140, name: null };
+  app.state.layout.items.length = 0;
+  const outline = [{ x: 5, y: 5 }, { x: 65, y: 5 }, { x: 65, y: 35 }, { x: 5, y: 35 }];
+  app.state.layout.items.push(
+    { name: 'spanner', outer: outline, holes: [], circles: [], x: 60, y: 40, rot: 0, depth: 4, thickness: 5 },
+    { name: 'pliers', outer: outline, holes: [], circles: [], x: 60, y: 100, rot: 0, depth: 4, thickness: 5 });
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 300));
+});
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#layExportBtn'),
+  ]);
+  check('Step 4 exports the insert STL from its own row',
+    !!dl && /-drawer-2p5d\.stl$/.test(dl.suggestedFilename()),
+    dl ? dl.suggestedFilename() : 'no download event');
+}
+const tilesGate = await page.evaluate(() => ({
+  noBed: document.getElementById('layExportTilesBtn').disabled,
+}));
+let step4Svg = '';
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#layExportSvgBtn'),
+  ]);
+  const fp = dl ? await dl.path().catch(() => null) : null;
+  step4Svg = fp ? fs.readFileSync(fp, 'utf8') : '';
+  // One cut path, evenodd: the container slab plus a subpath per pocket.
+  const subpaths = (step4Svg.match(/M /g) || []).length;
+  check('Step 4 exports the cut template SVG from its own row',
+    !!dl && /-drawer-template\.svg$/.test(dl.suggestedFilename()) &&
+    /width="220mm" height="140mm"/.test(step4Svg) && subpaths === 3,
+    dl ? `${dl.suggestedFilename()}, ${subpaths} subpaths` : 'no download event');
+}
+// The same state, exported through the shared function from Step 3, has to
+// come out byte for byte the same — one code path, two rows.
+const step3Svg = await page.evaluate(async () => {
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 200));
+  const out = window.__app.layoutExports.svg('auto');
+  return out ? await out.blob.text() : '';
+});
+check('an SVG exported from Step 4 is byte-identical to the one Step 3 produces',
+  step4Svg.length > 0 && step4Svg === step3Svg,
+  step4Svg === step3Svg ? `${step4Svg.length} bytes both ways`
+    : `${step4Svg.length} vs ${step3Svg.length} bytes`);
+
+// Tiled SVG: off with no bed, on once the layout outgrows one.
+const tilesUI = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 550, h: 380, name: null };
+  const bed = document.getElementById('layBed');
+  bed.value = '300x200';
+  bed.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 250));
+  return { enabled: !document.getElementById('layExportTilesBtn').disabled };
+});
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#layExportTilesBtn'),
+  ]);
+  check('the tiled SVG button is dead without a bed and live once the layout outgrows one',
+    tilesGate.noBed && tilesUI.enabled && !!dl && /-drawer-tiles-2x2\.svg$/.test(dl.suggestedFilename()),
+    `no bed disabled ${tilesGate.noBed}, over bed enabled ${tilesUI.enabled}, ${dl ? dl.suggestedFilename() : 'no download'}`);
+}
+
 // Leave the page as the blocks after this one expect it: no holder, no items,
 // no bed, back on Step 3.
 await page.evaluate(async () => {

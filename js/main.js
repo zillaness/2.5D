@@ -1368,6 +1368,7 @@ function updateLayoutInfo() {
   const bed = layBedDims();
   const bw = maxX - minX, bh = maxY - minY;
   const bedEl = $('layBedInfo');
+  let tiled = false; // drives the explicit tiled-SVG button in the export row
   if (!bed) {
     bedEl.textContent = '';
   } else if (bw <= bed.w + 1e-6 && bh <= bed.h + 1e-6) {
@@ -1378,6 +1379,7 @@ function updateLayoutInfo() {
       slab: loop, pockets: layoutPocketsForPlan(), origin: { x: minX, y: minY }, w: bw, h: bh,
     }, bed.w, bed.h, layTileOpts());
     const tiles = plan ? plan.tiles.length : 0;
+    tiled = !!plan;
     bedEl.textContent = plan
       ? `Larger than the bed — the cut template exports as ${tiles} tiles (${plan.nx} × ${plan.ny})` +
         (plan.crossings ? `, ${plan.crossings} seam${plan.crossings === 1 ? '' : 's'} through a pocket (no clear line available)` : ', seams clear of every pocket') +
@@ -1389,6 +1391,7 @@ function updateLayoutInfo() {
           : '');
     bedEl.className = 'hint';
   }
+  $('layExportTilesBtn').disabled = !tiled;
   updateLabelInfo();
   if (state.holder.type === 'layout') rebuildHolder();
 }
@@ -1730,35 +1733,56 @@ $('layPreviewBtn').addEventListener('click', () => {
   goStep(3);
   rebuildHolder();
 });
-$('layExportBtn').addEventListener('click', () => {
+// ---------- layout export, shared by every row that offers it ----------
+// These are the bodies the layout export buttons used to carry inline. They
+// build and name the file but do not deliver it, so any row can offer the
+// same export and every row produces the same bytes.
+function layoutStlExport() {
   const res = buildLayoutNow();
-  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the insert.'); return; }
+  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the insert.'); return null; }
   const grid = state.layout.container.type === 'grid';
   const bed = layBedDims();
   if (bed && res.stats && res.stats.slab && (res.stats.slab.w > bed.w + 1e-6 || res.stats.slab.h > bed.h + 1e-6)) {
     toast(`Heads up: this is ${fmtDim(res.stats.slab.w)} × ${fmtDim(res.stats.slab.h)}, larger than the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed. The STL exports whole — STL tiling isn't available yet; the cut template splits into tiles.`, 7000);
   }
-  const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} ${grid ? 'gridfinity' : 'drawer'}`);
-  deliverExport(blob, `${state.fileName}-${grid ? 'bin' : 'drawer'}-2p5d.stl`);
-});
-$('layExportSvgBtn').addEventListener('click', () => {
+  return {
+    blob: toBinarySTL(res.positions, res.indices, `${state.fileName} ${grid ? 'gridfinity' : 'drawer'}`),
+    name: `${state.fileName}-${grid ? 'bin' : 'drawer'}-2p5d.stl`,
+  };
+}
+// mode 'auto' tiles only when the layout is larger than the bed, which is what
+// the single Template SVG button has always done. mode 'tiles' is the explicit
+// tiled button and declines when there is nothing to tile.
+function layoutSvgExport(mode = 'auto') {
   const res = buildLayoutNow();
-  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return; }
-  if (!res.template) { toast('Template SVG is for flat drawer inserts (foam cutting) — export the bin as STL.'); return; }
+  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return null; }
+  if (!res.template) { toast('Template SVG is for flat drawer inserts (foam cutting) — export the bin as STL.'); return null; }
   const plan = layTilePlan(res);
   if (plan) {
-    deliverExport(toTiledSVG(plan.tiles, { name: state.fileName }),
-      `${state.fileName}-drawer-tiles-${plan.nx}x${plan.ny}.svg`);
-    toast(`Exported ${plan.tiles.length} tiles for the ${fmtDim(layBedDims().w)} × ${fmtDim(layBedDims().h)} bed — cut one per bed load (labels A1, A2… mark the drawer position).`, 6500);
-    return;
+    const bed = layBedDims();
+    toast(`Exported ${plan.tiles.length} tiles for the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed — cut one per bed load (labels A1, A2… mark the drawer position).`, 6500);
+    return {
+      blob: toTiledSVG(plan.tiles, { name: state.fileName }),
+      name: `${state.fileName}-drawer-tiles-${plan.nx}x${plan.ny}.svg`,
+    };
+  }
+  if (mode === 'tiles') {
+    toast('This layout already fits the bed in one piece — use Template SVG.');
+    return null;
   }
   const T = res.template;
   const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
   const holes = T.pockets.flatMap(p => [shift(p.pocket), ...p.pillars.map(shift)]);
   const blob = toSVG(shift(T.slab), holes, T.w, T.h,
     { engrave: layLabelLoops().map(shift) });
-  deliverExport(blob, `${state.fileName}-drawer-template.svg`);
-});
+  return { blob, name: `${state.fileName}-drawer-template.svg` };
+}
+function deliverLayoutExport(out) {
+  if (out) deliverExport(out.blob, out.name);
+}
+$('layExportBtn').addEventListener('click', () => deliverLayoutExport(layoutStlExport()));
+$('layExportSvgBtn').addEventListener('click', () => deliverLayoutExport(layoutSvgExport('auto')));
+$('layExportTilesBtn').addEventListener('click', () => deliverLayoutExport(layoutSvgExport('tiles')));
 
 // ---------- wiring: step 1 ----------
 
@@ -3411,6 +3435,7 @@ window.__app = {
   backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,
+  layoutExports: { stl: layoutStlExport, svg: layoutSvgExport },
   serializeProject, loadProject,
   get viewer() { return viewer; },
 };
