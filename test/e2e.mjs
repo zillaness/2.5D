@@ -1819,6 +1819,78 @@ check('deleting the selected hole itself empties the selection',
   selStale.selfCount === 0 && selStale.selfLeft === '25,40',
   `${selStale.selfCount} selected, holes ${selStale.selfLeft}`);
 
+const selDraw = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const proto = CanvasRenderingContext2D.prototype;
+  const realArc = proto.arc;
+  let radii = [];
+  proto.arc = function (x, y, r, a0, a1, ccw) { radii.push(r); return realArc.call(this, x, y, r, a0, a1, ccw); };
+  // VERT_R is 4.5, so a selected handle is 6.5 and a plain one 4.5.
+  const shot = () => {
+    radii = [];
+    te.draw();
+    return `${radii.filter(r => Math.abs(r - 6.5) < 1e-6).length}/` +
+           `${radii.filter(r => Math.abs(r - 4.5) < 1e-6).length}`;
+  };
+
+  te.setMode('edit');
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+  te._clearMulti();
+  te.selection = null;
+  te.showPoints = true;
+  te.selectedVerts = [{ loop: -1, idx: 0 }, { loop: -1, idx: 1 }];
+
+  const edit = shot();
+  te.setMode('select');
+  te.setSelectSubMode('box');
+  const selBox = shot();
+  te.setSelectSubMode('lasso');
+  const selLasso = shot();
+  te.setSelectSubMode('brush');
+  const selBrush = shot();
+
+  // Mid-gesture, while a lasso is being drawn, the points are still there to
+  // aim at: the same handles are painted under the lasso overlay.
+  te.setSelectSubMode('lasso');
+  const S = (x, y) => te._mmToScreen({ x, y });
+  te._beginSelectGesture(S(10, 10), 'replace');
+  te._lasso.push({ x: S(70, 10).x, y: S(70, 10).y }, { x: S(70, 70).x, y: S(70, 70).y });
+  const midGesture = shot();
+  te._lasso = null;
+  te.dragging = false;
+
+  // Hiding the handles still hides them, and a mode that does not edit points
+  // (region) still draws none.
+  te.showPoints = false;
+  const hidden = shot();
+  te.showPoints = true;
+  te.setMode('region');
+  const region = shot();
+
+  proto.arc = realArc;
+  te.setMode('edit');
+  te.setSelectSubMode('box');
+  te._clearMulti();
+  te.selection = null;
+  te.setTrace(square(), []);
+  return { edit, selBox, selLasso, selBrush, midGesture, hidden, region };
+});
+
+console.log('\nPart A step 6 — the Select tool draws the handles it selects');
+check('the Select tool paints the vertex handles in every sub-mode',
+  selDraw.selBox === '2/2' && selDraw.selLasso === '2/2' && selDraw.selBrush === '2/2',
+  `box ${selDraw.selBox}, lasso ${selDraw.selLasso}, brush ${selDraw.selBrush} (selected/plain)`);
+check('one selection renders the same in the Select tool as in Edit',
+  selDraw.edit === selDraw.selBox, `edit ${selDraw.edit}, select ${selDraw.selBox}`);
+check('the handles are on screen during the gesture, not only after release',
+  selDraw.midGesture === '2/2', selDraw.midGesture);
+check('hiding the points, and a mode that does not edit points, still draw none',
+  selDraw.hidden === '0/0' && selDraw.region === '0/0',
+  `hidden ${selDraw.hidden}, region ${selDraw.region}`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {

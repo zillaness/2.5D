@@ -2361,7 +2361,11 @@ export class TraceEditor {
       ctx.lineWidth = loopSelected ? 3 : 2;
       ctx.stroke();
 
-      const showVerts = this.mode === 'edit' && this.showPoints && s * this.pxPerMm > 0.5;
+      // Handles are drawn in the Select tool too: it is the one mode whose
+      // whole job is picking points, so the user needs to see both the points
+      // to aim at and the blue highlight on the ones the gesture resolved.
+      const showVerts = (this.mode === 'edit' || this.mode === 'select') &&
+        this.showPoints && s * this.pxPerMm > 0.5;
       if (!showVerts) return;
       for (let i = 0; i < pts.length; i++) {
         const p = this._mmToScreen(pts[i]);
