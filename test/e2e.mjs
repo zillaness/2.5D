@@ -1682,6 +1682,72 @@ check('the same number of points as a run away from the origin still fits an arc
   selWrap.runRun === true && typeof selWrap.runArc === 'number' && selWrap.runKeepsEnds,
   `hasMultiRun=${selWrap.runRun}, radius ${selWrap.runArc}, vertex 0 untouched=${selWrap.runKeepsEnds}`);
 
+const selRim = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = sp => ({ pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false });
+  const drag = (from, to) => { te._down(ev(from)); te._move(ev(to)); te._up(); };
+  const fixture = multi => {
+    te.setMode('edit');
+    te.setTrace(square(), []);
+    te.setCircles([hole(40, 40, 10)]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+    if (multi) { te.selectedVerts = [{ loop: -1, idx: 0 }]; te.selectedCircles = [0]; }
+  };
+
+  // The rim of a 10 mm hole at (40, 40) sits 5 mm out from its centre.
+  const rimRegion = (fixture(false), te._hitCircle(S(45, 40)).region);
+
+  fixture(false);
+  drag(S(45, 40), S(50, 40));
+  const aloneD = te.circles[0].d, aloneCx = te.circles[0].cx;
+
+  // The same press with the hole in a multi-selection still resizes, and
+  // leaves the co-selected vertex where it was.
+  fixture(true);
+  const multiRegion = te._hitCircle(S(45, 40)).region;
+  drag(S(45, 40), S(50, 40));
+  const multiD = te.circles[0].d, multiCx = te.circles[0].cx;
+  const multiVert = te.outer[0].x;
+
+  // Pressing the interior of the same hole is still the group handle.
+  fixture(true);
+  drag(S(40, 40), S(45, 40));
+  const moveD = te.circles[0].d, moveCx = te.circles[0].cx;
+  const moveVert = te.outer[0].x;
+
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return { rimRegion, multiRegion, aloneD, aloneCx, multiD, multiCx, multiVert,
+    moveD, moveCx, moveVert };
+});
+
+console.log('\nPart A step 4 — the rim of a selected hole still resizes it');
+check('a rim drag resizes the hole whether or not it is in a multi-selection',
+  selRim.rimRegion === 'resize' && selRim.multiRegion === 'resize' &&
+  Math.abs(selRim.aloneD - 20) < 1e-6 && Math.abs(selRim.multiD - 20) < 1e-6 &&
+  Math.abs(selRim.multiCx - 40) < 1e-6 && Math.abs(selRim.multiVert - 20) < 1e-6,
+  `alone d ${selRim.aloneD}, in a selection d ${selRim.multiD} at cx ${selRim.multiCx}, vertex ${selRim.multiVert}`);
+check('pressing the interior of a selected hole still drags the whole group',
+  Math.abs(selRim.moveD - 10) < 1e-6 && Math.abs(selRim.moveCx - 45) < 1e-6 &&
+  Math.abs(selRim.moveVert - 25) < 1e-6,
+  `d ${selRim.moveD}, hole at ${selRim.moveCx}, vertex ${selRim.moveVert}`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {

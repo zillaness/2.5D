@@ -1086,8 +1086,9 @@ export class TraceEditor {
       return;
     }
     if (cHit) {
-      if (this._circleInMulti(cHit.idx) && this._multiCount() > 1) {
-        // A selected hole is a group handle too.
+      if (cHit.region !== 'resize' && this._circleInMulti(cHit.idx) && this._multiCount() > 1) {
+        // A selected hole is a group handle too, by its interior: pressing the
+        // rim keeps meaning resize, the way it does for an unselected hole.
         this.pushUndo();
         this._beginGroupDrag(this._screenToMm(sp));
         return;
