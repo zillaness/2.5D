@@ -1539,11 +1539,17 @@ export class TraceEditor {
     return sel;
   }
 
-  // A hole in screen space: centre and bore-rim radius in px.
+  // A hole in screen space: centre, bore-rim radius, and the radius of the
+  // outermost ring drawn for it (a countersink, counterbore, or edge
+  // treatment), all in px. The outer ring is what the user sees and what
+  // _hitCircle already treats as part of the hole, so the gestures measure it
+  // too. For a plain through hole the two radii are equal.
   _circleScreen(c) {
+    const k = this.pxPerMm * this.vp.scale;
     return {
       c: this._mmToScreen({ x: c.cx, y: c.cy }),
-      r: (c.d / 2) * this.pxPerMm * this.vp.scale,
+      r: (c.d / 2) * k,
+      rOuter: (this._holeMaxDia(c) / 2) * k,
     };
   }
 
@@ -1598,25 +1604,32 @@ export class TraceEditor {
   //   'brush'    the swept path comes within the radius of the rim or centre
   // `geom` is the rect for the two box kinds, the path for a lasso, and
   // { path, r } for the brush.
+  // "The disc" is the hole as it is drawn: a recessed or edge-broken hole
+  // reaches out to _holeMaxDia, so enclosure is measured against that ring and
+  // either drawn ring counts as a rim. Otherwise the gestures would answer for
+  // a circle the user cannot see, and disagree with _hitCircle about which
+  // pixels belong to the hole.
   _circlesInGesture(kind, geom) {
     const out = [];
     if (!geom) return out;
     for (let i = 0; i < this.circles.length; i++) {
-      const { c, r } = this._circleScreen(this.circles[i]);
+      const { c, r, rOuter } = this._circleScreen(this.circles[i]);
       let take = false;
       if (kind === 'window' || kind === 'crossing') {
         const xa = Math.min(geom.x0, geom.x1), xb = Math.max(geom.x0, geom.x1);
         const ya = Math.min(geom.y0, geom.y1), yb = Math.max(geom.y0, geom.y1);
-        take = c.x - r >= xa && c.x + r <= xb && c.y - r >= ya && c.y + r <= yb;
+        take = c.x - rOuter >= xa && c.x + rOuter <= xb &&
+          c.y - rOuter >= ya && c.y + rOuter <= yb;
         if (!take && kind === 'crossing') {
-          // The rim meets the box when the box's nearest point to the centre
-          // is inside the disc and its farthest point is outside it.
+          // A rim meets the box when the box's nearest point to the centre is
+          // inside that ring and its farthest point is outside it.
           const nx = Math.max(xa, Math.min(xb, c.x)), ny = Math.max(ya, Math.min(yb, c.y));
           const near = Math.hypot(nx - c.x, ny - c.y);
           const far = Math.max(
             Math.hypot(xa - c.x, ya - c.y), Math.hypot(xb - c.x, ya - c.y),
             Math.hypot(xa - c.x, yb - c.y), Math.hypot(xb - c.x, yb - c.y));
-          take = near <= r && far >= r;
+          const cuts = rr => near <= rr && far >= rr;
+          take = cuts(r) || cuts(rOuter);
         }
       } else if (kind === 'lasso') {
         take = !this._lassoIsStray(geom) && pointInPolygon(c, geom);
@@ -1628,9 +1641,9 @@ export class TraceEditor {
           const dmin = pointSegDist(c, a, b).d;
           const dmax = Math.max(Math.hypot(a.x - c.x, a.y - c.y), Math.hypot(b.x - c.x, b.y - c.y));
           // Distances from the centre along the segment cover [dmin, dmax], so
-          // the gap to the rim circle is 0 when that span straddles r.
-          const toRim = dmin <= r && r <= dmax ? 0 : (r < dmin ? dmin - r : r - dmax);
-          take = dmin <= rb || toRim <= rb;
+          // the gap to a rim circle is 0 when that span straddles its radius.
+          const toRim = rr => (dmin <= rr && rr <= dmax ? 0 : (rr < dmin ? dmin - rr : rr - dmax));
+          take = dmin <= rb || toRim(r) <= rb || toRim(rOuter) <= rb;
         }
       }
       if (take) out.push(i);

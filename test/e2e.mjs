@@ -2034,6 +2034,95 @@ check('a selection with a gap round the index origin is still not a run',
   selWhole.wrapRun === false && selWhole.wrapDensified === false && selWhole.afterWrap === 16,
   `run=${selWhole.wrapRun}, densify=${selWhole.wrapDensified}, ${selWhole.afterWrap} points`);
 
+const selRecess = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 5, y: 5 }, { x: 75, y: 5 }, { x: 75, y: 75 }, { x: 5, y: 75 }];
+  const hole = (cx, cy, d, extra) => Object.assign({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } }, extra || {});
+  const fixture = c => {
+    te.setMode('edit');
+    te.setTrace(square(), []);
+    te.setCircles([c]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+  const box = (x0, y0, x1, y1) => {
+    const a = S(x0, y0), b = S(x1, y1);
+    te._applyMarquee({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
+    return te.selectedCircles.join(',');
+  };
+
+  // A counterbored M3-style hole: a 5 mm bore inside a 20 mm counterbore, so
+  // the hole is drawn 20 mm across and _hitCircle picks up that outer ring.
+  fixture(hole(40, 40, 5, { type: 'cb', cbDia: 20 }));
+  const maxDia = te._holeMaxDia(te.circles[0]);
+  const scr = te._circleScreen(te.circles[0]);
+  const outerRatio = scr.rOuter / scr.r;
+  const ringRegion = te._hitCircle(S(50, 40)).region;
+
+  // A window box that stays inside the counterbore and encloses only the bore
+  // does not enclose the hole the user sees, so it must not take it.
+  const boreWindow = box(36, 36, 44, 44);
+  // Left to right round the whole 20 mm ring does enclose it.
+  const wholeWindow = box(28, 28, 52, 52);
+  // A right-to-left band across the visible ring at x = 50, well clear of the
+  // bore, cuts a rim the user can see.
+  const ringCross = box(52, 35, 48, 45);
+  // The same band left to right encloses nothing, so it takes nothing.
+  const ringWindow = box(48, 35, 52, 45);
+  // The bore rim is still a rim: a crossing box over it keeps working.
+  const boreCross = box(44, 36, 36, 44);
+  // A brush stroke painted along the visible ring picks the hole up.
+  const brushRing = te._circlesInGesture('brush',
+    { path: [S(50, 35), S(50, 45)], r: 3 }).join(',');
+  // A stroke in the empty annulus between bore and ring reaches neither rim.
+  const brushGap = te._circlesInGesture('brush',
+    { path: [S(45, 40)], r: 3 }).join(',');
+
+  // A plain through hole with a 2 mm top chamfer is drawn 9 mm across.
+  fixture(hole(40, 40, 5, { edgeTop: { mode: 'chamfer', size: 2 } }));
+  const chamferMax = te._holeMaxDia(te.circles[0]);
+  const chamferWindow = box(36, 36, 44, 44);
+  const chamferWhole = box(33, 33, 47, 47);
+
+  // A plain through hole is unchanged: bore and outer ring are the same circle.
+  fixture(hole(40, 40, 10));
+  const plainSame = te._circleScreen(te.circles[0]).rOuter === te._circleScreen(te.circles[0]).r;
+  const plainWindow = box(33, 33, 47, 47);
+  const plainClip = box(30, 30, 40, 40);
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return { maxDia, outerRatio, ringRegion, boreWindow, wholeWindow, ringCross,
+    ringWindow, boreCross, brushRing, brushGap,
+    chamferMax, chamferWindow, chamferWhole, plainSame, plainWindow, plainClip };
+});
+
+console.log('\nPart A step 4 — a gesture measures the hole that is drawn, not the bore alone');
+check('a window box inside the counterbore does not take the hole it clips',
+  selRecess.maxDia === 20 && Math.abs(selRecess.outerRatio - 4) < 1e-9 &&
+  selRecess.ringRegion === 'resize' && selRecess.boreWindow === '' &&
+  selRecess.wholeWindow === '0',
+  `⌀${selRecess.maxDia} drawn, bore window "${selRecess.boreWindow}", whole "${selRecess.wholeWindow}"`);
+check('a crossing box across the drawn recess ring takes the hole',
+  selRecess.ringCross === '0' && selRecess.ringWindow === '' && selRecess.boreCross === '0',
+  `ring crossing "${selRecess.ringCross}", ring window "${selRecess.ringWindow}", bore crossing "${selRecess.boreCross}"`);
+check('the brush takes a hole by its drawn rim, not only by its bore',
+  selRecess.brushRing === '0' && selRecess.brushGap === '',
+  `on the ring "${selRecess.brushRing}", in the annulus "${selRecess.brushGap}"`);
+check('a chamfered through hole is measured over its chamfer',
+  selRecess.chamferMax === 9 && selRecess.chamferWindow === '' && selRecess.chamferWhole === '0',
+  `⌀${selRecess.chamferMax} drawn, bore window "${selRecess.chamferWindow}", whole "${selRecess.chamferWhole}"`);
+check('a plain through hole is unaffected: bore and drawn rim are one circle',
+  selRecess.plainSame && selRecess.plainWindow === '0' && selRecess.plainClip === '',
+  `same=${selRecess.plainSame}, enclosed "${selRecess.plainWindow}", clipped "${selRecess.plainClip}"`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
