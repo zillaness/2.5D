@@ -2021,13 +2021,7 @@ function layPaletteSaveToLibrary(entry) {
   const list = libLoad();
   const at = list.findIndex(e => e.name === o.name);
   if (at >= 0) list[at] = o; else list.push(o);
-  const fitted = libFitThumbs(list);
-  if (libSave(fitted.list)) {
-    toast(fitted.dropped
-      ? `Saved \u201c${o.name}\u201d. The library is near the browser's 5 MB limit, so it was saved without photos.`
-      : `Saved \u201c${o.name}\u201d to the outline library.`);
-    refreshLibList();
-  } else toast('Could not save \u2014 storage is unavailable here.');
+  libSaveFitted(list, o.name);
 }
 
 function refreshLayPalette() {
@@ -3742,6 +3736,38 @@ function libSave(list) {
 // are what the library is for, and a library without photos is exactly what
 // existed before they did.
 const LIB_WARN_BYTES = 4 * 1024 * 1024;
+// Writing the library back, with the 4 MB warning the photos need. The trim
+// is not the entry being saved: `libFitThumbs` takes the photo off EVERY row
+// that has one, and for a row saved from a live trace the library was the
+// only copy. So the warning comes before the write and the choice is the
+// user's, which is what "offers to save without thumbnails" asks for.
+// Declining keeps every photo and writes the library as it stands.
+function libSaveFitted(list, name) {
+  const fitted = libFitThumbs(list);
+  const saved = () => { refreshLibList(); };
+  if (!fitted.dropped) {
+    if (libSave(list)) { toast(`Saved “${name}” to the outline library.`); saved(); }
+    else toast('Could not save — storage is unavailable here.');
+    return;
+  }
+  const drop = confirm(
+    `The outline library is close to the browser's 5 MB limit, and saving it whole may not fit.\n\n` +
+    `OK: save it without photos. That takes the photo off all ${fitted.dropped} ` +
+    `entr${fitted.dropped === 1 ? 'y' : 'ies'} that have one, not just “${name}”, and cannot be undone. ` +
+    `The outlines are kept.\n\n` +
+    'Cancel: keep every photo and save anyway.');
+  if (drop) {
+    if (libSave(fitted.list)) {
+      toast(`Saved “${name}”. The library was near the browser's 5 MB limit, so all ${fitted.dropped} photos in it came out.`, 6000);
+      saved();
+    } else toast('Could not save — storage is unavailable here.');
+    return;
+  }
+  if (libSave(list)) {
+    toast(`Saved “${name}” with its photo. The library is near the browser's 5 MB limit, so the next save may not fit.`, 6000);
+    saved();
+  } else toast('Could not save with the photos kept — the library is past what this browser will store. Save again and let the photos come out.', 7000);
+}
 function libFitThumbs(list) {
   if (JSON.stringify(list).length <= LIB_WARN_BYTES) return { list, dropped: 0 };
   let dropped = 0;
@@ -3808,13 +3834,7 @@ $('libSaveBtn').addEventListener('click', () => {
   const list = libLoad();
   const existing = list.findIndex(o => o.name === name);
   if (existing >= 0) list[existing] = entry; else list.push(entry);
-  const fitted = libFitThumbs(list);
-  if (libSave(fitted.list)) {
-    toast(fitted.dropped
-      ? `Saved “${name}”. The library is near the browser's 5 MB limit, so it was saved without photos.`
-      : `Saved “${name}” to the outline library.`);
-    refreshLibList();
-  } else toast('Could not save — storage is unavailable here.');
+  libSaveFitted(list, name);
 });
 
 $('libDeleteBtn').addEventListener('click', () => {

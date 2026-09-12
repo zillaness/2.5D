@@ -5028,6 +5028,66 @@ check('a tool sitting on a seam is picked and dragged, not the plate under it',
   seamTool.onPlate.bedSel === true && seamTool.onPlate.sel === -1 && seamTool.onPlate.kind === 'bed',
   `press ${JSON.stringify(seamTool.picked)}, tool x ${seamTool.after.x} offset ${JSON.stringify(seamTool.after.off)}, plate ${JSON.stringify(seamTool.onPlate)}`);
 
+// Past 4 MB the photos come out of the WHOLE library, not just the entry being
+// saved, and for a row saved from a live trace that was the only copy. So the
+// save handler offers the trim and the user can decline: Cancel keeps every
+// photo that is already stored.
+const libConsent = await page.evaluate(async () => {
+  const app = window.__app;
+  const rect = (x, y, w, h) => [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  const libBefore = localStorage.getItem('2p5d.library.v1');
+  const rectBefore = app.state.rect;
+  const traceBefore = app.traceEditor.getTrace();
+  // A library the app itself would have written: five photographed tools, each
+  // save under the line until this one pushes the total over it.
+  const thumb = () => ({
+    dataUrl: 'data:image/jpeg;base64,' + 'A'.repeat(850 * 1024), mmPerPx: 0.25, origin: { x: 5, y: 5 },
+  });
+  const seed = () => localStorage.setItem('2p5d.library.v1', JSON.stringify(
+    ['one', 'two', 'three', 'four', 'five'].map(n => ({
+      name: n, kind: 'tool', thickness: 5, outer: rect(5, 5, 40, 20),
+      holes: [], circles: [], thumb: thumb(),
+    }))));
+  // The new outline carries no photo of its own, so every byte it costs the
+  // library is outline, and every photo it would destroy is somebody else's.
+  app.state.rect = null;
+  app.traceEditor.setTrace(rect(20, 30, 60, 30), []);
+  document.getElementById('libName').value = 'one more';
+  document.getElementById('libKind').value = 'tool';
+  const realConfirm = window.confirm;
+  const run = answer => {
+    seed();
+    let asked = 0, text = '';
+    window.confirm = msg => { asked++; text = String(msg); return answer; };
+    document.getElementById('libSaveBtn').click();
+    const list = JSON.parse(localStorage.getItem('2p5d.library.v1') || '[]');
+    return {
+      asked, text, n: list.length,
+      photos: list.filter(o => o.thumb).length,
+      saved: list.some(o => o.name === 'one more'),
+    };
+  };
+  const declined = run(false);
+  const accepted = run(true);
+  window.confirm = realConfirm;
+  app.traceEditor.setTrace(traceBefore.outer, traceBefore.holes);
+  app.traceEditor.setCircles(traceBefore.circles);
+  app.state.rect = rectBefore;
+  if (libBefore === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', libBefore);
+  app.palette.refresh();
+  return { declined, accepted };
+});
+
+check('a library past 4 MB is offered the trim, and declining keeps every photo it holds',
+  libConsent.declined.asked === 1 && libConsent.declined.photos === 5 &&
+  libConsent.declined.n === 6 && libConsent.declined.saved &&
+  /all 5 entries/.test(libConsent.declined.text) && /cannot be undone/.test(libConsent.declined.text) &&
+  libConsent.accepted.asked === 1 && libConsent.accepted.photos === 0 &&
+  libConsent.accepted.n === 6 && libConsent.accepted.saved,
+  `declined: asked ${libConsent.declined.asked}, ${libConsent.declined.photos} photos of 5 kept, ` +
+  `${libConsent.declined.n} rows; accepted: ${libConsent.accepted.photos} photos, ${libConsent.accepted.n} rows`);
+
 // Leave the container as the blocks after this one expect it.
 await page.evaluate(async () => {
   const app = window.__app;
