@@ -4573,6 +4573,44 @@ check('a drawer that fits the plate but hangs off its edge is warned about, not 
   plateOver.far.cls === 'warn' && !plateOver.far.plan && plateOver.far.btn === true,
   `on ${plateOver.on.cls}/${plateOver.on.btn}, over ${plateOver.over.cls}/${plateOver.over.btn}/${plateOver.over.name}: ${plateOver.over.info}`);
 
+// Auto-centre on a layout the plate cannot hold whole has only one honest
+// answer on the oversized axis, which is zero: the seams cannot follow a
+// negative offset, so the button must never write one and then be named as
+// the cure for it.
+const plateCentreBig = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  const centre = async (w, h) => {
+    app.state.layout.container = { ...app.state.layout.container, type: 'rect', w, h, r: 6, name: null };
+    app.refreshLayoutEditor();
+    document.getElementById('layBedCentreBtn').click();
+    await new Promise(r => setTimeout(r, 150));
+    const el = document.getElementById('layBedInfo');
+    const plan = app.bed.plan();
+    return {
+      off: app.bed.offset(), cls: el.className, info: el.textContent,
+      x0: plan ? plan.tiles.map(t => t.x0) : null,
+    };
+  };
+  const both = await centre(400, 300);
+  const oneAxis = await centre(400, 100);
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.refreshLayoutEditor();
+  return { both, oneAxis };
+});
+
+check('Auto-centre on a layout larger than the plate never writes an offset the seams ignore',
+  plateCentreBig.both.off.x === 0 && plateCentreBig.both.off.y === 0 &&
+  plateCentreBig.both.cls === 'hint' && !/offset is negative/.test(plateCentreBig.both.info) &&
+  plateCentreBig.both.x0 && plateCentreBig.both.x0.length === 4 &&
+  plateCentreBig.oneAxis.off.x === 0 && plateCentreBig.oneAxis.off.y === 50 &&
+  plateCentreBig.oneAxis.cls === 'hint' && !/offset is negative/.test(plateCentreBig.oneAxis.info),
+  `both ${JSON.stringify(plateCentreBig.both.off)} ${plateCentreBig.both.cls}, one axis ${JSON.stringify(plateCentreBig.oneAxis.off)} ${plateCentreBig.oneAxis.cls}`);
+
 // Leave the plate as the blocks after this one expect it: no bed, no shape,
 // no offset, nothing placed, back on Step 3.
 await page.evaluate(async () => {

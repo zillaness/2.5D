@@ -1646,9 +1646,13 @@ function layBedCentre() {
   const bed = layBedDims();
   if (!bed) return false;
   const box = layBox(layContainerLoop());
+  // Never negative. The tiling window can only start at or before the layout,
+  // so an axis where the layout is larger than the plate centres at zero: a
+  // negative offset there is dropped by `laySplitWithOffset` and would leave
+  // the readout warning about the button the user just pressed.
   state.layout.bed.offset = {
-    x: Math.round((bed.w - box.w) / 2 * 1000) / 1000,
-    y: Math.round((bed.h - box.h) / 2 * 1000) / 1000,
+    x: Math.max(0, Math.round((bed.w - box.w) / 2 * 1000) / 1000),
+    y: Math.max(0, Math.round((bed.h - box.h) / 2 * 1000) / 1000),
   };
   return true;
 }
