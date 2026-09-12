@@ -4846,6 +4846,55 @@ check('the measured scale round-trips, defaults to 1 : 1 in an older project, an
   knownSave.hiddenForRect && knownSave.cleared.x === 1 && knownSave.info === '',
   `back ${JSON.stringify(knownSave.back)}, legacy ${JSON.stringify(knownSave.old)}, hidden ${knownSave.hiddenForRect}`);
 
+// A hand-edited or third-party-written project can carry a scale factor that
+// is not a number. That is not a measurement, so it loads as 1 : 1 per axis
+// rather than throwing Step 4 open half-built.
+const scaleBad = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }],
+    scale: { x: 1, y: 2 },
+  };
+  const clean = JSON.parse(app.serializeProject(false));
+  const open4 = async () => {
+    let threw = null;
+    try {
+      app.goStep(3);
+      await new Promise(r => setTimeout(r, 200));
+      app.goStep(4);
+      await new Promise(r => setTimeout(r, 250));
+    } catch (e) { threw = String(e); }
+    return {
+      threw, scale: { ...app.state.layout.container.scale },
+      hidden: document.getElementById('layoutModal').hidden,
+      info: document.getElementById('layoutInfo').textContent,
+      scaleInfo: document.getElementById('layScaleInfo').textContent,
+    };
+  };
+  const load = async scale => {
+    const p = JSON.parse(JSON.stringify(clean));
+    p.layout.container.scale = scale;
+    await app.loadProject(p);
+    return open4();
+  };
+  return {
+    text: await load({ x: '2', y: 2 }),
+    nul: await load({ x: null, y: 2 }),
+    good: await load({ x: 1.05, y: 2 }),
+  };
+});
+
+check('a project whose container scale is not a number loads as 1 : 1 and still opens Step 4',
+  scaleBad.text.threw === null && scaleBad.text.scale.x === 1 && scaleBad.text.scale.y === 2 &&
+  scaleBad.text.hidden === false && /Container/.test(scaleBad.text.info) &&
+  /×1\.000 across and ×2\.000 down/.test(scaleBad.text.scaleInfo) &&
+  scaleBad.nul.threw === null && scaleBad.nul.scale.x === 1 && scaleBad.nul.scale.y === 2 &&
+  scaleBad.nul.hidden === false && /Container/.test(scaleBad.nul.info) &&
+  scaleBad.good.scale.x === 1.05 && scaleBad.good.scale.y === 2 && scaleBad.good.hidden === false,
+  `string ${JSON.stringify(scaleBad.text.scale)} threw ${scaleBad.text.threw}, null ${JSON.stringify(scaleBad.nul.scale)} threw ${scaleBad.nul.threw}, good ${JSON.stringify(scaleBad.good.scale)}`);
+
 // Leave the container as the blocks after this one expect it.
 await page.evaluate(async () => {
   const app = window.__app;

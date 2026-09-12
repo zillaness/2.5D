@@ -1377,6 +1377,14 @@ function syncLayoutFields() {
 // when the two axes disagree by more than 2 percent — which is usually a
 // mis-traced edge rather than the warp the per-axis scale is there to absorb.
 const SCALE_DIVERGENCE = 0.02;
+// A scale pair as it comes out of a project file. Anything that is not a
+// positive finite number is not a measurement, so it reads as 1 : 1 the way
+// `layBedOffset` reads the plate offset, rather than reaching the readout and
+// throwing Step 4 open half-built.
+function laySafeScale(s) {
+  const n = v => (Number.isFinite(v) && v > 0 ? v : 1);
+  return { x: n(s && s.x), y: n(s && s.y) };
+}
 function syncScaleInfo() {
   const el = $('layScaleInfo');
   const c = state.layout.container;
@@ -3523,8 +3531,10 @@ function loadProject(p) {
       container: {
         ...state.layout.container, ...(p.layout.container || {}),
         // Defaulted, not inherited: a project saved before Known width existed
-        // must land on 1 : 1 rather than on whatever was last measured here.
-        scale: { x: 1, y: 1, ...((p.layout.container && p.layout.container.scale) || {}) },
+        // must land on 1 : 1 rather than on whatever was last measured here,
+        // and a hand-edited factor that is not a number is not a measurement
+        // either, so it lands there too instead of throwing at the readout.
+        scale: laySafeScale(p.layout.container && p.layout.container.scale),
       },
       items: structuredClone(p.layout.items),
       clearance: p.layout.clearance ?? state.layout.clearance,
