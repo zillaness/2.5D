@@ -2894,6 +2894,27 @@ check('unticking the base-label option moves the labels back to the top sheet',
     names.length === 2 && names.some(n => /-top-2p5d\.stl$/.test(n)) &&
     names.some(n => /-base-2p5d\.stl$/.test(n)),
     names.join(', ') || 'no download event');
+  // The recovery links are the only way out of a view that blocks the
+  // programmatic saves, so a two-part export has to leave both files
+  // clickable — not just the last one written.
+  const recover = await page.evaluate(async () => {
+    const $ = id => document.getElementById(id);
+    const links = [$('exportFallbackLink'), ...$('exportFallbackExtra').querySelectorAll('a')];
+    const out = [];
+    for (const a of links) {
+      let size = -1;
+      try { size = (await (await fetch(a.href)).blob()).size; } catch { size = -1; }
+      out.push({ name: a.download, size });
+    }
+    return { shown: !$('exportFallback').hidden, named: $('exportFallbackName').textContent, links: out };
+  });
+  const liveTop = recover.links.find(l => /-top-2p5d\.stl$/.test(l.name));
+  const liveBase = recover.links.find(l => /-base-2p5d\.stl$/.test(l.name));
+  check('both parts of a layered export keep a live recovery link',
+    recover.shown && recover.links.length === 2 &&
+    !!liveTop && liveTop.size > 0 && !!liveBase && liveBase.size > 0 &&
+    /-top-2p5d\.stl$/.test(recover.named),
+    recover.links.map(l => `${l.name} ${l.size}b`).join(', ') || 'no links');
 }
 // The cut template for a layered build: two sheets, the through-cut top and
 // the contrast base, and the label artwork split between them. Exercised on
@@ -3008,6 +3029,15 @@ await page.evaluate(async () => {
     dl ? `${dl.suggestedFilename()}: base ${txt.includes('id="base"')}, ` +
       `base-engrave ${txt.includes('id="base-engrave"')}, top engrave ${txt.includes('id="engrave"')}`
       : 'no download event');
+  // One file this time: the extra links from the two-part STL export before
+  // it are gone, so the recovery paragraph never offers a stale download.
+  const single = await page.evaluate(() => ({
+    named: document.getElementById('exportFallbackName').textContent,
+    extra: document.getElementById('exportFallbackExtra').querySelectorAll('a').length,
+  }));
+  check('a single-file export leaves only its own recovery link',
+    single.extra === 0 && /-drawer-template\.svg$/.test(single.named),
+    `${single.named}, ${single.extra} extra link(s)`);
 }
 await page.evaluate(async () => {
   const $ = id => document.getElementById(id);

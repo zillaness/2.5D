@@ -1852,10 +1852,12 @@ $('layExportBtn').addEventListener('click', () => {
   // own. Every other construction is one part and keeps its old filename.
   const parts = res.parts && res.parts.length > 1 ? res.parts : null;
   if (parts) {
-    for (const p of parts) {
-      deliverExport(toBinarySTL(p.positions, p.indices, `${state.fileName} drawer ${p.name}`),
-        `${state.fileName}-${p.name}-2p5d.stl`);
-    }
+    // One delivery for the whole set: every part keeps its own recovery link,
+    // so a view that blocks the programmatic saves still hands over both.
+    deliverExports(parts.map(p => ({
+      blob: toBinarySTL(p.positions, p.indices, `${state.fileName} drawer ${p.name}`),
+      filename: `${state.fileName}-${p.name}-2p5d.stl`,
+    })));
     toast(`Exported ${parts.length} files (${parts.map(p => `${p.name}`).join(', ')}) — cut both, then glue the top sheet onto the base.`, 6500);
     return;
   }
@@ -2878,20 +2880,41 @@ bindSlider('arcSlider', 'arcVal', v => v.toFixed(0) + ' seg', v => {
   });
 })();
 
-// Trigger the download and keep a live fallback link the user can click
+// Trigger the downloads and keep live fallback links the user can click
 // directly — a plain user-gesture click on a real anchor is the most widely
 // permitted download path, and if even that does nothing the surrounding
 // message explains the environment is blocking downloads.
-let fallbackURL = null;
-function deliverExport(blob, filename) {
-  downloadBlob(blob, filename);
-  if (fallbackURL) URL.revokeObjectURL(fallbackURL);
-  fallbackURL = URL.createObjectURL(blob);
-  const link = $('exportFallbackLink');
-  link.href = fallbackURL;
-  link.download = filename;
-  $('exportFallbackName').textContent = filename;
+// One export can be several files: a layered build is a through-cut top sheet
+// and a contrast base, and both have to stay clickable. Each file keeps its
+// own live URL until the next export replaces the whole group, so no file of
+// a multi-part export is dropped from the recovery path.
+let fallbackURLs = [];
+function deliverExports(files) {
+  for (const url of fallbackURLs) URL.revokeObjectURL(url);
+  fallbackURLs = [];
+  const extra = $('exportFallbackExtra');
+  extra.textContent = '';
+  files.forEach(({ blob, filename }, i) => {
+    downloadBlob(blob, filename);
+    const url = URL.createObjectURL(blob);
+    fallbackURLs.push(url);
+    if (i === 0) {
+      const link = $('exportFallbackLink');
+      link.href = url;
+      link.download = filename;
+      $('exportFallbackName').textContent = filename;
+    } else {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.textContent = filename;
+      extra.append(' Also save ', a, '.');
+    }
+  });
   $('exportFallback').hidden = false;
+}
+function deliverExport(blob, filename) {
+  deliverExports([{ blob, filename }]);
 }
 
 $('exportStlBtn').addEventListener('click', () => {
