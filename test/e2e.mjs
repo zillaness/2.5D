@@ -1973,6 +1973,67 @@ check('a missed Ctrl+click neither drags a traced hole nor resizes a drilled one
 check('Edit mode keeps the edge insert that Ctrl+drag has there today',
   selCtrl.editCount === 5, `${selCtrl.editCount} points`);
 
+const selWhole = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const ring = (n, r) => Array.from({ length: n }, (_, i) => {
+    const a = (i / n) * Math.PI * 2;
+    return { x: 40 + r * Math.cos(a), y: 40 + r * Math.sin(a) };
+  });
+  const fixture = n => {
+    te.setMode('edit');
+    te.setTrace(ring(n, 20), []);
+    te.setCircles([]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+  const selectAll = () => {
+    te.selectedVerts = te.outer.map((_, i) => ({ loop: -1, idx: i }));
+  };
+
+  // A box round the entire trace: every vertex of the one loop, no gap.
+  fixture(16);
+  selectAll();
+  const allRun2 = te.hasMultiRun(2), allRun3 = te.hasMultiRun(3);
+  const span = te._selectionSpan(2);
+  const spanKey = span ? `${span.lo}..${span.hi}` : null;
+  const densified = te.densifySelection();
+  const afterDensify = te.outer.length;
+
+  fixture(16);
+  selectAll();
+  const v0 = { ...te.outer[0] };
+  const reduced = te.simplifySelection(2);
+  const afterReduce = te.outer.length;
+  const keptEnd = Math.abs(te.outer[0].x - v0.x) < 1e-9 && Math.abs(te.outer[0].y - v0.y) < 1e-9;
+
+  // A selection that really does wrap the index origin still reports no run:
+  // it holds vertex 0 and vertex n-1 but has a gap in the middle.
+  fixture(16);
+  te.selectedVerts = [0, 1, 14, 15].map(i => ({ loop: -1, idx: i }));
+  const wrapRun = te.hasMultiRun(2);
+  const wrapDensified = te.densifySelection();
+  const afterWrap = te.outer.length;
+
+  fixture(16);
+  return { allRun2, allRun3, spanKey, densified, afterDensify,
+    reduced, afterReduce, keptEnd, wrapRun, wrapDensified, afterWrap };
+});
+
+console.log('\nPart A step 2 — a selection of the whole loop is still one run');
+check('every vertex of one loop reports a run, so Densify and Reduce stay live',
+  selWhole.allRun2 === true && selWhole.allRun3 === true && selWhole.spanKey === '0..15',
+  `run2=${selWhole.allRun2}, run3=${selWhole.allRun3}, span ${selWhole.spanKey}`);
+check('Densify over a box round the whole outline adds a midpoint per edge',
+  selWhole.densified === true && selWhole.afterDensify === 31,
+  `${selWhole.densified}, 16 -> ${selWhole.afterDensify}`);
+check('Reduce over the whole outline thins it and keeps the end points',
+  selWhole.reduced === true && selWhole.afterReduce < 16 && selWhole.afterReduce >= 2 &&
+  selWhole.keptEnd, `${selWhole.reduced}, 16 -> ${selWhole.afterReduce}, ends kept=${selWhole.keptEnd}`);
+check('a selection with a gap round the index origin is still not a run',
+  selWhole.wrapRun === false && selWhole.wrapDensified === false && selWhole.afterWrap === 16,
+  `run=${selWhole.wrapRun}, densify=${selWhole.wrapDensified}, ${selWhole.afterWrap} points`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {

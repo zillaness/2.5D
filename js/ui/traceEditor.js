@@ -1912,10 +1912,13 @@ export class TraceEditor {
     // The span is min..max on a closed loop, so a selection that wraps the
     // index origin (a lasso round a rounded end that happens to hold vertex 0)
     // reports the whole loop, and the run tools would rewrite the entire
-    // outline rather than the piece the user drew round. A span that covers
-    // every vertex is not a run: report none, so Fit arc, Fit line, Straighten
-    // and the rest stay disabled the way they do for any unusable selection.
-    if (hi - lo + 1 >= pts.length) return null;
+    // outline rather than the piece the user drew round. Such a selection is
+    // not a run: report none, so Fit arc, Fit line, Straighten and the rest
+    // stay disabled the way they do for any unusable selection. A selection
+    // that holds every vertex of the loop is a different thing: it has no gap,
+    // so it really is one run over the whole outline, and a box round the
+    // entire trace followed by Reduce or Densify is what that is for.
+    if (hi - lo + 1 >= pts.length && idxs.length < pts.length) return null;
     return { loop, lo, hi, pts };
   }
 
