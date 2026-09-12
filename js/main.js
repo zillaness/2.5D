@@ -1451,12 +1451,15 @@ function updateLayoutInfo() {
   const bw = maxX - minX, bh = maxY - minY;
   const bedEl = $('layBedInfo');
   const off = layBedOffset();
-  const ox = Math.max(0, off.x), oy = Math.max(0, off.y);
   const negOff = off.x < -1e-6 || off.y < -1e-6;
   let tiled = false; // drives the explicit tiled-SVG button in the export row
   if (!bed) {
     bedEl.textContent = '';
-  } else if (bw + ox <= bed.w + 1e-6 && bh + oy <= bed.h + 1e-6) {
+    // Whether the cut template has to be tiled is a question about the size of
+    // the layout, not about where the plate was dragged. A layout that fits
+    // the bed but hangs off the plate edge is mis-placed, not too big, and
+    // `layBedEscapes` below is what says so.
+  } else if (bw <= bed.w + 1e-6 && bh <= bed.h + 1e-6) {
     // One plate load. A shaped plate is the only case where fitting the
     // bounding rectangle is not the whole story, so it is checked here.
     const escaped = layBedEscapes();
@@ -1673,7 +1676,12 @@ function layBedEscapes() {
 function laySplitWithOffset(template, bedW, bedH, opts) {
   const off = layBedOffset();
   const ox = Math.max(0, off.x), oy = Math.max(0, off.y);
-  if (!(ox > 0) && !(oy > 0)) return splitTiles(template, bedW, bedH, opts);
+  // The window only moves a layout that has to be tiled at all. Padding a
+  // template that already fits one bed load would split it because of where
+  // the plate was dragged, and the seam would fall in the empty pad rather
+  // than anywhere in the drawer.
+  const fits = template.w <= bedW + 1e-6 && template.h <= bedH + 1e-6;
+  if (fits || (!(ox > 0) && !(oy > 0))) return splitTiles(template, bedW, bedH, opts);
   const plan = splitTiles({
     ...template,
     origin: { x: template.origin.x - ox, y: template.origin.y - oy },

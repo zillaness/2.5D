@@ -4529,6 +4529,50 @@ check('a plate nudged where the seams cannot follow says so instead of tiling in
   plateNeg.back.cls === 'warn' && /offset is negative/.test(plateNeg.back.info),
   `${JSON.stringify(plateNeg.zero.x0)} -> ${JSON.stringify(plateNeg.back.x0)}, ${plateNeg.back.cls}: ${plateNeg.back.info.slice(-90)}`);
 
+// A drawer that fits the plate but has been dragged off its right edge is
+// mis-placed, not too big: it says so the way the same drag the other way
+// does, and it is not cut into tiles because of where the plate sits.
+const plateOver = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 220, h: 140, r: 6, name: null };
+  const outline = [{ x: 5, y: 5 }, { x: 65, y: 5 }, { x: 65, y: 35 }, { x: 5, y: 35 }];
+  app.state.layout.items.push(
+    { name: 'spanner', outer: outline, holes: [], circles: [], x: 60, y: 40, rot: 0, depth: 4, thickness: 5 },
+    { name: 'pliers', outer: outline, holes: [], circles: [], x: 60, y: 100, rot: 0, depth: 4, thickness: 5 });
+  const at = off => {
+    app.state.layout.bed.offset = { x: off, y: 0 };
+    app.refreshLayoutEditor();
+    const el = document.getElementById('layBedInfo');
+    const out = app.layoutExports.svg('auto');
+    const tiles = app.layoutExports.svg('tiles');
+    return {
+      info: el.textContent, cls: el.className,
+      btn: document.getElementById('layExportTilesBtn').disabled,
+      plan: !!app.bed.plan(),
+      name: out ? out.name : null, tiles: tiles ? tiles.name : null,
+    };
+  };
+  const on = at(40), over = at(100), far = at(200);
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.items.length = 0;
+  app.refreshLayoutEditor();
+  return { on, over, far };
+});
+
+check('a drawer that fits the plate but hangs off its edge is warned about, not tiled',
+  plateOver.on.cls === 'hint' && /Fits the 300 × 200 bed in one piece/.test(plateOver.on.info) &&
+  !plateOver.on.plan && plateOver.on.btn === true && /-drawer-template\.svg$/.test(plateOver.on.name || '') &&
+  plateOver.over.cls === 'warn' && /pushes it off the plate/.test(plateOver.over.info) &&
+  !/Larger than the bed/.test(plateOver.over.info) &&
+  !plateOver.over.plan && plateOver.over.btn === true &&
+  /-drawer-template\.svg$/.test(plateOver.over.name || '') && plateOver.over.tiles === null &&
+  plateOver.far.cls === 'warn' && !plateOver.far.plan && plateOver.far.btn === true,
+  `on ${plateOver.on.cls}/${plateOver.on.btn}, over ${plateOver.over.cls}/${plateOver.over.btn}/${plateOver.over.name}: ${plateOver.over.info}`);
+
 // Leave the plate as the blocks after this one expect it: no bed, no shape,
 // no offset, nothing placed, back on Step 3.
 await page.evaluate(async () => {
