@@ -3548,6 +3548,10 @@ function loadProject(p) {
         extra: structuredClone((p.layout.labels && p.layout.labels.extra) || []),
       },
     };
+    // The bed remembered behind a plate shape belongs to the drawer that was
+    // on screen, not to this one: clearing the loaded project's shape has to
+    // give that project its own bed back, never the last drawer's.
+    layBedRect = null;
   }
   syncHolderPanel();
   // Back (underside) photo: restore the rectified copy + alignment; the

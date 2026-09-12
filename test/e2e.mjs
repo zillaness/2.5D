@@ -4611,6 +4611,66 @@ check('Auto-centre on a layout larger than the plate never writes an offset the 
   plateCentreBig.oneAxis.cls === 'hint' && !/offset is negative/.test(plateCentreBig.oneAxis.info),
   `both ${JSON.stringify(plateCentreBig.both.off)} ${plateCentreBig.both.cls}, one axis ${JSON.stringify(plateCentreBig.oneAxis.off)} ${plateCentreBig.oneAxis.cls}`);
 
+// The bed remembered behind a plate shape belongs to the drawer that was on
+// screen when the shape was picked. Opening another project and backing out of
+// its shape has to give that project its own bed back.
+const plateStale = await page.evaluate(async () => {
+  const app = window.__app;
+  const libBefore = localStorage.getItem('2p5d.library.v1');
+  const sq = s => [{ x: 0, y: 0 }, { x: s, y: 0 }, { x: s, y: s }, { x: 0, y: s }];
+  localStorage.setItem('2p5d.library.v1', JSON.stringify([
+    { name: 'small plate', kind: 'container', outer: sq(200), holes: [], circles: [] },
+    { name: 'big plate', kind: 'container', outer: sq(400), holes: [], circles: [] },
+  ]));
+  // Drawer B, saved with its own 400 x 400 shaped plate.
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 350, h: 250, r: 6, name: null };
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 400; app.state.layout.bed.h = 400;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.bed.shape = { name: 'big plate', outer: sq(400) };
+  const projB = JSON.parse(app.serializeProject(false));
+  // Drawer A first: a 300 x 200 bed with a plate shape picked over it.
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = '300x200';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 250));
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 250));
+  const sel = document.getElementById('layBedShape');
+  sel.value = '0'; sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 150));
+  const a = { w: app.state.layout.bed.w, h: app.state.layout.bed.h, name: app.state.layout.bed.shape && app.state.layout.bed.shape.name };
+  // Now drawer B, and out of its shape.
+  await app.loadProject(projB);
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 250));
+  const loaded = {
+    preset: app.state.layout.bed.preset, w: app.state.layout.bed.w, h: app.state.layout.bed.h,
+    name: app.state.layout.bed.shape && app.state.layout.bed.shape.name,
+  };
+  const sel2 = document.getElementById('layBedShape');
+  sel2.value = 'rect'; sel2.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  const cleared = {
+    preset: app.state.layout.bed.preset, w: app.state.layout.bed.w, h: app.state.layout.bed.h,
+    shape: !!app.state.layout.bed.shape,
+    info: document.getElementById('layBedInfo').textContent,
+  };
+  if (libBefore === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', libBefore);
+  return { a, loaded, cleared };
+});
+
+check('a loaded project clearing its plate shape gets its own bed back, not the last drawer\'s',
+  plateStale.a.w === 200 && plateStale.a.h === 200 && plateStale.a.name === 'small plate' &&
+  plateStale.loaded.w === 400 && plateStale.loaded.h === 400 && plateStale.loaded.name === 'big plate' &&
+  plateStale.cleared.preset === 'custom' &&
+  plateStale.cleared.w === 400 && plateStale.cleared.h === 400 && !plateStale.cleared.shape &&
+  /Fits the 400 × 400 bed in one piece/.test(plateStale.cleared.info),
+  `drawer A ${JSON.stringify(plateStale.a)}, loaded ${JSON.stringify(plateStale.loaded)}, cleared ${JSON.stringify(plateStale.cleared)}`);
+
 // Leave the plate as the blocks after this one expect it: no bed, no shape,
 // no offset, nothing placed, back on Step 3.
 await page.evaluate(async () => {
