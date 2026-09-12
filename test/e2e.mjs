@@ -1891,6 +1891,88 @@ check('hiding the points, and a mode that does not edit points, still draw none'
   selDraw.hidden === '0/0' && selDraw.region === '0/0',
   `hidden ${selDraw.hidden}, region ${selDraw.region}`);
 
+const selCtrl = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const holeLoop = () => [{ x: 30, y: 30 }, { x: 45, y: 30 }, { x: 45, y: 45 }, { x: 30, y: 45 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, mod) => ({ pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: !!(mod && mod.ctrl), metaKey: !!(mod && mod.meta) });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+  const fixture = (mode, holes, circles) => {
+    te.setMode(mode);
+    te.setSelectSubMode('box');
+    te.setTrace(square(), holes || []);
+    te.setCircles(circles || []);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+  const ctrlDrag = (from, to, mod) => { te._down(ev(from, mod)); te._move(ev(to, mod)); te._up(); };
+
+  // The midpoint of the top edge: 20 mm from either corner, so no vertex is
+  // within the 8 px hit radius but the edge is right under the cursor.
+  fixture('select');
+  ctrlDrag(S(40, 20), S(40, 32), { ctrl: true });
+  const edgeCount = te.outer.length, edgeMoved = te.outer.some(p => Math.abs(p.y - 32) < 1e-6);
+
+  // Cmd behaves like Ctrl, and a press with no drag at all must not insert.
+  fixture('select');
+  te._down(ev(S(40, 20), { meta: true }));
+  const metaDragging = te.dragging;
+  te._up();
+  const metaCount = te.outer.length;
+
+  // The documented binding still works: Ctrl on a vertex toggles it.
+  fixture('select');
+  te._down(ev(S(20, 20), { ctrl: true }));
+  te._up();
+  const toggled = key(te.selectedVerts), toggleCount = te.outer.length;
+
+  // Inside a traced hole loop, and on a drilled hole's rim.
+  fixture('select', [holeLoop()]);
+  ctrlDrag(S(37, 37), S(47, 47), { ctrl: true });
+  const holeX = te.holes[0][0].x;
+
+  fixture('select', [], [hole(40, 40, 10)]);
+  ctrlDrag(S(45, 40), S(52, 40), { ctrl: true });
+  const rimD = te.circles[0].d;
+
+  // Edit mode keeps its meaning: the same Ctrl+drag on the edge still inserts.
+  fixture('edit');
+  ctrlDrag(S(40, 20), S(40, 32), { ctrl: true });
+  const editCount = te.outer.length;
+
+  cv.setPointerCapture = capture;
+  fixture('edit');
+  return { edgeCount, edgeMoved, metaDragging, metaCount, toggled, toggleCount,
+    holeX, rimD, editCount };
+});
+
+console.log('\nPart A step 6 — Ctrl/Cmd+click in the Select tool never edits geometry');
+check('a Ctrl+drag that misses every vertex inserts nothing into the outline',
+  selCtrl.edgeCount === 4 && selCtrl.edgeMoved === false,
+  `${selCtrl.edgeCount} points, moved=${selCtrl.edgeMoved}`);
+check('a Cmd press with no drag inserts nothing either',
+  selCtrl.metaCount === 4 && selCtrl.metaDragging === false,
+  `${selCtrl.metaCount} points, dragging=${selCtrl.metaDragging}`);
+check('Ctrl+click on a vertex still toggles it in the Select tool',
+  selCtrl.toggled === '-1:0' && selCtrl.toggleCount === 4,
+  `${selCtrl.toggled || '(none)'}, ${selCtrl.toggleCount} points`);
+check('a missed Ctrl+click neither drags a traced hole nor resizes a drilled one',
+  Math.abs(selCtrl.holeX - 30) < 1e-6 && Math.abs(selCtrl.rimD - 10) < 1e-6,
+  `hole at ${selCtrl.holeX}, bore ⌀${selCtrl.rimD}`);
+check('Edit mode keeps the edge insert that Ctrl+drag has there today',
+  selCtrl.editCount === 5, `${selCtrl.editCount} points`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {

@@ -1070,6 +1070,12 @@ export class TraceEditor {
       return;
     }
 
+    // In the Select tool a Ctrl/Cmd+click that misses every vertex does
+    // nothing. The branches below insert a vertex on an edge, drag a whole
+    // traced hole, or resize a drilled hole, and the tool's whole job is
+    // selecting: a mis-aimed toggle must not edit the geometry.
+    if (this.mode === 'select' && (e.ctrlKey || e.metaKey)) return;
+
     if (vHit) {
       if (this._vertInMulti(vHit) && this._multiCount() > 1) {
         // Drag the whole group.
