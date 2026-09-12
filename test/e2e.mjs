@@ -1523,6 +1523,93 @@ check('the Selection panel hint names the three shapes and the modifiers',
 check('the step 6 block leaves the editor back in Edit mode with an empty selection',
   selUI.restored === 'edit/box/12/', selUI.restored);
 
+const selAnchor = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  // Two holes 20 mm apart, centre distance constrained: dragging either one
+  // should pin it under the cursor and move the other.
+  const fixture = () => {
+    te.setTrace(square(), []);
+    te.setCircles([hole(30, 30, 8), hole(50, 30, 8)]);
+    te.measurements = []; te.arcs = []; te.lines = [];
+    te.constraints = [{ type: 'dist',
+      refs: [{ kind: 'center', idx: 0 }, { kind: 'center', idx: 1 }], value: 20 }];
+    te._clearMulti();
+    te.selection = null;
+  };
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = sp => ({ pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false });
+  const anchorKey = () => te._dragAnchors()
+    .map(a => a.kind === 'vert' ? `vert ${a.loop}:${a.idx}` : `${a.kind} ${a.idx}`).join(',');
+  const drag = (from, to) => { te._down(ev(from)); te._move(ev(to)); te._up(); };
+
+  // A group drag pressed on the hole: one outline vertex and the left hole.
+  fixture();
+  te.selectedVerts = [{ loop: -1, idx: 0 }];
+  te.selectedCircles = [0];
+  te._down(ev(S(30, 30)));
+  const groupAnchors = anchorKey();
+  te._move(ev(S(35, 30)));
+  te._up();
+  const groupHeld = te.circles[0].cx, groupOther = te.circles[1].cx;
+  const groupVert = te.outer[0].x;
+
+  // The same hole, same constraint, dragged on its own.
+  fixture();
+  te._down(ev(S(30, 30)));
+  const singleAnchors = anchorKey();
+  te._move(ev(S(35, 30)));
+  te._up();
+  const singleHeld = te.circles[0].cx, singleOther = te.circles[1].cx;
+
+  // Holes only in the selection: the one under the cursor is still an anchor.
+  fixture();
+  te.selectedCircles = [0, 1];
+  te.constraints = [{ type: 'dist',
+    refs: [{ kind: 'center', idx: 0 }, { kind: 'vert', loop: -1, idx: 1 }], value: 30 }];
+  drag(S(30, 30), S(35, 30));
+  const holesOnlyHeld = te.circles[0].cx;
+  const holesOnlyDist = Math.hypot(te.outer[1].x - te.circles[0].cx, te.outer[1].y - te.circles[0].cy);
+  const holesOnlyCornerMoved = Math.abs(te.outer[1].x - 60) > 1e-3;
+
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te.constraints = [];
+  te._clearMulti();
+  te.selection = null;
+  return {
+    groupAnchors, groupHeld, groupOther, groupVert,
+    singleAnchors, singleHeld, singleOther,
+    holesOnlyHeld, holesOnlyDist, holesOnlyCornerMoved,
+  };
+});
+
+console.log('\nPart A step 4 — a dragged hole anchors the constraint solver');
+check('a group drag anchors every selected hole, not just the vertices',
+  selAnchor.groupAnchors === 'vert -1:0,center 0' && selAnchor.singleAnchors === 'center 0',
+  `group "${selAnchor.groupAnchors}", single "${selAnchor.singleAnchors}"`);
+check('a constrained hole group-dragged lands under the cursor, like a single drag',
+  Math.abs(selAnchor.groupHeld - 35) < 1e-3 && Math.abs(selAnchor.groupOther - 55) < 1e-3 &&
+  Math.abs(selAnchor.groupVert - 25) < 1e-3 &&
+  Math.abs(selAnchor.singleHeld - 35) < 1e-3 && Math.abs(selAnchor.singleOther - 55) < 1e-3,
+  `group held ${selAnchor.groupHeld.toFixed(3)} other ${selAnchor.groupOther.toFixed(3)} vertex ${selAnchor.groupVert.toFixed(3)}; ` +
+  `single held ${selAnchor.singleHeld.toFixed(3)} other ${selAnchor.singleOther.toFixed(3)}`);
+check('a holes-only group drag still pins the hole under the cursor',
+  Math.abs(selAnchor.holesOnlyHeld - 35) < 1e-3 && selAnchor.holesOnlyCornerMoved &&
+  Math.abs(selAnchor.holesOnlyDist - 30) < 1e-3,
+  `held ${selAnchor.holesOnlyHeld.toFixed(3)}, corner moved ${selAnchor.holesOnlyCornerMoved}, ` +
+  `distance ${selAnchor.holesOnlyDist.toFixed(3)}`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {

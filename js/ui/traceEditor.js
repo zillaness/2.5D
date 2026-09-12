@@ -443,9 +443,16 @@ export class TraceEditor {
     return g;
   }
 
-  // Anchors for the current drag (the geometry the user is holding).
+  // Anchors for the current drag (the geometry the user is holding). A group
+  // drag holds both halves of the multi-selection, so a selected hole is an
+  // anchor too: without it the solver treats a hole the user is dragging as
+  // free geometry and splits the correction with whatever it is constrained
+  // to, so the hole lands short of the cursor.
   _dragAnchors() {
-    if (this._groupDrag) return this.selectedVerts.map(v => ({ kind: 'vert', loop: v.loop, idx: v.idx }));
+    if (this._groupDrag) {
+      return this.selectedVerts.map(v => ({ kind: 'vert', loop: v.loop, idx: v.idx }))
+        .concat(this.selectedCircles.map(i => ({ kind: 'center', idx: i })));
+    }
     const sel = this.selection;
     if (!sel) return [];
     if (sel.type === 'vertex') return [{ kind: 'vert', loop: sel.loop, idx: sel.idx }];
