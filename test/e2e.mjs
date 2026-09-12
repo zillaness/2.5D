@@ -4498,6 +4498,37 @@ check('a project saved before the build plate loads with no plate, not the last 
   plateLegacy.tilesBtn === true,
   `offset ${JSON.stringify(plateLegacy.off)}, shape ${JSON.stringify(plateLegacy.shape)}, info ${plateLegacy.info}`);
 
+// The tiling window can only start at or before the layout, so a plate nudged
+// the other way changes no seam. Say that, rather than exporting the same
+// tiles and letting the readout claim the plate moved.
+const plateNeg = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 400, h: 140, r: 6, name: null };
+  const at = off => {
+    app.state.layout.bed.offset = { x: off, y: 0 };
+    app.refreshLayoutEditor();
+    const plan = app.bed.plan();
+    const el = document.getElementById('layBedInfo');
+    return { x0: plan ? plan.tiles.map(t => t.x0) : null, info: el.textContent, cls: el.className };
+  };
+  const zero = at(0), back = at(-40);
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.refreshLayoutEditor();
+  return { zero, back };
+});
+
+check('a plate nudged where the seams cannot follow says so instead of tiling in silence',
+  plateNeg.zero.cls === 'hint' && !/negative/.test(plateNeg.zero.info) &&
+  plateNeg.zero.x0 && plateNeg.back.x0 &&
+  plateNeg.back.x0.length === plateNeg.zero.x0.length &&
+  plateNeg.back.x0.every((x, i) => x === plateNeg.zero.x0[i]) &&
+  plateNeg.back.cls === 'warn' && /offset is negative/.test(plateNeg.back.info),
+  `${JSON.stringify(plateNeg.zero.x0)} -> ${JSON.stringify(plateNeg.back.x0)}, ${plateNeg.back.cls}: ${plateNeg.back.info.slice(-90)}`);
+
 // Leave the plate as the blocks after this one expect it: no bed, no shape,
 // no offset, nothing placed, back on Step 3.
 await page.evaluate(async () => {

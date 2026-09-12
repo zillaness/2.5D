@@ -1452,6 +1452,7 @@ function updateLayoutInfo() {
   const bedEl = $('layBedInfo');
   const off = layBedOffset();
   const ox = Math.max(0, off.x), oy = Math.max(0, off.y);
+  const negOff = off.x < -1e-6 || off.y < -1e-6;
   let tiled = false; // drives the explicit tiled-SVG button in the export row
   if (!bed) {
     bedEl.textContent = '';
@@ -1487,11 +1488,17 @@ function updateLayoutInfo() {
         (grid ? '. STL tiling isn\'t available yet — the bin exports whole.' : '.') +
         (state.layout.bed.shape
           ? ` The ${state.layout.bed.shape.name} plate shape is ignored while tiling — the tiles plan against its bounding rectangle.`
+          : '') +
+        // The window can only start at or before the layout, so a negative
+        // offset is dropped by `laySplitWithOffset`. Say so, the way the
+        // fits-on-one-bed branch says the offset pushed the layout off.
+        (negOff
+          ? ' The plate offset is negative, which would leave a strip of the layout on no tile at all, so the seams ignore it. Auto-centre the plate or nudge it back.'
           : '')
       : (state.layout.bed.tabs.enabled
           ? 'Larger than the bed, but the puzzle tabs\' reach leaves no room to tile it — shrink the reach or pick a bigger bed.'
           : '');
-    bedEl.className = 'hint';
+    bedEl.className = plan && negOff ? 'warn' : 'hint';
   }
   $('layExportTilesBtn').disabled = !tiled;
   syncBedOffsetInfo();
