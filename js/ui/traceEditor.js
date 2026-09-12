@@ -1894,7 +1894,15 @@ export class TraceEditor {
     const pts = this._loop(loop);
     if (!pts) return null;
     const idxs = vs.map(v => v.idx).sort((a, b) => a - b);
-    return { loop, lo: idxs[0], hi: idxs[idxs.length - 1], pts };
+    const lo = idxs[0], hi = idxs[idxs.length - 1];
+    // The span is min..max on a closed loop, so a selection that wraps the
+    // index origin (a lasso round a rounded end that happens to hold vertex 0)
+    // reports the whole loop, and the run tools would rewrite the entire
+    // outline rather than the piece the user drew round. A span that covers
+    // every vertex is not a run: report none, so Fit arc, Fit line, Straighten
+    // and the rest stay disabled the way they do for any unusable selection.
+    if (hi - lo + 1 >= pts.length) return null;
+    return { loop, lo, hi, pts };
   }
 
   hasMultiRun(minCount = 3) { return !!this._selectionSpan(minCount); }

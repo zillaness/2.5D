@@ -1610,6 +1610,78 @@ check('a holes-only group drag still pins the hole under the cursor',
   `held ${selAnchor.holesOnlyHeld.toFixed(3)}, corner moved ${selAnchor.holesOnlyCornerMoved}, ` +
   `distance ${selAnchor.holesOnlyDist.toFixed(3)}`);
 
+const selWrap = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort((a, b) => a.localeCompare(b)).join(',');
+  // A rounded end, the gesture the lasso exists for: 16 points round a circle
+  // with vertex 0 at the rightmost point, so a lasso over the right cap wraps
+  // the index origin.
+  const ring = () => {
+    const pts = [];
+    for (let k = 0; k < 16; k++) {
+      const a = k * Math.PI / 8;
+      pts.push({ x: 40 + 20 * Math.cos(a), y: 40 + 20 * Math.sin(a) });
+    }
+    return pts;
+  };
+  const fixture = () => {
+    te.setTrace(ring(), []);
+    te.setCircles([]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+
+  fixture();
+  const nBefore = te.outer.length;
+  // Lasso the right cap.
+  te._lasso = [S(54, 16), S(74, 16), S(74, 64), S(54, 64)];
+  te._up();
+  const capSel = key(te.selectedVerts);
+  const capIdx = te.selectedVerts.map(v => v.idx).sort((a, b) => a - b);
+  const wraps = capIdx.includes(0) && capIdx.includes(nBefore - 1) && capIdx.length < nBefore;
+  const capRun = te.hasMultiRun(3);
+  const capSpan = te._selectionSpan(3);
+  const capArc = te.fitArcToSelection();
+  const nAfterArc = te.outer.length;
+  const capLine = te.fitLineToSelection();
+  const nAfterLine = te.outer.length;
+  const capStraight = te.straightenSelection();
+  const capStraightOk = !!(capStraight && capStraight.ok);
+  const nAfterStraight = te.outer.length;
+
+  // The same count of points as a plain run, away from the origin: the tools
+  // are still available and still act on that run alone.
+  fixture();
+  te.selectedVerts = capIdx.map((_, i) => ({ loop: -1, idx: 4 + i }));
+  const runRun = te.hasMultiRun(3);
+  const runArc = te.fitArcToSelection();
+  const runKeepsEnds = te.outer[0].x === ring()[0].x && te.outer[0].y === ring()[0].y;
+
+  fixture();
+  return {
+    nBefore, capSel, wraps, capRun, capSpan, capArc, nAfterArc,
+    capLine, nAfterLine, capStraight, capStraightOk, nAfterStraight,
+    runRun, runArc, runKeepsEnds,
+  };
+});
+
+console.log('\nPart A step 2 — a lasso that wraps the index origin is not a run');
+check('a lasso round a rounded end takes the cap and wraps vertex 0',
+  selWrap.wraps && selWrap.nBefore === 16, `${selWrap.capSel} of ${selWrap.nBefore}`);
+check('a wrapping selection reports no span, so the run tools stay disabled',
+  selWrap.capRun === false && selWrap.capSpan === null,
+  `hasMultiRun=${selWrap.capRun}, span=${JSON.stringify(selWrap.capSpan)}`);
+check('Fit arc, Fit line and Straighten refuse it instead of rewriting the whole outline',
+  selWrap.capArc === null && selWrap.capLine === false && selWrap.capStraightOk === false &&
+  selWrap.nAfterArc === 16 && selWrap.nAfterLine === 16 && selWrap.nAfterStraight === 16,
+  `arc ${selWrap.capArc}, line ${selWrap.capLine}, straighten ${JSON.stringify(selWrap.capStraight)}, ` +
+  `outline ${selWrap.nBefore} -> ${selWrap.nAfterArc}/${selWrap.nAfterLine}/${selWrap.nAfterStraight}`);
+check('the same number of points as a run away from the origin still fits an arc',
+  selWrap.runRun === true && typeof selWrap.runArc === 'number' && selWrap.runKeepsEnds,
+  `hasMultiRun=${selWrap.runRun}, radius ${selWrap.runArc}, vertex 0 untouched=${selWrap.runKeepsEnds}`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
