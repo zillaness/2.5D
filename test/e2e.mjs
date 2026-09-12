@@ -4374,6 +4374,96 @@ check('the plate shape and offset round-trip through a project, and an older pro
   plateSave.old.defined,
   `back ${JSON.stringify(plateSave.back)}, legacy ${JSON.stringify(plateSave.old)}`);
 
+// A plate-shape name is text out of a project file, so it goes into the select
+// as text. A name carrying markup must render as that markup's characters and
+// run nothing.
+const plateName = await page.evaluate(async () => {
+  const app = window.__app;
+  const square = [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 200 }, { x: 0, y: 200 }];
+  const proj = JSON.parse(app.serializeProject(false));
+  proj.layout.bed = {
+    ...proj.layout.bed, preset: 'custom', w: 200, h: 200, offset: { x: 0, y: 0 },
+    shape: { name: '</option><img src=x onerror="window.__plateInjected = 1">', outer: square },
+  };
+  await app.loadProject(proj);
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 250));
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 250));
+  const sel = document.getElementById('layBedShape');
+  const opt = sel.querySelector('option[value="__shape"]');
+  return {
+    ran: !!window.__plateInjected,
+    imgs: document.querySelectorAll('img[src="x"]').length,
+    inside: sel.querySelectorAll('*:not(option)').length,
+    text: opt ? opt.textContent : null,
+    value: sel.value,
+  };
+});
+
+check('a plate-shape name out of a project file is written as text, never as markup',
+  !plateName.ran && plateName.imgs === 0 && plateName.inside === 0 &&
+  plateName.value === '__shape' &&
+  /<img src=x onerror=/.test(plateName.text),
+  `ran ${plateName.ran}, ${plateName.imgs} injected nodes, option ${JSON.stringify(plateName.text)}`);
+
+// Picking a shape has to show in the select it was picked from, and backing
+// out of it has to give the user's own bed rectangle back.
+const plateSelect = await page.evaluate(async () => {
+  const app = window.__app;
+  const libBefore = localStorage.getItem('2p5d.library.v1');
+  const disc = [];
+  for (let i = 0; i < 32; i++) {
+    const a = (i / 32) * Math.PI * 2;
+    disc.push({ x: 90 + 90 * Math.cos(a), y: 90 + 90 * Math.sin(a) });
+  }
+  localStorage.setItem('2p5d.library.v1', JSON.stringify([
+    { name: 'round plate', kind: 'container', outer: disc, holes: [], circles: [] },
+  ]));
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 250));
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 250));
+  const sel = document.getElementById('layBedShape');
+  const listed = Array.from(sel.options).some(o => o.value === '0');
+  sel.value = '0';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 150));
+  const picked = {
+    value: sel.value, index: sel.selectedIndex,
+    label: sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].textContent : null,
+    name: app.state.layout.bed.shape && app.state.layout.bed.shape.name,
+    w: app.state.layout.bed.w, h: app.state.layout.bed.h,
+  };
+  sel.value = 'rect';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 150));
+  const cleared = {
+    value: sel.value, index: sel.selectedIndex,
+    shape: app.state.layout.bed.shape,
+    preset: app.state.layout.bed.preset,
+    w: app.state.layout.bed.w, h: app.state.layout.bed.h,
+  };
+  if (libBefore === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', libBefore);
+  return { listed, picked, cleared };
+});
+
+check('picking a plate shape shows it in the select, and a rectangle again gives the bed back',
+  plateSelect.listed &&
+  plateSelect.picked.value === '__shape' && plateSelect.picked.index === 1 &&
+  /round plate/.test(plateSelect.picked.label || '') &&
+  plateSelect.picked.name === 'round plate' &&
+  plateSelect.picked.w === 180 && plateSelect.picked.h === 180 &&
+  plateSelect.cleared.value === 'rect' && plateSelect.cleared.index === 0 &&
+  !plateSelect.cleared.shape &&
+  plateSelect.cleared.w === 300 && plateSelect.cleared.h === 200,
+  `picked ${JSON.stringify(plateSelect.picked)}, cleared ${JSON.stringify(plateSelect.cleared)}`);
+
 // Leave the plate as the blocks after this one expect it: no bed, no shape,
 // no offset, nothing placed, back on Step 3.
 await page.evaluate(async () => {

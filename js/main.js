@@ -1332,11 +1332,13 @@ function refreshLaySelects() {
     if (o.name === keep) opt.selected = true;
     contSel.appendChild(opt);
   });
-  // The same container outlines double as build-plate shapes.
+  // The same container outlines double as build-plate shapes. Every name here
+  // is written as text and never as markup: an outline name arrives from a
+  // project file or a folder of traces, so it is not ours to trust.
   const shapeSel = $('layBedShape');
   const shape = state.layout.bed.shape;
-  shapeSel.innerHTML = '<option value="rect">Rectangular plate</option>' +
-    (shape ? '<option value="__shape">⬚ ' + shape.name + '</option>' : '');
+  shapeSel.innerHTML = '<option value="rect">Rectangular plate</option>';
+  syncBedShapeOption();
   list.forEach((o, i) => {
     if (o.kind !== 'container') return;
     const opt = document.createElement('option');
@@ -1688,12 +1690,29 @@ function syncBedOffsetInfo() {
       `${b.shape ? ` (${b.shape.name})` : ''}. Drag the dashed outline, or select it and ` +
       'nudge with the arrow keys (Shift for 10 mm).';
 }
+// The '__shape' option stands for the plate shape in use. The rest of the list
+// is built when the panel opens, so picking a shape has to add the option, and
+// clearing one has to drop it, or the select is asked to show a value it does
+// not carry and renders blank.
+function syncBedShapeOption() {
+  const sel = $('layBedShape');
+  const shape = state.layout.bed.shape;
+  let opt = sel.querySelector('option[value="__shape"]');
+  if (!shape) { if (opt) opt.remove(); return; }
+  if (!opt) {
+    opt = document.createElement('option');
+    opt.value = '__shape';
+    sel.insertBefore(opt, sel.firstChild ? sel.firstChild.nextSibling : null);
+  }
+  opt.textContent = `⬚ ${shape.name}`;
+}
 function syncBedFields() {
   const b = state.layout.bed;
   $('layBed').value = b.preset;
   $('layBedCustom').hidden = b.preset !== 'custom';
   $('layBedW').value = fmtDim(b.w);
   $('layBedH').value = fmtDim(b.h);
+  syncBedShapeOption();
   $('layBedShape').value = b.shape ? '__shape' : 'rect';
   syncBedOffsetInfo();
   const t = b.tabs;
@@ -1812,12 +1831,27 @@ $('layBed').addEventListener('change', e => {
 // A plate shape: a saved container outline standing in for a round or
 // cut-cornered build plate. Choosing one sizes the bed to the shape, since a
 // plate and its bounding rectangle must agree about how much room there is.
+// The rectangle the bed had before a shape sized it to that shape's bounding
+// box, so going back to Rectangular plate gives the user's own bed back rather
+// than leaving the shape's square behind.
+let layBedRect = null;
 $('layBedShape').addEventListener('change', e => {
   const b = state.layout.bed;
   const o = e.target.value === 'rect' ? null : libLoad()[+e.target.value];
   if (!o || !o.outer || o.outer.length < 3) {
+    const box = b.shape && b.shape.outer && b.shape.outer.length >= 3 ? layBox(b.shape.outer) : null;
+    // Only restore a bed the shape itself sized: a bed the user retyped while
+    // the shape was on is theirs, and stays.
+    const untouched = box &&
+      Math.abs(b.w - Math.round(box.w * 1000) / 1000) < 1e-6 &&
+      Math.abs(b.h - Math.round(box.h * 1000) / 1000) < 1e-6;
+    if (layBedRect && untouched) {
+      b.preset = layBedRect.preset; b.w = layBedRect.w; b.h = layBedRect.h;
+    }
+    layBedRect = null;
     b.shape = null;
   } else {
+    if (!b.shape) layBedRect = { preset: b.preset, w: b.w, h: b.h };
     b.shape = { name: o.name, outer: structuredClone(o.outer) };
     const box = layBox(b.shape.outer);
     b.preset = 'custom';
