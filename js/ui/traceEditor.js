@@ -1724,6 +1724,13 @@ export class TraceEditor {
     this.pushUndo();
     this._refsOp({ op: 'deleteCircle', idx });
     this.circles.splice(idx, 1);
+    // selectedCircles holds bare indices into this.circles, so deleting a hole
+    // renumbers the ones above it: drop the deleted hole from the
+    // multi-selection and shift the rest down, or the selection would count a
+    // hole that no longer exists, or point at the wrong one.
+    this.selectedCircles = this.selectedCircles
+      .filter(i => i !== idx)
+      .map(i => (i > idx ? i - 1 : i));
     this.selection = null;
     this._notifySelect();
     this._changed();

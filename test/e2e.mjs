@@ -1748,6 +1748,77 @@ check('pressing the interior of a selected hole still drags the whole group',
   Math.abs(selRim.moveVert - 25) < 1e-6,
   `d ${selRim.moveD}, hole at ${selRim.moveCx}, vertex ${selRim.moveVert}`);
 
+const selStale = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, o) => Object.assign({ pointerId: 1, button: 0,
+    clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false }, o || {});
+  const cxs = () => te.circles.map(c => c.cx).join(',');
+  const fixture = () => {
+    te.setMode('edit');
+    te.setTrace(square(), []);
+    te.setCircles([hole(25, 30, 8), hole(40, 30, 8), hole(55, 30, 8)]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+  // A window box round the right hole alone, then a right-click delete of the
+  // left one, which renumbers everything above it.
+  const selectRight = () => {
+    const a = S(48, 23), b = S(62, 37);
+    te._applyMarquee({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
+  };
+
+  fixture();
+  selectRight();
+  const picked = te.selectedCircles.join(',');
+  te._down(ev(S(25, 30), { button: 2 }));   // right-click delete of the left hole
+  te._up();
+  const afterDelete = cxs();
+  const stillSelected = te.selectedCircles.join(',');
+  const count = te._multiCount();
+  const marked = te.circles.map((c, i) => te._circleInMulti(i) ? c.cx : null).join(',');
+  te.deleteSelected();
+  const afterGroupDelete = cxs();
+
+  // Deleting the selected hole itself drops it from the selection.
+  fixture();
+  selectRight();
+  te._down(ev(S(55, 30), { button: 2 }));
+  te._up();
+  const selfCount = te._multiCount();
+  const selfLeft = cxs();
+
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return { picked, afterDelete, stillSelected, count, marked, afterGroupDelete,
+    selfCount, selfLeft };
+});
+
+console.log('\nPart A step 4 — deleting a hole renumbers the hole selection');
+check('a hole selection follows its hole when a lower-indexed hole is deleted',
+  selStale.picked === '2' && selStale.afterDelete === '40,55' &&
+  selStale.stillSelected === '1' && selStale.count === 1 && selStale.marked === ',55',
+  `picked ${selStale.picked}, holes ${selStale.afterDelete}, selection ${selStale.stillSelected}, highlighted ${selStale.marked}`);
+check('Delete then removes the hole that is actually selected',
+  selStale.afterGroupDelete === '40', selStale.afterGroupDelete);
+check('deleting the selected hole itself empties the selection',
+  selStale.selfCount === 0 && selStale.selfLeft === '25,40',
+  `${selStale.selfCount} selected, holes ${selStale.selfLeft}`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
