@@ -1041,6 +1041,21 @@ export class TraceEditor {
     // current sub-mode, so no Shift is needed. Ctrl/Cmd+click still toggles a
     // single vertex and the right button still pans, both further down.
     if (this.mode === 'select' && e.button === 0 && !(e.ctrlKey || e.metaKey)) {
+      // Group move is an existing binding and the Select tool does not rebind
+      // it: a plain press on something already in the multi-selection drags
+      // the whole group, exactly as it does in Edit mode. Shift and Alt are
+      // the add and subtract modifiers, so those always start a gesture, and
+      // so does a press on a hole's rim, which means resize in Edit mode.
+      if (!e.shiftKey && !e.altKey && this._multiCount() > 1) {
+        const gv = this._hitVertex(sp);
+        const gc = gv ? null : this._hitCircle(sp);
+        if ((gv && this._vertInMulti(gv)) ||
+            (gc && gc.region !== 'resize' && this._circleInMulti(gc.idx))) {
+          this.pushUndo();
+          this._beginGroupDrag(this._screenToMm(sp));
+          return;
+        }
+      }
       this._beginSelectGesture(sp, this._gestureSelectMode(e));
       return;
     }

@@ -2123,6 +2123,114 @@ check('a plain through hole is unaffected: bore and drawn rim are one circle',
   selRecess.plainSame && selRecess.plainWindow === '0' && selRecess.plainClip === '',
   `same=${selRecess.plainSame}, enclosed "${selRecess.plainWindow}", clipped "${selRecess.plainClip}"`);
 
+const selGroupMove = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, mod) => ({ pointerId: 1, button: 0,
+    clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: !!(mod && mod.alt), shiftKey: !!(mod && mod.shift),
+    ctrlKey: false, metaKey: false });
+  const drag = (from, to, mod) => { te._down(ev(from, mod)); te._move(ev(to, mod)); te._up(); };
+  const fixture = sub => {
+    te.setMode('select');
+    te.setSelectSubMode(sub || 'box');
+    te.setTrace(square(), []);
+    te.setCircles([hole(40, 40, 10)]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te.showPoints = true;
+    te._clearMulti();
+    te.selection = null;
+    te.selectedVerts = [{ loop: -1, idx: 0 }, { loop: -1, idx: 1 }];
+    te.selectedCircles = [0];
+  };
+  const shot = () => ({ v0: te.outer[0].x, v1: te.outer[1].x,
+    cx: te.circles[0].cx, n: te._multiCount() });
+
+  // The panel hint and the README both say a drag on a selected point moves
+  // the group. That has to hold in the Select tool, not only in Edit mode.
+  fixture('box');
+  drag(S(20, 20), S(25, 25));
+  const vertDrag = shot();
+
+  // The interior of a selected hole is a group handle in the Select tool too.
+  fixture('box');
+  drag(S(40, 40), S(45, 45));
+  const holeDrag = shot();
+  te.undo();
+  const undone = shot();
+
+  // Brush is the sub-mode that would otherwise wipe the selection on a press
+  // with no drag at all.
+  fixture('brush');
+  drag(S(20, 20), S(25, 25));
+  const brushDrag = shot();
+
+  // Empty space still starts a gesture, and a box round nothing replaces the
+  // selection with nothing.
+  fixture('box');
+  drag(S(70, 70), S(75, 75));
+  const emptyDrag = shot();
+
+  // A press on a selected point that misses the multi-selection is a gesture:
+  // Shift adds and Alt subtracts, and neither moves the geometry.
+  fixture('box');
+  drag(S(20, 20), S(25, 25), { shift: true });
+  const shiftDrag = shot();
+  fixture('box');
+  drag(S(20, 20), S(25, 25), { alt: true });
+  const altDrag = shot();
+
+  // The hole's rim keeps meaning resize in Edit mode, and in the Select tool
+  // a rim press is a gesture rather than a group move or a resize.
+  fixture('box');
+  drag(S(45, 40), S(50, 40));
+  const rimDrag = { d: te.circles[0].d, cx: te.circles[0].cx };
+
+  cv.setPointerCapture = capture;
+  te.setMode('edit');
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return { vertDrag, holeDrag, undone, brushDrag, emptyDrag, shiftDrag, altDrag, rimDrag };
+});
+
+console.log('\nPart A step 6 — the Select tool keeps group move');
+check('dragging a selected point in the Select tool moves the group, not the selection',
+  Math.abs(selGroupMove.vertDrag.v0 - 25) < 1e-6 &&
+  Math.abs(selGroupMove.vertDrag.v1 - 65) < 1e-6 &&
+  Math.abs(selGroupMove.vertDrag.cx - 45) < 1e-6 && selGroupMove.vertDrag.n === 3,
+  `v0 ${selGroupMove.vertDrag.v0}, v1 ${selGroupMove.vertDrag.v1}, hole ${selGroupMove.vertDrag.cx}, ${selGroupMove.vertDrag.n} selected`);
+check('dragging a selected hole in the Select tool moves the group, and undo restores it',
+  Math.abs(selGroupMove.holeDrag.cx - 45) < 1e-6 &&
+  Math.abs(selGroupMove.holeDrag.v0 - 25) < 1e-6 && selGroupMove.holeDrag.n === 3 &&
+  Math.abs(selGroupMove.undone.cx - 40) < 1e-6 && Math.abs(selGroupMove.undone.v0 - 20) < 1e-6,
+  `moved to ${selGroupMove.holeDrag.cx}/${selGroupMove.holeDrag.v0}, undone ${selGroupMove.undone.cx}/${selGroupMove.undone.v0}`);
+check('the Brush sub-mode moves the group too instead of painting over it',
+  Math.abs(selGroupMove.brushDrag.v0 - 25) < 1e-6 &&
+  Math.abs(selGroupMove.brushDrag.cx - 45) < 1e-6 && selGroupMove.brushDrag.n === 3,
+  `v0 ${selGroupMove.brushDrag.v0}, hole ${selGroupMove.brushDrag.cx}, ${selGroupMove.brushDrag.n} selected`);
+check('a drag that starts on empty space still selects and moves nothing',
+  Math.abs(selGroupMove.emptyDrag.v0 - 20) < 1e-6 &&
+  Math.abs(selGroupMove.emptyDrag.cx - 40) < 1e-6 && selGroupMove.emptyDrag.n === 0,
+  `v0 ${selGroupMove.emptyDrag.v0}, hole ${selGroupMove.emptyDrag.cx}, ${selGroupMove.emptyDrag.n} selected`);
+check('Shift and Alt on a selected point stay the add and subtract modifiers',
+  Math.abs(selGroupMove.shiftDrag.v0 - 20) < 1e-6 && selGroupMove.shiftDrag.n === 3 &&
+  Math.abs(selGroupMove.altDrag.v0 - 20) < 1e-6 && selGroupMove.altDrag.n === 2,
+  `shift v0 ${selGroupMove.shiftDrag.v0} (${selGroupMove.shiftDrag.n} selected), alt v0 ${selGroupMove.altDrag.v0} (${selGroupMove.altDrag.n} selected)`);
+check('a press on a selected hole rim in the Select tool neither resizes nor moves it',
+  Math.abs(selGroupMove.rimDrag.d - 10) < 1e-6 && Math.abs(selGroupMove.rimDrag.cx - 40) < 1e-6,
+  `⌀${selGroupMove.rimDrag.d} at ${selGroupMove.rimDrag.cx}`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
