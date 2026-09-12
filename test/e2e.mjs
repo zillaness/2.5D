@@ -4963,6 +4963,71 @@ check('a nudged plate never reports a tile row or column the exported file does 
   `y+30 ${tilePad.down30.tiles} tiles ${tilePad.down30.nx}x${tilePad.down30.ny} ids ${tilePad.down30.ids} ${tilePad.down30.name}, ` +
   `x+250 ${tilePad.across250.tiles} tiles ${tilePad.across250.nx}x${tilePad.across250.ny} ids ${tilePad.across250.ids} ${tilePad.across250.name}`);
 
+// The plate outline is grabbed anywhere along its edge, but once a layout has
+// to be tiled that edge runs straight through the drawer. A tool on the seam
+// has to stay selectable and draggable: the press used to go to the plate,
+// which deselected the tool, closed its panel and wrote a plate offset the
+// tiler discards.
+const seamTool = await page.evaluate(async () => {
+  const app = window.__app, ed = app.layoutEditor;
+  const bedBefore = JSON.stringify(app.state.layout.bed);
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 400, h: 300, r: 6, name: null };
+  app.state.layout.items.length = 0;
+  ed.sel = -1; ed.bedSel = false;
+  app.refreshLayoutEditor();
+  await new Promise(r => setTimeout(r, 200));
+  const plate = app.bed.loop();
+  const edgeX = Math.max(...plate.map(p => p.x));
+  // An 8 mm tool straddling the plate's right edge, which for a 400 × 300
+  // drawer on a 300 × 200 plate is a seam down the middle of the drawer.
+  app.state.layout.items.push({
+    name: 'drill bit', outer: [{ x: 0, y: 0 }, { x: 8, y: 0 }, { x: 8, y: 8 }, { x: 0, y: 8 }],
+    holes: [], circles: [], x: edgeX, y: 105, rot: 0, depth: 4, thickness: 5,
+  });
+  app.refreshLayoutEditor();
+  const cv = ed.canvas, r = cv.getBoundingClientRect();
+  const client = mm => {
+    const s = ed.mmToScreen(mm);
+    return { x: r.left + s.x * (r.width / cv.width), y: r.top + s.y * (r.height / cv.height) };
+  };
+  const cap = cv.setPointerCapture, rel = cv.releasePointerCapture;
+  cv.setPointerCapture = () => {}; cv.releasePointerCapture = () => {};
+  const ev = (type, p) => cv.dispatchEvent(new PointerEvent(type, {
+    clientX: p.x, clientY: p.y, pointerId: 1, bubbles: true,
+  }));
+  ev('pointerdown', client({ x: edgeX, y: 105 }));
+  const picked = { sel: ed.sel, bedSel: ed.bedSel, kind: ed._drag && ed._drag.kind };
+  ev('pointermove', client({ x: edgeX + 20, y: 105 }));
+  ev('pointerup', client({ x: edgeX + 20, y: 105 }));
+  await new Promise(r2 => setTimeout(r2, 150));
+  const after = {
+    x: app.state.layout.items[0].x, off: app.bed.offset(),
+    panel: !document.getElementById('laySelPanel').hidden,
+  };
+  // The same edge, clear of the tool, still belongs to the plate.
+  ev('pointerdown', client({ x: edgeX, y: 20 }));
+  const onPlate = { sel: ed.sel, bedSel: ed.bedSel, kind: ed._drag && ed._drag.kind };
+  ev('pointerup', client({ x: edgeX, y: 20 }));
+  cv.setPointerCapture = cap; cv.releasePointerCapture = rel;
+  app.state.layout.items.length = 0;
+  app.state.layout.bed = JSON.parse(bedBefore);
+  ed.sel = -1; ed.bedSel = false;
+  app.syncLaySelPanel(-1);
+  app.refreshLayoutEditor();
+  return { picked, after, onPlate, edgeX };
+});
+
+check('a tool sitting on a seam is picked and dragged, not the plate under it',
+  seamTool.picked.sel === 0 && seamTool.picked.bedSel === false && seamTool.picked.kind === 'move' &&
+  Math.abs(seamTool.after.x - (seamTool.edgeX + 20)) < 1.5 &&
+  seamTool.after.off.x === 0 && seamTool.after.off.y === 0 && seamTool.after.panel &&
+  seamTool.onPlate.bedSel === true && seamTool.onPlate.sel === -1 && seamTool.onPlate.kind === 'bed',
+  `press ${JSON.stringify(seamTool.picked)}, tool x ${seamTool.after.x} offset ${JSON.stringify(seamTool.after.off)}, plate ${JSON.stringify(seamTool.onPlate)}`);
+
 // Leave the container as the blocks after this one expect it.
 await page.evaluate(async () => {
   const app = window.__app;

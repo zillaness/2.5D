@@ -234,9 +234,16 @@ export class LayoutEditor {
         return;
       }
     }
-    // The plate outline, grabbed anywhere along its edge. It is tested
-    // before the items because its edge normally runs outside every pocket.
-    const bl = this.bedLoop();
+    // Topmost item under the pointer, found before the plate is offered the
+    // press. Once a layout has to be tiled the plate's edge necessarily runs
+    // through the drawer, and a tool sitting on a seam has to stay selectable
+    // and draggable; the plate keeps every other point of its edge.
+    let hit = -1;
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      if (pointInPolygon(mm, placeLoop(this.items[i].outer, this.items[i]))) { hit = i; break; }
+    }
+    // The plate outline, grabbed anywhere along its edge that is not a tool.
+    const bl = hit < 0 ? this.bedLoop() : null;
     if (bl && distToLoop(mm, bl) < Math.max(tolPx, 8 / this.view.scale)) {
       const off = this.bed.offset || (this.bed.offset = { x: 0, y: 0 });
       this._drag = { kind: 'bed', x0: mm.x, y0: mm.y, ox: off.x || 0, oy: off.y || 0 };
@@ -247,18 +254,14 @@ export class LayoutEditor {
       this.draw();
       return;
     }
-    // Topmost item under the pointer.
-    for (let i = this.items.length - 1; i >= 0; i--) {
-      const placed = placeLoop(this.items[i].outer, this.items[i]);
-      if (pointInPolygon(mm, placed)) {
-        this.sel = i;
-        this.bedSel = false;
-        this._drag = { kind: 'move', idx: i, dx: this.items[i].x - mm.x, dy: this.items[i].y - mm.y };
-        this.canvas.setPointerCapture(e.pointerId);
-        if (this.cb.onSelect) this.cb.onSelect(i);
-        this.draw();
-        return;
-      }
+    if (hit >= 0) {
+      this.sel = hit;
+      this.bedSel = false;
+      this._drag = { kind: 'move', idx: hit, dx: this.items[hit].x - mm.x, dy: this.items[hit].y - mm.y };
+      this.canvas.setPointerCapture(e.pointerId);
+      if (this.cb.onSelect) this.cb.onSelect(hit);
+      this.draw();
+      return;
     }
     this.sel = -1;
     this.bedSel = false;
