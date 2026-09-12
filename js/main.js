@@ -1547,6 +1547,11 @@ for (const [id, key, cells] of [['layW', 'w', 'n'], ['layH', 'h', 'm']]) {
     refreshLayoutEditor();
   });
 }
+// A sheet thickness from a project file, held to what the field below
+// accepts: a real number of at least 0.5 mm, or the default in its place.
+function laySheetMM(v, dflt) {
+  return Number.isFinite(v) && v >= 0.5 ? v : dflt;
+}
 $('laySheetTop').addEventListener('change', e => {
   const mm = parseDim(e.target.value);
   if (mm !== null && mm >= 0.5) state.layout.sheet.top = mm;
@@ -3100,7 +3105,15 @@ function loadProject(p) {
       // existed has no `construction` key and must load as a pocket insert.
       construction: ['pocket', 'through', 'layered'].includes(p.layout.construction)
         ? p.layout.construction : 'pocket',
-      sheet: { ...state.layout.sheet, ...(p.layout.sheet || {}) },
+      // Sheet thicknesses are numbers a hand-edited or pasted file can get
+      // wrong. A value the sheet field itself would refuse is not trusted:
+      // the builder and the panel clamp differently below 0.5 mm, so a bad
+      // one would leave the panel describing a sheet the build never cut.
+      sheet: {
+        ...state.layout.sheet,
+        top: laySheetMM(p.layout.sheet && p.layout.sheet.top, state.layout.sheet.top),
+        base: laySheetMM(p.layout.sheet && p.layout.sheet.base, state.layout.sheet.base),
+      },
       bed: {
         ...state.layout.bed, ...(p.layout.bed || {}),
         tabs: { ...state.layout.bed.tabs, ...((p.layout.bed && p.layout.bed.tabs) || {}) },

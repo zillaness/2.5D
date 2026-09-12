@@ -2392,6 +2392,15 @@ const constrState = await page.evaluate(async () => {
   window.__app.loadProject(legacy);
   const legacyLoad = { construction: st.layout.construction, sheet: st.layout.sheet };
 
+  // A sheet thickness the panel field would refuse is not trusted: 0 or null
+  // reads as "absent" to the builder and as the 0.5 mm clamp to the panel,
+  // and the panel would then warn about a sheet the export never cut.
+  const badSheet = JSON.parse(window.__app.serializeProject(false));
+  badSheet.layout.construction = 'through';
+  badSheet.layout.sheet = { top: 0, base: null };
+  window.__app.loadProject(badSheet);
+  const badSheetLoad = { ...st.layout.sheet };
+
   // Junk in the file is not trusted either.
   const junk = JSON.parse(window.__app.serializeProject(false));
   junk.layout.construction = 'moulded';
@@ -2402,7 +2411,7 @@ const constrState = await page.evaluate(async () => {
   holder.value = 'none';
   holder.dispatchEvent(new Event('change'));
   await new Promise(r => setTimeout(r, 300));
-  return { options, dflt, picked, roundTrip, legacyLoad, junkLoad };
+  return { options, dflt, picked, roundTrip, legacyLoad, junkLoad, badSheetLoad };
 });
 
 console.log('\nLaser-cut foam constructions (holders.js)');
@@ -2421,6 +2430,9 @@ check('a project saved before laser constructions loads as pocket',
   `${constrState.legacyLoad.construction}, sheet ${JSON.stringify(constrState.legacyLoad.sheet)}`);
 check('an unknown construction in a project file falls back to pocket',
   constrState.junkLoad === 'pocket', constrState.junkLoad);
+check('an unusable sheet thickness in a project file falls back to the default',
+  constrState.badSheetLoad.top === 6 && constrState.badSheetLoad.base === 3,
+  `top ${constrState.badSheetLoad.top}, base ${constrState.badSheetLoad.base}`);
 
 // The through cut itself: pockets become holes, the sheet is the thickness.
 // Volume is the real proof that a hole goes all the way through — a recess
@@ -2495,8 +2507,15 @@ const cutThrough = await page.evaluate(async () => {
   const deepLayered = buildLayoutInsert(container, [mk(60, 45, 0, 12), mk(150, 45, 90, 2.5)],
     { ...base, construction: 'layered', sheet: 6, baseSheet: 3 });
   const pocket = buildLayoutInsert(container, items, base);
+  // A sheet thickness of 0 is junk, and the panel reads junk as the 0.5 mm
+  // clamp. The builder has to read it the same way: falling back to the 6 mm
+  // default here would make the panel describe a sheet the export never cut.
+  const zeroSheet = buildLayoutInsert(container, items, { ...base, construction: 'through', sheet: 0 });
+  const noSheet = buildLayoutInsert(container, items, { ...base, construction: 'through' });
 
   return {
+    zeroSheetT: zeroSheet?.stats?.slab?.top,
+    noSheetT: noSheet?.stats?.slab?.top,
     ok: !!cut && !cut.reason,
     bad: cut && cut.positions ? badEdges(cut) : -1,
     zs: cut ? zSet(cut) : [],
@@ -2589,6 +2608,9 @@ check('a tool deeper than the one top sheet warns instead of stacking sheets',
   /depths are ignored/.test(cutThrough.deepLayeredWarns) &&
   cutThrough.deepLayeredThick === 9,
   cutThrough.deepLayeredWarns);
+check('a sheet thickness of 0 clamps as the panel clamps it, not to the default',
+  cutThrough.zeroSheetT === 0.5 && cutThrough.noSheetT === 6,
+  `sheet 0 builds ${cutThrough.zeroSheetT} mm, no sheet builds ${cutThrough.noSheetT} mm`);
 check('pocket and through builds stay one part',
   cutThrough.cutNames === 'insert' && cutThrough.pocketNames === 'insert',
   `through "${cutThrough.cutNames}", pocket "${cutThrough.pocketNames}"`);

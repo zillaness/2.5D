@@ -456,6 +456,12 @@ export function layoutConflicts(containerOuter, pockets, border) {
   return { collisions, escaped };
 }
 
+// A sheet thickness in mm: any real number is clamped to the thinnest sheet
+// worth cutting, and only a missing one falls back to the default. `|| dflt`
+// would read 0 and NaN as "not given" while the layout panel reads them as
+// the clamp, and then the panel would describe a sheet the build never used.
+const sheetMM = (v, dflt) => Math.max(0.5, Number.isFinite(v) ? v : dflt);
+
 // Drawer / toolbox insert: the container outline extruded as a slab with one
 // pocket recess per placed tool, each at its own depth.
 //
@@ -493,8 +499,8 @@ export function buildLayoutInsert(container, items, opts = {}) {
   // Both laser constructions cut the pockets clean through the top sheet;
   // 'layered' just puts a second, plain sheet under it.
   const cutThrough = through || layered;
-  const sheet = Math.max(0.5, opts.sheet || 6);
-  const baseSheet = Math.max(0.5, opts.baseSheet || 3);
+  const sheet = sheetMM(opts.sheet, 6);
+  const baseSheet = sheetMM(opts.baseSheet, 3);
 
   const pockets = layoutPockets(items, clearance);
   const { collisions, escaped } = layoutConflicts(container.outer, pockets, border);
