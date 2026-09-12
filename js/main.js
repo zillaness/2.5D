@@ -3514,9 +3514,12 @@ function loadProject(p) {
       bed: {
         ...state.layout.bed, ...(p.layout.bed || {}),
         tabs: { ...state.layout.bed.tabs, ...((p.layout.bed && p.layout.bed.tabs) || {}) },
-        // Merged onto the default the same way, so a project saved before the
-        // build plate existed lands on offset zero rather than undefined.
-        offset: { ...state.layout.bed.offset, ...((p.layout.bed && p.layout.bed.offset) || {}) },
+        // Defaulted, not inherited: a project saved before the build plate
+        // existed carries neither key, and must land on no plate shape and on
+        // offset zero rather than on whatever plate the drawer before it left
+        // on screen, which would retile it and change what it exports.
+        shape: (p.layout.bed && p.layout.bed.shape) || null,
+        offset: { x: 0, y: 0, ...((p.layout.bed && p.layout.bed.offset) || {}) },
       },
       // Merged onto the defaults, not taken from the file: a project saved
       // before labels existed has no `labels` key, and rebuilding state.layout

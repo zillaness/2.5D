@@ -4464,6 +4464,40 @@ check('picking a plate shape shows it in the select, and a rectangle again gives
   plateSelect.cleared.w === 300 && plateSelect.cleared.h === 200,
   `picked ${JSON.stringify(plateSelect.picked)}, cleared ${JSON.stringify(plateSelect.cleared)}`);
 
+// A project saved before the build plate existed carries no shape and no
+// offset, and must load with neither, whatever plate the drawer before it left
+// on screen. Inheriting one retiles a drawer that fits its bed whole.
+const plateLegacy = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 280, h: 180, r: 6, name: null };
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  const legacy = JSON.parse(app.serializeProject(false));
+  delete legacy.layout.bed.shape;
+  delete legacy.layout.bed.offset;
+  // The drawer on screen before it: a plate shape picked and the plate dragged.
+  app.state.layout.bed.shape = { name: 'someone else\'s plate', outer: [{ x: 0, y: 0 }, { x: 250, y: 0 }, { x: 250, y: 250 }, { x: 0, y: 250 }] };
+  app.state.layout.bed.offset = { x: 37, y: 21 };
+  await app.loadProject(legacy);
+  app.refreshLayoutEditor();
+  return {
+    off: app.bed.offset(),
+    shape: app.state.layout.bed.shape,
+    info: document.getElementById('layBedInfo').textContent,
+    tilesBtn: document.getElementById('layExportTilesBtn').disabled,
+    plan: !!app.bed.plan(),
+  };
+});
+
+check('a project saved before the build plate loads with no plate, not the last drawer\'s',
+  plateLegacy.off.x === 0 && plateLegacy.off.y === 0 && !plateLegacy.shape &&
+  /Fits the 300 × 200 bed in one piece/.test(plateLegacy.info) &&
+  plateLegacy.tilesBtn === true,
+  `offset ${JSON.stringify(plateLegacy.off)}, shape ${JSON.stringify(plateLegacy.shape)}, info ${plateLegacy.info}`);
+
 // Leave the plate as the blocks after this one expect it: no bed, no shape,
 // no offset, nothing placed, back on Step 3.
 await page.evaluate(async () => {
