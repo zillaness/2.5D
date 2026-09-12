@@ -2048,7 +2048,12 @@ function refreshLayPalette() {
   }
 
   const group = $('layPalFolderGroup');
-  const has = layFolder.entries.length > 0 || layFolder.skipped.length > 0;
+  // A folder that reads as nothing is not the same as no folder at all. The
+  // pick has to leave evidence either way, and "Save here" lives inside this
+  // group, so hiding it would put the folder write-back out of reach for
+  // exactly the fresh, empty folder a new drawer project belongs in. An empty
+  // label is how `setFolder` says the folder was closed.
+  const has = layFolder.entries.length > 0 || layFolder.skipped.length > 0 || !!layFolder.label;
   group.hidden = !has;
   $('layPalFolderName').textContent = layFolder.label || '';
   $('layPalAddAllBtn').disabled = layFolder.entries.length === 0;
@@ -2062,6 +2067,15 @@ function refreshLayPalette() {
     .join('\n');
   const folderList = $('layPalFolderList');
   folderList.innerHTML = '';
+  if (!layFolder.entries.length && layFolder.label) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.style.margin = '2px 0';
+    p.textContent = layFolder.skipped.length
+      ? 'No readable traces in this folder.'
+      : 'This folder is empty. Save a project into it, or open one with traces in it.';
+    folderList.appendChild(p);
+  }
   // Two traces can share a name, so the path is what tells them apart.
   for (const e of layFolder.entries) {
     folderList.appendChild(layPaletteRow(e.name, e.source ? e.source.path : '', [

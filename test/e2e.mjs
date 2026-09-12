@@ -5088,6 +5088,48 @@ check('a library past 4 MB is offered the trim, and declining keeps every photo 
   `declined: asked ${libConsent.declined.asked}, ${libConsent.declined.photos} photos of 5 kept, ` +
   `${libConsent.declined.n} rows; accepted: ${libConsent.accepted.photos} photos, ${libConsent.accepted.n} rows`);
 
+// A folder that reads as nothing still has to show that it opened: "Save here"
+// lives inside the folder group, so hiding the group puts the folder
+// write-back out of reach for exactly the fresh folder a new drawer belongs in.
+const emptyFolder = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const dir = {
+    kind: 'directory', name: 'new-project', children: [],
+    values: async function* () {},
+    queryPermission: async () => 'granted',
+    requestPermission: async () => 'granted',
+    getFileHandle: async () => ({
+      createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+    }),
+  };
+  Object.defineProperty(window, 'showDirectoryPicker', { value: async () => dir, configurable: true });
+  document.getElementById('layOpenFolderBtn').click();
+  await new Promise(r => setTimeout(r, 400));
+  const group = document.getElementById('layPalFolderGroup');
+  const save = document.getElementById('layPalSaveFolderBtn');
+  const out = {
+    shown: !group.hidden,
+    label: document.getElementById('layPalFolderName').textContent,
+    says: document.getElementById('layPalFolderList').textContent,
+    saveShown: !save.hidden && save.offsetParent !== null,
+    handled: app.folderBackend.handle === dir,
+  };
+  // Closing the folder still empties the group.
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  out.closed = group.hidden;
+  app.folderBackend.forget();
+  delete window.showDirectoryPicker;
+  app.refreshLayoutEditor();
+  return out;
+});
+
+check('an opened folder with nothing readable in it says so, and keeps “Save here” reachable',
+  emptyFolder.shown && emptyFolder.label === 'new-project' && emptyFolder.handled &&
+  /empty/.test(emptyFolder.says) && emptyFolder.saveShown && emptyFolder.closed,
+  `shown ${emptyFolder.shown} as “${emptyFolder.label}”, save reachable ${emptyFolder.saveShown}, says “${emptyFolder.says}”, closed ${emptyFolder.closed}`);
+
 // Leave the container as the blocks after this one expect it.
 await page.evaluate(async () => {
   const app = window.__app;
