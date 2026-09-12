@@ -4895,6 +4895,74 @@ check('a project whose container scale is not a number loads as 1 : 1 and still 
   scaleBad.good.scale.x === 1.05 && scaleBad.good.scale.y === 2 && scaleBad.good.hidden === false,
   `string ${JSON.stringify(scaleBad.text.scale)} threw ${scaleBad.text.threw}, null ${JSON.stringify(scaleBad.nul.scale)} threw ${scaleBad.nul.threw}, good ${JSON.stringify(scaleBad.good.scale)}`);
 
+// A nudged plate pads the tiling window, and to the seam scorer that pad is
+// ordinary material: a seam can land inside it, leaving a leading cell with no
+// drawer in it at all. splitTiles drops that tile, so the grid the plan reports
+// has to drop it too. It used to keep it, and a four-tile plan called itself
+// 2 × 3, named its file -tiles-2x3.svg and lettered its pieces from B.
+const tilePad = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const bedBefore = JSON.stringify(app.state.layout.bed);
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  const tool = (name, x, y) => ({
+    name, outer: [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 35 }, { x: 5, y: 35 }],
+    holes: [], circles: [], x, y, rot: 0, depth: 4, thickness: 5,
+  });
+  const at = async (w, h, off, tools) => {
+    app.state.layout.container = { ...app.state.layout.container, type: 'rect', w, h, r: 6, name: null };
+    app.state.layout.items.length = 0;
+    for (const t of tools) app.state.layout.items.push(t);
+    app.state.layout.bed.offset = { ...off };
+    app.refreshLayoutEditor();
+    const plan = app.bed.plan();
+    const out = app.layoutExports.svg('auto');
+    const svg = out ? await out.blob.text() : '';
+    return {
+      nx: plan.nx, ny: plan.ny, tiles: plan.tiles.length,
+      cols: [...new Set(plan.tiles.map(t => t.col))].sort((a, b) => a - b).join(','),
+      rows: [...new Set(plan.tiles.map(t => t.row))].sort((a, b) => a - b).join(','),
+      seams: `${plan.seamsX.length}/${plan.seamsY.length}`,
+      info: document.getElementById('layBedInfo').textContent,
+      name: out ? out.name : null,
+      ids: (svg.match(/>[A-Z]\d+ /g) || []).map(s => s.slice(1).trim()).join(','),
+      cuts: (svg.match(/<path transform/g) || []).length,
+    };
+  };
+  const deep = [tool('rasp', 150, 60), tool('file', 150, 140)];
+  const down0 = await at(550, 380, { x: 0, y: 0 }, deep);
+  const down30 = await at(550, 380, { x: 0, y: 30 }, deep);
+  const across0 = await at(400, 100, { x: 0, y: 0 }, [tool('rule', 120, 50)]);
+  const across250 = await at(400, 100, { x: 250, y: 0 }, [tool('rule', 120, 50)]);
+  app.state.layout.bed = JSON.parse(bedBefore);
+  app.state.layout.items.length = 0;
+  app.refreshLayoutEditor();
+  return { down0, down30, across0, across250 };
+});
+
+// Every consumer of the grid — the readout, the download name and the A1/B2
+// tile ids the exporter letters from the row — has to describe the tiles the
+// file actually carries.
+const gridHolds = p => !!p && p.tiles > 0 &&
+  p.cols.split(',').length === p.nx && p.rows.split(',').length === p.ny &&
+  p.cols.split(',')[0] === '0' && p.rows.split(',')[0] === '0' &&
+  p.tiles <= p.nx * p.ny && p.seams === `${p.nx - 1}/${p.ny - 1}` &&
+  p.info.includes(`${p.tiles} tiles (${p.nx} × ${p.ny})`) &&
+  p.name.endsWith(`-drawer-tiles-${p.nx}x${p.ny}.svg`) &&
+  p.ids.split(',').length === p.tiles && p.ids.split(',').includes('A1') &&
+  p.cuts === p.tiles;
+
+check('a nudged plate never reports a tile row or column the exported file does not hold',
+  gridHolds(tilePad.down0) && gridHolds(tilePad.down30) &&
+  gridHolds(tilePad.across0) && gridHolds(tilePad.across250) &&
+  tilePad.down0.tiles === 4 && tilePad.down30.tiles === 4 && tilePad.across250.tiles === 2,
+  `y+0 ${tilePad.down0.tiles} tiles ${tilePad.down0.nx}x${tilePad.down0.ny} ids ${tilePad.down0.ids}, ` +
+  `y+30 ${tilePad.down30.tiles} tiles ${tilePad.down30.nx}x${tilePad.down30.ny} ids ${tilePad.down30.ids} ${tilePad.down30.name}, ` +
+  `x+250 ${tilePad.across250.tiles} tiles ${tilePad.across250.nx}x${tilePad.across250.ny} ids ${tilePad.across250.ids} ${tilePad.across250.name}`);
+
 // Leave the container as the blocks after this one expect it.
 await page.evaluate(async () => {
   const app = window.__app;

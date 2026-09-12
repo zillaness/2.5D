@@ -1693,7 +1693,7 @@ function laySplitWithOffset(template, bedW, bedH, opts) {
   // the plate was dragged, and the seam would fall in the empty pad rather
   // than anywhere in the drawer.
   const fits = template.w <= bedW + 1e-6 && template.h <= bedH + 1e-6;
-  if (fits || (!(ox > 0) && !(oy > 0))) return splitTiles(template, bedW, bedH, opts);
+  if (fits || (!(ox > 0) && !(oy > 0))) return layCompactPlan(splitTiles(template, bedW, bedH, opts));
   const plan = splitTiles({
     ...template,
     origin: { x: template.origin.x - ox, y: template.origin.y - oy },
@@ -1703,6 +1703,28 @@ function laySplitWithOffset(template, bedW, bedH, opts) {
   for (const t of plan.tiles) { t.x0 -= ox; t.y0 -= oy; }
   plan.seamsX = plan.seamsX.map(v => v - ox);
   plan.seamsY = plan.seamsY.map(v => v - oy);
+  return layCompactPlan(plan);
+}
+// The grid a plan reports has to be the grid of tiles it carries. The pad the
+// window adds is empty material as far as `planSeams` is concerned, so a seam
+// can land inside it; the cell in front of that seam holds no drawer at all,
+// `splitTiles` drops it, and `nx`/`ny` are left counting a row or column no
+// tile occupies. That is what made a four-tile plan report itself as 2 × 3,
+// name its file `-tiles-2x3.svg`, and letter its pieces from B. Renumber the
+// grid onto the cells that actually carry a tile, and keep only the seams
+// that separate two of them.
+function layCompactPlan(plan) {
+  if (!plan || !plan.tiles.length) return plan;
+  const cols = [...new Set(plan.tiles.map(t => t.col))].sort((a, b) => a - b);
+  const rows = [...new Set(plan.tiles.map(t => t.row))].sort((a, b) => a - b);
+  if (cols.length === plan.nx && rows.length === plan.ny) return plan;
+  const cAt = new Map(cols.map((c, i) => [c, i]));
+  const rAt = new Map(rows.map((r, i) => [r, i]));
+  plan.seamsX = plan.seamsX.filter((_, k) => cAt.has(k) && cAt.has(k + 1));
+  plan.seamsY = plan.seamsY.filter((_, k) => rAt.has(k) && rAt.has(k + 1));
+  for (const t of plan.tiles) { t.col = cAt.get(t.col); t.row = rAt.get(t.row); }
+  plan.nx = cols.length;
+  plan.ny = rows.length;
   return plan;
 }
 // Where the layout sits on the plate, and how to move it. Refreshed on every
