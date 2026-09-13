@@ -7678,6 +7678,279 @@ check('the folder-ingest block hands the palette, the handle and the strip back 
   queueTwo.restored.group && queueTwo.restored.strip && queueTwo.restored.step === 3,
   `queue ${queueTwo.restored.queue}, palette ${queueTwo.restored.palette}, group hidden ${queueTwo.restored.group}, step ${queueTwo.restored.step}`);
 
+// The walk: Next saves under the photo's own name, writes the project beside
+// the photo, and opens the next ticked one; Skip passes; Undo comes back.
+const queueThree = await page.evaluate(async () => {
+  const app = window.__app;
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    orient: app.state.paper.orientation,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    ref: app.queue.snapshot(),
+  };
+
+  // A library that already holds a hammer, so the second photo's name collides.
+  localStorage.setItem('2p5d.library.v1', JSON.stringify([
+    { name: 'hammer', kind: 'tool', thickness: 5, outer: rect(5, 5, 40, 20), holes: [], circles: [] },
+  ]));
+
+  // A writable folder handle, the way the picker hands one over. Every write
+  // records which directory it landed in, so "beside the photo" is checked and
+  // not assumed.
+  const files = {
+    'awl.jpg': await photoFile('awl.jpg', 600, 450),
+    'hammer.jpg': await photoFile('hammer.jpg', 400, 300),
+    'rasp.jpg': await photoFile('rasp.jpg', 360, 280),
+    'chisel.jpg': await photoFile('chisel.jpg', 320, 240),
+  };
+  const writes = [];
+  const fileHandle = name => ({ kind: 'file', name, getFile: async () => files[name] });
+  const mkDir = (name, children) => {
+    const h = {
+      kind: 'directory', name, children,
+      values: async function* () { for (const c of h.children) yield c; },
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      getDirectoryHandle: async n => {
+        const kid = h.children.find(c => c.kind === 'directory' && c.name === n);
+        if (!kid) throw new Error('no such folder');
+        return kid;
+      },
+      getFileHandle: async n => ({
+        createWritable: async () => ({
+          write: async text => { writes.push({ dir: h.name, name: n, text: String(text) }); },
+          close: async () => {},
+        }),
+      }),
+    };
+    return h;
+  };
+  const dir = mkDir('bench', [
+    fileHandle('awl.jpg'), fileHandle('hammer.jpg'), fileHandle('rasp.jpg'),
+    mkDir('sub', [fileHandle('chisel.jpg')]),
+  ]);
+
+  app.queue.clear();
+  await app.queue.ingestFolder(dir, 'bench');
+  const queued = app.state.queue.map(q => q.path);
+
+  // Photo one, with reference settings a user would have set on it and a
+  // fixture trace standing in for the Step 2 pass.
+  app.queue.load(app.state.queue[0]);
+  await new Promise(r => setTimeout(r, 700));
+  app.state.reference = 'rect';
+  app.state.captureFrac = 0.5;
+  app.state.grid.nx = 7;
+  app.state.bar.lengthMm = 123;
+  document.getElementById('captureArea').value = '0.5';
+  app.traceEditor.setTrace(rect(10, 10, 50, 25), []);
+  const firstCorners = JSON.stringify(app.state.corners);
+  const firstWide = app.state.image.naturalWidth;
+
+  const nextOne = await app.queue.walk.next();
+  await new Promise(r => setTimeout(r, 700));
+  const afterOne = {
+    saved: nextOne && nextOne.name,
+    status: app.state.queue[0].status,
+    picked: app.state.queue[0].picked,
+    current: app.state.queueCurrentId === app.state.queue[1].id,
+    nameField: document.getElementById('queueSaveName').value,
+    fileName: app.state.fileName,
+    wide: app.state.image.naturalWidth,
+    // The carry-over: settings kept, corners re-detected on the new photo.
+    reference: app.state.reference,
+    captureFrac: app.state.captureFrac,
+    captureField: document.getElementById('captureArea').value,
+    nx: app.state.grid.nx,
+    bar: app.state.bar.lengthMm,
+    cornersMoved: JSON.stringify(app.state.corners) !== firstCorners,
+    cornersInside: app.state.corners.every(p =>
+      p.x <= app.state.image.naturalWidth && p.y <= app.state.image.naturalHeight),
+    firstWide,
+  };
+
+  // Photo two is hammer.jpg, and the library already holds a "hammer".
+  const nextTwo = await app.queue.walk.next();
+  await new Promise(r => setTimeout(r, 700));
+  const collided = {
+    saved: nextTwo && nextTwo.name,
+    current: app.state.queueCurrentId === app.state.queue[2].id,
+    libNames: JSON.parse(localStorage.getItem('2p5d.library.v1')).map(o => o.name),
+  };
+
+  // Photo three is skipped, so the walk lands on the one in the subfolder.
+  const skipped = app.queue.walk.skip();
+  await new Promise(r => setTimeout(r, 700));
+  const afterSkip = {
+    status: app.state.queue[2].status,
+    picked: app.state.queue[2].picked,
+    current: app.state.queueCurrentId === app.state.queue[3].id,
+    fileName: app.state.fileName,
+    libNames: JSON.parse(localStorage.getItem('2p5d.library.v1')).map(o => o.name),
+    next: skipped && skipped.next === app.state.queue[3].id,
+  };
+
+  // The last ticked photo: its project goes into the subfolder it came from.
+  const nextFour = await app.queue.walk.next();
+  await new Promise(r => setTimeout(r, 400));
+  const written = writes.map(w => `${w.dir}/${w.name}`);
+  const project = JSON.parse(writes[writes.length - 1].text);
+  const lastOne = {
+    saved: nextFour && nextFour.name,
+    noNext: nextFour && nextFour.next === null,
+    traced: app.queue.traced.map(t => t.name),
+    projectApp: project.app,
+    projectName: project.fileName,
+    projectPhoto: project.photo,
+    projectOuter: project.trace.outer.length,
+    undoShown: !document.getElementById('queueUndoBtn').hidden,
+  };
+
+  // Undo comes back to the photo just finished, pending and ticked again.
+  app.queue.walk.undo();
+  await new Promise(r => setTimeout(r, 700));
+  const undone = {
+    status: app.state.queue[3].status,
+    picked: app.state.queue[3].picked,
+    current: app.state.queueCurrentId === app.state.queue[3].id,
+    fileName: app.state.fileName,
+    traced: app.queue.traced.map(t => t.name),
+    undoHidden: document.getElementById('queueUndoBtn').hidden,
+    // The library entry stays: the trace is saved work, not a draft.
+    libNames: JSON.parse(localStorage.getItem('2p5d.library.v1')).map(o => o.name),
+  };
+
+  // The walk row rides Steps 1 to 3 and goes with the drawer on Step 4.
+  const rows = {};
+  app.goStep(3);
+  rows.s3 = !document.getElementById('queueWalkRow').hidden;
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  rows.s4 = document.getElementById('queueWalkRow').hidden;
+  app.goStep(3);
+
+  // Put the library, the folder, the queue and Step 1 back.
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.palette.refresh();
+  app.queue.applyRef(before.ref);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles);
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  app.state.paper.orientation = before.orient;
+  document.getElementById('paperOrient').value = before.orient;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await new Promise(r => setTimeout(r, 300));
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    lib: localStorage.getItem('2p5d.library.v1') === before.lib,
+    queue: app.state.queue.length,
+    handle: app.folderBackend.handle,
+    trace: app.traceEditor.outer.length === before.trace.outer.length,
+    reference: app.state.reference === before.ref.reference,
+    captureFrac: app.state.captureFrac === before.ref.captureFrac,
+  };
+
+  return { queued, afterOne, collided, afterSkip, lastOne, undone, rows, restored, written };
+});
+
+check('Next saves the trace under the photo file name, marks it traced and opens the next ticked photo',
+  JSON.stringify(queueThree.queued) === JSON.stringify(
+    ['bench/awl.jpg', 'bench/hammer.jpg', 'bench/rasp.jpg', 'bench/sub/chisel.jpg']) &&
+  queueThree.afterOne.saved === 'awl' && queueThree.afterOne.status === 'traced' &&
+  queueThree.afterOne.picked === false && queueThree.afterOne.current &&
+  queueThree.afterOne.nameField === 'hammer' && queueThree.afterOne.fileName === 'hammer' &&
+  queueThree.afterOne.wide === 400 && queueThree.afterOne.firstWide === 600,
+  `saved “${queueThree.afterOne.saved}”, now on “${queueThree.afterOne.fileName}” ` +
+  `(${queueThree.afterOne.wide} px wide), name field “${queueThree.afterOne.nameField}”`);
+
+check('a library name already taken takes the photo’s folder as a suffix',
+  queueThree.collided.saved === 'hammer (bench)' && queueThree.collided.current &&
+  JSON.stringify(queueThree.collided.libNames) === JSON.stringify(
+    ['hammer', 'awl', 'hammer (bench)']),
+  `saved “${queueThree.collided.saved}”, library ${JSON.stringify(queueThree.collided.libNames)}`);
+
+check('Next writes the project beside the photo, photo-free, so the folder resumes it',
+  JSON.stringify(queueThree.written) === JSON.stringify(
+    ['bench/awl.json', 'bench/hammer.json', 'sub/chisel.json']) &&
+  queueThree.lastOne.projectApp === '2.5D' && queueThree.lastOne.projectName === 'chisel' &&
+  queueThree.lastOne.projectPhoto === null && queueThree.lastOne.projectOuter === 4,
+  `${JSON.stringify(queueThree.written)}, last project “${queueThree.lastOne.projectName}” ` +
+  `photo ${queueThree.lastOne.projectPhoto}`);
+
+check('the reference settings carry over to the next photo and the corners are re-detected',
+  queueThree.afterOne.reference === 'rect' && queueThree.afterOne.captureFrac === 0.5 &&
+  queueThree.afterOne.captureField === '0.5' && queueThree.afterOne.nx === 7 &&
+  queueThree.afterOne.bar === 123 && queueThree.afterOne.cornersMoved &&
+  queueThree.afterOne.cornersInside,
+  `capture ${queueThree.afterOne.captureFrac} (field “${queueThree.afterOne.captureField}”), ` +
+  `grid nx ${queueThree.afterOne.nx}, bar ${queueThree.afterOne.bar}, ` +
+  `corners moved ${queueThree.afterOne.cornersMoved} and inside the new photo ${queueThree.afterOne.cornersInside}`);
+
+check('Skip advances without saving and leaves the photo in the queue',
+  queueThree.afterSkip.status === 'skipped' && queueThree.afterSkip.picked === false &&
+  queueThree.afterSkip.current && queueThree.afterSkip.next &&
+  queueThree.afterSkip.fileName === 'chisel' &&
+  JSON.stringify(queueThree.afterSkip.libNames) === JSON.stringify(
+    ['hammer', 'awl', 'hammer (bench)']),
+  `rasp is ${queueThree.afterSkip.status}, now on “${queueThree.afterSkip.fileName}”, ` +
+  `library still ${JSON.stringify(queueThree.afterSkip.libNames)}`);
+
+check('Undo returns to the photo just finished, pending and ticked, with its library entry kept',
+  queueThree.lastOne.saved === 'chisel' && queueThree.lastOne.noNext &&
+  JSON.stringify(queueThree.lastOne.traced) === JSON.stringify(['awl', 'hammer (bench)', 'chisel']) &&
+  queueThree.lastOne.undoShown &&
+  queueThree.undone.status === 'pending' && queueThree.undone.picked === true &&
+  queueThree.undone.current && queueThree.undone.fileName === 'chisel' &&
+  queueThree.undone.undoHidden &&
+  JSON.stringify(queueThree.undone.traced) === JSON.stringify(['awl', 'hammer (bench)']) &&
+  JSON.stringify(queueThree.undone.libNames) === JSON.stringify(
+    ['hammer', 'awl', 'hammer (bench)', 'chisel']),
+  `traced ${JSON.stringify(queueThree.lastOne.traced)} → ${JSON.stringify(queueThree.undone.traced)}, ` +
+  `chisel back to ${queueThree.undone.status}, library ${JSON.stringify(queueThree.undone.libNames)}`);
+
+check('the walk row rides Steps 1 to 3 and the block hands the library and Step 1 back',
+  queueThree.rows.s3 && queueThree.rows.s4 && queueThree.restored.image &&
+  queueThree.restored.lib && queueThree.restored.queue === 0 &&
+  queueThree.restored.handle === null && queueThree.restored.trace &&
+  queueThree.restored.reference && queueThree.restored.captureFrac &&
+  queueThree.restored.step === 3,
+  `step ${queueThree.restored.step}, library restored ${queueThree.restored.lib}, ` +
+  `photo restored ${queueThree.restored.image}, handle ${queueThree.restored.handle}`);
+
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {

@@ -48,6 +48,15 @@
       </div>
       <div id="queueBody">
         <div id="queueList" style="display:flex; gap:8px; overflow-x:auto; padding:8px 0"></div>
+        <div class="field" id="queueNameRow" hidden style="margin:2px 0 6px">
+          <label for="queueSaveName">Library name for this photo</label>
+          <input type="text" id="queueSaveName" placeholder="from the photo's file name">
+        </div>
+        <div class="btn-row" id="queueWalkRow" hidden>
+          <button id="queueNextBtn" class="btn small" style="flex:1" title="Save this trace to the outline library, write its project beside the photo, and open the next ticked photo">Next ▸</button>
+          <button id="queueSkipBtn" class="btn small" style="flex:1" title="Leave this photo untraced and open the next ticked one">Skip</button>
+          <button id="queueUndoBtn" class="btn small" hidden style="flex:1" title="Go back to the photo just finished">↶ Undo</button>
+        </div>
         <div class="btn-row">
           <button id="queueSelectAllBtn" class="btn small" style="flex:1" title="Tick every photo that can be traced">Select all</button>
           <button id="queueClearDoneBtn" class="btn small" style="flex:1" title="Drop the traced and skipped photos from the queue">Clear done</button>

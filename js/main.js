@@ -679,6 +679,8 @@ function queueLoad(item) {
   if (!item) return false;
   if (item.status === 'unsupported') { toast(QUEUE_HEIC_MSG); return false; }
   state.queueCurrentId = item.id;
+  // The library name this photo will be saved under, editable before Next.
+  $('queueSaveName').value = item.libName || item.name;
   loadFile(item.file);
   if (state.step !== 1) goStep(1);
   renderQueue();
@@ -688,6 +690,9 @@ function queueLoad(item) {
 function queueClear() {
   state.queue.length = 0;
   state.queueCurrentId = null;
+  queueUndoable = null;
+  queueTraced.length = 0;
+  $('queueSaveName').value = '';
   renderQueue();
 }
 
@@ -728,6 +733,7 @@ function queueSyncVisible() {
   $('queueStrip').hidden = state.queue.length === 0;
   $('queueBody').hidden = queueCollapsed;
   $('queueToggle').textContent = queueCollapsed ? '▸' : '▾';
+  queueSyncWalk();
 }
 
 function queueTileFor(id) {
@@ -996,6 +1002,231 @@ async function queueDrop(entries, files) {
   return got;
 }
 
+// ---------- the walk: Next, Skip, and the reference carry-over ----------
+//
+// Next is the point of the queue: save this trace under the photo's own name,
+// write its project beside the photo so the folder becomes the tool collection
+// Step 4 reads back, mark the photo traced, and open the next ticked one. The
+// PRD's first open question is answered advance, with Undo coming back, because
+// throughput is what the batch flow is for.
+//
+// What carries over between photos is the reference settings and nothing else.
+// Corners are re-detected on every photo: the sheet moves between shots, so a
+// copied corner is a wrong corner.
+
+// What this session traced, in order: { id, name, fileName, path, json }.
+// Session-only, never serialised, and what "Organize what I have" preselects.
+const queueTraced = [];
+// The photo Next or Skip just left, so Undo can return to it.
+let queueUndoable = null;
+// The download fallback explains itself once per session, not once per photo.
+let queueDownloadNoted = false;
+
+// Everything the next photo inherits. state.corners is deliberately absent.
+function queueRefSnapshot() {
+  return {
+    reference: state.reference,
+    paper: { ...state.paper },
+    grid: { ...state.grid },
+    bar: { lengthMm: state.bar.lengthMm },
+    coin: { ...state.coin },
+    captureFrac: state.captureFrac,
+  };
+}
+
+// Put a snapshot back and sync the Step 1 controls with it, the way
+// loadProject syncs them after a project load.
+function queueApplyRef(snap) {
+  if (!snap) return;
+  state.reference = snap.reference;
+  state.paper = { ...state.paper, ...snap.paper };
+  // autoSig and lastAuto are about the photo on screen, not about the
+  // settings, so the new photo starts its square count from scratch.
+  state.grid = { ...state.grid, ...snap.grid, autoSig: null, lastAuto: null };
+  state.bar.lengthMm = snap.bar.lengthMm;
+  state.coin = { ...state.coin, ...snap.coin };
+  state.captureFrac = snap.captureFrac;
+  $('refType').value = state.reference;
+  sizeSel.value = state.paper.size;
+  $('paperOrient').value = state.paper.orientation;
+  $('customSizeRow').hidden = state.paper.size !== 'custom';
+  $('customW').value = fmtDim(state.paper.customW);
+  $('customH').value = fmtDim(state.paper.customH);
+  $('captureArea').value = String(state.captureFrac);
+  $('coinSize').value = state.coin.size;
+  $('coinCustomRow').hidden = state.coin.size !== 'coin_custom';
+  syncRefControls();
+  state.rectDirty = true;
+}
+
+// Load the next photo with the settings from the one just finished. The
+// restore is synchronous, so it lands before the decode does and the load's
+// own auto-detect runs against the carried reference rather than the old one.
+function queueLoadCarrying(item) {
+  const snap = queueRefSnapshot();
+  const ok = queueLoad(item);
+  if (ok) queueApplyRef(snap);
+  return ok;
+}
+
+// The folder a photo sits in, for the name-collision suffix.
+function queueParentName(path) {
+  const parts = String(path || '').split('/');
+  parts.pop();
+  return parts.length ? parts[parts.length - 1] : '';
+}
+
+// The library is keyed by name, and two folders can hold a wrench.jpg each.
+// The PRD's second open question is answered suffix with the parent folder,
+// the way the palette tells two same-named traces apart, so a morning's work
+// is never overwritten by an afternoon's. A photo re-traced after an Undo
+// keeps the name it already has, which overwrites its own row and nothing
+// else.
+function queueLibName(item, typed) {
+  const wanted = String(typed || '').trim() || item.name || 'outline';
+  if (item.libName && wanted === item.libName) return wanted;
+  const taken = new Set(libLoad().map(o => o.name));
+  if (!taken.has(wanted)) return wanted;
+  const parent = queueParentName(item.path);
+  const suffixed = parent ? `${wanted} (${parent})` : wanted;
+  if (!taken.has(suffixed)) return suffixed;
+  for (let k = 2; k < 1000; k++) {
+    if (!taken.has(`${suffixed} ${k}`)) return `${suffixed} ${k}`;
+  }
+  return suffixed;
+}
+
+// The subfolder a photo sits in, as a handle under the open folder, so the
+// project lands beside its photo and not in the folder root. A handle that
+// will not walk (a subfolder gone since the ingest) falls back to the root,
+// which still keeps the project inside the tool collection.
+async function queueDirFor(path) {
+  const parts = String(path || '').split('/');
+  parts.pop();
+  if (parts.length && layFolderHandle && parts[0] === layFolderHandle.name) parts.shift();
+  let dir = layFolderHandle;
+  try {
+    for (const seg of parts) {
+      if (!dir || typeof dir.getDirectoryHandle !== 'function') return layFolderHandle;
+      dir = await dir.getDirectoryHandle(seg);
+    }
+  } catch {
+    return layFolderHandle;
+  }
+  return dir || layFolderHandle;
+}
+
+// serializeProject(false) leaves the photo out: the photo is the sibling file,
+// so embedding it would double the folder's size for nothing.
+async function queueWriteProject(item) {
+  const text = serializeProject(false);
+  const base = queueBaseName(item.path);
+  if (layFolderHandle && await ensurePermission(layFolderHandle, 'readwrite')) {
+    try {
+      const dir = await queueDirFor(item.path);
+      const written = await writeProjectFile(dir, base, text);
+      item.json = written;
+      return { kind: 'folder', name: written };
+    } catch {
+      // A folder that refuses the write is not a reason to lose the trace.
+    }
+  }
+  // No writable folder: the directory-input backend reads once and a drop
+  // hands over no handle at all. The project is offered as a download instead,
+  // once per photo, and says once per session what a picked folder would do.
+  const name = `${base}.json`;
+  downloadBlob(new Blob([text], { type: 'application/json' }), name);
+  item.json = name;
+  const first = !queueDownloadNoted;
+  queueDownloadNoted = true;
+  return { kind: 'download', name, first };
+}
+
+function queueWroteWords(wrote) {
+  if (!wrote) return '';
+  if (wrote.kind === 'folder') return `, project written as “${wrote.name}” beside the photo`;
+  return `, project downloaded as “${wrote.name}”`;
+}
+
+// Mark the current item done and open the next ticked pending photo.
+function queueAdvance(item, done) {
+  queueUndoable = { id: item.id, kind: done };
+  const nxt = queueNextPending(item.id);
+  if (nxt) queueLoadCarrying(nxt);
+  else renderQueue();
+  queueSyncWalk();
+  return nxt;
+}
+
+async function queueNext() {
+  const item = state.queue.find(q => q.id === state.queueCurrentId);
+  if (!item) { toast('No queued photo is loaded — click a thumbnail to start.'); return null; }
+  const name = queueLibName(item, $('queueSaveName').value);
+  const entry = libEntryFromTrace(name);
+  if (!entry) { toast('Nothing traced yet — trace the outline in Step 2, then Next.'); return null; }
+  libCommit(entry);
+  item.libName = name;
+  const wrote = await queueWriteProject(item);
+  item.status = 'traced';
+  item.picked = false;
+  queueTraced.push({ id: item.id, name, fileName: state.fileName, path: item.path, json: item.json });
+  const nxt = queueAdvance(item, 'next');
+  const tail = nxt
+    ? ` Now on “${nxt.name}”.`
+    : ' That was the last ticked photo — Organize what I have when you are ready.';
+  const note = wrote.kind === 'download' && wrote.first
+    ? ' Open the folder with the picker to have projects written into it instead.'
+    : '';
+  toast(`Saved “${name}”${queueWroteWords(wrote)}.${tail}${note}`, 6000);
+  return { name, wrote, next: nxt ? nxt.id : null };
+}
+
+function queueSkip() {
+  const item = state.queue.find(q => q.id === state.queueCurrentId);
+  if (!item) { toast('No queued photo is loaded — click a thumbnail to start.'); return null; }
+  item.status = 'skipped';
+  item.picked = false;
+  const nxt = queueAdvance(item, 'skip');
+  toast(nxt
+    ? `Skipped “${item.name}”. Now on “${nxt.name}”.`
+    : `Skipped “${item.name}”. Nothing else is ticked — it stays in the queue.`);
+  return { skipped: item.id, next: nxt ? nxt.id : null };
+}
+
+// Undo comes back to the photo just finished. The trace itself is gone: the
+// next photo replaced the rectified image, and keeping a second one decoded
+// would break the memory rule the queue is built on. So the photo comes back
+// pending and ticked, and its library entry stays where it is until the photo
+// is traced again under the same name.
+function queueUndo() {
+  const back = queueUndoable;
+  queueUndoable = null;
+  const item = back && state.queue.find(q => q.id === back.id);
+  if (!item) { queueSyncWalk(); toast('Nothing to undo.'); return false; }
+  const at = queueTraced.findIndex(t => t.id === item.id);
+  if (at >= 0) queueTraced.splice(at, 1);
+  item.status = 'pending';
+  item.picked = true;
+  const ok = queueLoad(item);
+  queueSyncWalk();
+  toast(back.kind === 'next'
+    ? `Back on “${item.name}”. Its library entry is still saved — tracing it again under the same name overwrites it.`
+    : `Back on “${item.name}”.`, 5000);
+  return ok;
+}
+
+// The walk belongs to Steps 1 to 3. On Step 4 the drawer, not the next photo,
+// is what the user is working on.
+function queueSyncWalk() {
+  const cur = state.queue.find(q => q.id === state.queueCurrentId) || null;
+  const walking = state.queue.length > 0 && state.step >= 1 && state.step <= 3;
+  $('queueWalkRow').hidden = !walking;
+  $('queueNameRow').hidden = !walking;
+  $('queueNextBtn').disabled = !cur;
+  $('queueSkipBtn').disabled = !cur;
+  $('queueUndoBtn').hidden = !queueUndoable;
+}
+
 // ---------- wiring: the strip, "Add photos…" and "Add folder…" ----------
 
 $('queueToggle').addEventListener('click', () => {
@@ -1018,6 +1249,10 @@ $('queueClearDoneBtn').addEventListener('click', () => {
   state.queue.push(...keep);
   renderQueue();
 });
+
+$('queueNextBtn').addEventListener('click', () => { queueNext(); });
+$('queueSkipBtn').addEventListener('click', () => { queueSkip(); });
+$('queueUndoBtn').addEventListener('click', () => { queueUndo(); });
 
 $('queueAddPhotosBtn').addEventListener('click', () => $('queuePhotosInput').click());
 
@@ -4594,10 +4829,12 @@ function refreshLibList() {
   if (!$('layoutModal').hidden) refreshLaySelects();
 }
 
-$('libSaveBtn').addEventListener('click', () => {
+// One library entry from whatever is traced now, or null when there is no
+// outline to save. Shared by the Save outline button and by the queue's Next,
+// which saves under the photo's own file name instead of a typed one.
+function libEntryFromTrace(name) {
   const { outer, holes, circles } = traceEditor.getTrace();
-  if (!outer || outer.length < 3) { toast('No outline to save yet.'); return; }
-  const name = ($('libName').value || '').trim() || `Outline ${new Date().toISOString().slice(0, 10)}`;
+  if (!outer || outer.length < 3) return null;
   // Normalize to a small-margin origin so saved outlines stay compact.
   let minX = Infinity, minY = Infinity;
   for (const p of outer) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); }
@@ -4626,10 +4863,22 @@ $('libSaveBtn').addEventListener('click', () => {
       };
     }
   }
+  return entry;
+}
+
+// Write one entry into the library, replacing the row of the same name.
+function libCommit(entry) {
   const list = libLoad();
-  const existing = list.findIndex(o => o.name === name);
+  const existing = list.findIndex(o => o.name === entry.name);
   if (existing >= 0) list[existing] = entry; else list.push(entry);
-  libSaveFitted(list, name);
+  libSaveFitted(list, entry.name);
+}
+
+$('libSaveBtn').addEventListener('click', () => {
+  const name = ($('libName').value || '').trim() || `Outline ${new Date().toISOString().slice(0, 10)}`;
+  const entry = libEntryFromTrace(name);
+  if (!entry) { toast('No outline to save yet.'); return; }
+  libCommit(entry);
 });
 
 $('libDeleteBtn').addEventListener('click', () => {
@@ -4910,7 +5159,12 @@ window.__app = {
     dropPairs: queueDropPairs, drop: queueDrop,
     ingestPairs: queueIngestPairs, ingestFolder: queueIngestFolder,
     resume: queueResume,
+    // The walk: Next, Skip and Undo, kept apart from `next`, which is the
+    // "which photo comes next" lookup the strip and the walk both use.
+    walk: { next: queueNext, skip: queueSkip, undo: queueUndo },
+    snapshot: queueRefSnapshot, applyRef: queueApplyRef, libName: queueLibName,
     get items() { return state.queue; },
+    get traced() { return queueTraced; },
   },
   libFitThumbs,
   folderBackend: {
