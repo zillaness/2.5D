@@ -7790,7 +7790,24 @@ const queueThree = await page.evaluate(async () => {
     firstWide,
   };
 
+  // The photo the walk just opened arrives untraced: the outline, the
+  // rectified image and the diff map of the photo before it are gone, and
+  // Next refuses until this photo has had its own Step 2 pass. A second click
+  // on Next must never re-save the last photo's outline under this name.
+  const stale = {
+    outer: app.traceEditor.outer.length,
+    circles: app.traceEditor.getTrace().circles.length,
+    rect: app.state.rect,
+    diffMap: app.state.diffMap,
+    refused: await app.queue.walk.next(),
+    libNames: JSON.parse(localStorage.getItem('2p5d.library.v1')).map(o => o.name),
+    status: app.state.queue[1].status,
+    stillCurrent: app.state.queueCurrentId === app.state.queue[1].id,
+    writes: writes.length,
+  };
+
   // Photo two is hammer.jpg, and the library already holds a "hammer".
+  app.traceEditor.setTrace(rect(12, 12, 46, 24), []);
   const nextTwo = await app.queue.walk.next();
   await new Promise(r => setTimeout(r, 700));
   const collided = {
@@ -7812,6 +7829,7 @@ const queueThree = await page.evaluate(async () => {
   };
 
   // The last ticked photo: its project goes into the subfolder it came from.
+  app.traceEditor.setTrace(rect(8, 9, 44, 26), []);
   const nextFour = await app.queue.walk.next();
   await new Promise(r => setTimeout(r, 400));
   const written = writes.map(w => `${w.dir}/${w.name}`);
@@ -7883,7 +7901,7 @@ const queueThree = await page.evaluate(async () => {
     captureFrac: app.state.captureFrac === before.ref.captureFrac,
   };
 
-  return { queued, afterOne, collided, afterSkip, lastOne, undone, rows, restored, written };
+  return { queued, afterOne, stale, collided, afterSkip, lastOne, undone, rows, restored, written };
 });
 
 check('Next saves the trace under the photo file name, marks it traced and opens the next ticked photo',
@@ -7895,6 +7913,16 @@ check('Next saves the trace under the photo file name, marks it traced and opens
   queueThree.afterOne.wide === 400 && queueThree.afterOne.firstWide === 600,
   `saved “${queueThree.afterOne.saved}”, now on “${queueThree.afterOne.fileName}” ` +
   `(${queueThree.afterOne.wide} px wide), name field “${queueThree.afterOne.nameField}”`);
+
+check('the photo Next opens arrives untraced, so a second Next saves nothing',
+  queueThree.stale.outer === 0 && queueThree.stale.circles === 0 &&
+  queueThree.stale.rect === null && queueThree.stale.diffMap === null &&
+  queueThree.stale.refused === null && queueThree.stale.status === 'pending' &&
+  queueThree.stale.stillCurrent && queueThree.stale.writes === 1 &&
+  JSON.stringify(queueThree.stale.libNames) === JSON.stringify(['hammer', 'awl']),
+  `outer ${queueThree.stale.outer} points, rect ${queueThree.stale.rect}, ` +
+  `second Next returned ${JSON.stringify(queueThree.stale.refused)}, ` +
+  `library ${JSON.stringify(queueThree.stale.libNames)} after ${queueThree.stale.writes} write(s)`);
 
 check('a library name already taken takes the photo’s folder as a suffix',
   queueThree.collided.saved === 'hammer (bench)' && queueThree.collided.current &&
@@ -8013,11 +8041,12 @@ const queueFour = await page.evaluate(async () => {
   // Trace two photos the way the walk does, so the traced list is the real one.
   app.queue.clear();
   await app.queue.ingestFolder(dir, 'bench');
-  app.traceEditor.setTrace(rect(10, 10, 55, 22), []);
   app.queue.load(app.state.queue[0]);
   await new Promise(r => setTimeout(r, 700));
+  app.traceEditor.setTrace(rect(10, 10, 55, 22), []);
   await app.queue.walk.next();
   await new Promise(r => setTimeout(r, 700));
+  app.traceEditor.setTrace(rect(10, 10, 55, 22), []);
   await app.queue.walk.next();
   await new Promise(r => setTimeout(r, 400));
   const traced = app.queue.traced.map(t => t.name);

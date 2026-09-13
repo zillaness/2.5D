@@ -678,6 +678,24 @@ function queueNextPending(afterId) {
   return null;
 }
 
+// Every photo arrives untraced. Nothing on the load path clears the editor —
+// the single-photo flow always passes through Step 2, which re-rectifies and
+// re-traces — so without this the outline, the rectified image and the diff
+// map of the photo just finished are still live when the next one opens, and
+// a second Next would save that outline again under the new photo's name and
+// write it into the new photo's project file. The trace belongs to the photo,
+// so it leaves with it.
+function queueClearTrace() {
+  traceEditor.setTrace([], []);
+  traceEditor.setCircles([]);
+  traceEditor.setMaskOverlay(null);
+  state.rect = null;
+  state.diffMap = null;
+  state.mask = null;
+  state.rectDirty = true;
+  updateStepButtons();
+}
+
 // Clicking a thumbnail loads that photo. The load is the picker's own path, so
 // the corner auto-detect, the step buttons and the file label all follow.
 function queueLoad(item) {
@@ -686,6 +704,7 @@ function queueLoad(item) {
   state.queueCurrentId = item.id;
   // The library name this photo will be saved under, editable before Next.
   $('queueSaveName').value = item.libName || item.name;
+  queueClearTrace();
   loadFile(item.file);
   if (state.step !== 1) goStep(1);
   renderQueue();
