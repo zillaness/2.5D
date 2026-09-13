@@ -58,6 +58,17 @@ function simplify(loop, tol = 0.6) {
   return keep.length >= 3 ? keep : loop;
 }
 
+// Tracing a string is by far the most expensive step here — the marching-squares
+// linker walks the whole segment list per step — and it depends on nothing but
+// the text, the raster height and the font family. The same handful of strings
+// is retraced over and over (the layout editor re-lays every label while a tool
+// or a label is dragged, and the trace editor re-lays its labels every draw), so
+// the traced result is memoised on exactly those three inputs. Read-only to
+// callers: labelLoops() builds fresh arrays from it. Bounded, so a session that
+// types many different labels cannot grow it without limit.
+const TRACE_CACHE = new Map();
+const TRACE_CACHE_MAX = 64;
+
 // Rasterise `text` and return { loops, w, h } — loops in a y-DOWN px box of size
 // (w,h). opts.px = raster cap height (resolution); opts.font = CSS font family.
 export function textToLoops(text, opts = {}) {
@@ -65,6 +76,9 @@ export function textToLoops(text, opts = {}) {
   if (!s) return { loops: [], w: 0, h: 0 };
   const px = opts.px || 120;
   const family = opts.font || 'bold sans-serif';
+  const cacheKey = `${px}\u0000${family}\u0000${s}`;
+  const cached = TRACE_CACHE.get(cacheKey);
+  if (cached) return cached;
   const pad = Math.ceil(px * 0.25);
   const c = document.createElement('canvas');
   const g = c.getContext('2d', { willReadFrequently: true });
@@ -83,11 +97,20 @@ export function textToLoops(text, opts = {}) {
   const grid = new Uint8Array(W * H);
   for (let i = 0; i < W * H; i++) grid[i] = data[i * 4] > 128 ? 1 : 0;
   let loops = marchingSquares(grid, W, H).map(l => simplify(l));
-  if (!loops.length) return { loops: [], w: 0, h: 0 };
+  if (!loops.length) return traced(cacheKey, { loops: [], w: 0, h: 0 });
   let minx = W, miny = H, maxx = 0, maxy = 0;
   for (const l of loops) for (const p of l) { if (p[0] < minx) minx = p[0]; if (p[0] > maxx) maxx = p[0]; if (p[1] < miny) miny = p[1]; if (p[1] > maxy) maxy = p[1]; }
   loops = loops.map(l => l.map(([x, y]) => [x - minx, y - miny]));
-  return { loops, w: maxx - minx, h: maxy - miny };
+  return traced(cacheKey, { loops, w: maxx - minx, h: maxy - miny });
+}
+
+// Remember a traced string, dropping the oldest entry once the cache is full.
+function traced(key, val) {
+  if (TRACE_CACHE.size >= TRACE_CACHE_MAX) {
+    TRACE_CACHE.delete(TRACE_CACHE.keys().next().value);
+  }
+  TRACE_CACHE.set(key, val);
+  return val;
 }
 
 // Place a label as mm polygon loops [{x,y}] centred at (cx,cy), fit to a target

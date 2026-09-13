@@ -25,7 +25,7 @@ import {
   layoutPockets, layoutLabelGeometry, layoutLabelConflicts, labelMinHeight,
 } from './holders.js';
 import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
-import { LayoutEditor, bedLoop } from './ui/layoutEditor.js';
+import { LayoutEditor, bedLoop, withManualLabelRot } from './ui/layoutEditor.js';
 import { APP_VERSION } from './version.js';
 
 // Export quality presets: chord tolerance (mm) for round features and the
@@ -2319,7 +2319,11 @@ $('exportFoamSvgBtn').addEventListener('click', () => {
 
 const layoutEditor = new LayoutEditor($('layoutCanvas'), {
   onSelect: i => syncLaySelPanel(i),
-  onChange: final => { if (final) updateLayoutInfo(); },
+  // A finished gesture can have changed what the selection panel reports:
+  // dragging or turning a label writes item.labelAt / item.labelRot, which is
+  // what the Auto button undoes, and onSelect never fires when the selection
+  // did not change. So the panel is resynced from the item as it now stands.
+  onChange: final => { if (final) { updateLayoutInfo(); syncLaySelPanel(layoutEditor.sel); } },
 });
 
 // The container loop in layout mm space (origin margin 5, like the library).
@@ -2525,6 +2529,11 @@ function layConstruction() {
 function refreshLayoutEditor() {
   layoutEditor.setBed(layBedView());
   layoutEditor.setSnap(state.layout.snap);
+  // Labels are recomputed by the editor itself while one is being dragged, so
+  // it takes the function rather than a snapshot. The free-floating drawer
+  // labels come along as the array a drag of one writes straight into.
+  layoutEditor.setLabelSource(() => layPlacedLabels(),
+    (state.layout.labels || {}).extra || []);
   layoutEditor.setLayout(layContainerLoop(), state.layout.items,
     state.layout.clearance, layBorderEff());
   updateLayoutInfo();
@@ -2647,11 +2656,18 @@ function updateLayoutInfo() {
 function layLabelsOnBase() {
   return layConstruction() === 'layered' && (state.layout.labels || {}).onBase !== false;
 }
+// Placed labels for the layout as it stands. Auto-placement tracks each
+// pocket until the user drags a label, which stores `item.labelAt` (holders.js
+// honours it) or turns it, which stores `item.labelRot` (applied here). Every
+// downstream path — the editor's hit test, the readout, the cut template and
+// the mesh — reads this one function, so a hand-placed label is where the user
+// put it in all of them and survives a re-layout.
 function layPlacedLabels(pockets) {
   const L = state.layout;
   if (!L.labels || !L.labels.enabled) return [];
-  return layoutLabelGeometry(L.items, pockets || layoutPockets(L.items, L.clearance),
-    { ...L.labels, inside: layLabelsOnBase() });
+  return withManualLabelRot(
+    layoutLabelGeometry(L.items, pockets || layoutPockets(L.items, L.clearance),
+      { ...L.labels, inside: layLabelsOnBase() }), L.items);
 }
 // Which sheet a placed label belongs to. A tool label goes on the contrast
 // base when the build has one and base labels are on; a drawer-level label
@@ -2694,6 +2710,8 @@ function syncLaySelPanel(i) {
   $('laySelName').textContent = `Selected: ${it.name}`;
   $('laySelLabel').value = it.label || '';
   $('laySelLabel').placeholder = `(uses “${it.name}”)`;
+  // Nothing to put back until the label has been dragged or turned by hand.
+  $('laySelLabelAuto').disabled = !(it.labelAt || Number.isFinite(it.labelRot));
   $('laySelDepth').value = it.depth ? fmtDim(it.depth) : '';
   $('laySelDepth').placeholder = `auto (${fmtDim(it.thickness || state.regions[0].thickness)})`;
   $('laySelRot').value = (it.rot || 0).toFixed(0);
@@ -3572,6 +3590,13 @@ function setItemLabel(text) {
 }
 $('laySelLabel').addEventListener('change', e => setItemLabel(e.target.value));
 $('laySelLabelReset').addEventListener('click', () => setItemLabel(''));
+// Back to auto-placement: the editor drops the manual position and turn, and
+// the label goes back to tracking its pocket.
+$('laySelLabelAuto').addEventListener('click', () => {
+  if (!layoutEditor.resetLabelPlacement(layoutEditor.sel)) return;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+});
 $('laySelDepth').addEventListener('change', e => {
   const it = state.layout.items[layoutEditor.sel];
   if (!it) return;

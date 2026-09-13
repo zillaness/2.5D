@@ -3,9 +3,16 @@
 // round handle (Shift snaps to 15°), optionally snaps drags, nudges and
 // rotations to a grid, and flags conflicts. Pure view/controller — the
 // geometry lives in js/holders.js.
+//
+// Placed labels are drawn here too, and dragged and rotated with the same
+// gestures the trace editor's label mode uses: grab the glyphs to move, grab
+// the round handle below them to turn. Auto-placement is only a starting
+// point, so a drag writes a manual position and rotation onto the item and
+// the layout keeps them from then on.
 
 import { pointInPolygon } from '../contour.js';
 import { placeLoop, layoutPockets, layoutConflicts, worldToItemLocal } from '../holders.js';
+import { labelBounds } from '../text.js';
 
 // The build plate as a loop in layout mm. `bed` is { w, h, offset, shape }:
 // `offset` is where the layout's bounding box sits on the plate, so zero puts
@@ -52,6 +59,33 @@ function distToLoop(p, loop) {
 const SNAP_DEFAULT_PITCH = 5;
 const SNAP_ROT_DEG = 90;
 const SNAP_SHIFT_ROT_DEG = 15;
+// A label the user has turned by hand. Auto-placement and the layout's
+// `follow` flag (js/holders.js layoutLabelGeometry) decide a label's starting
+// angle; dragging the round handle stores `item.labelRot`, the extra turn ON
+// TOP of that angle. Keeping it as an extra turn rather than an absolute one
+// is what makes the two settle together: with follow on the label still rides
+// round with its tool, and the hand-made twist survives a re-layout either
+// way. Rotating the placed glyph loops about the label's anchor gives exactly
+// what generating them at the summed angle would, because labelLoops() rotates
+// about that same point last (js/text.js).
+//
+// Applied here rather than in js/holders.js so the editor's hit test and every
+// export path read one identical geometry, with one copy of the arithmetic.
+export function withManualLabelRot(placed, items) {
+  return (placed || []).map(L => {
+    if (L.src !== 'item') return L;
+    const it = (items || [])[L.i];
+    const extra = it && Number.isFinite(it.labelRot) ? it.labelRot : 0;
+    if (!extra) return { ...L, autoRot: L.rot, manualRot: 0 };
+    const a = (extra * Math.PI) / 180, cos = Math.cos(a), sin = Math.sin(a);
+    const loops = L.loops.map(loop => loop.map(q => {
+      const dx = q.x - L.at.x, dy = q.y - L.at.y;
+      return { x: L.at.x + dx * cos - dy * sin, y: L.at.y + dx * sin + dy * cos };
+    }));
+    return { ...L, loops, bounds: labelBounds(loops),
+      rot: L.rot + extra, autoRot: L.rot, manualRot: extra };
+  });
+}
 
 export class LayoutEditor {
   constructor(canvas, callbacks = {}) {
@@ -80,6 +114,13 @@ export class LayoutEditor {
     // never touches a value that is already stored. Turning it on moves
     // nothing.
     this.snap = { on: false, pitch: SNAP_DEFAULT_PITCH };
+    // Placed labels, as layoutLabelGeometry() returns them: the app owns the
+    // label settings, so it hands over a function that recomputes them and the
+    // free-floating layout-label array a drag of one of those writes through.
+    this.labels = [];
+    this.selLabel = -1;
+    this.layoutLabels = [];
+    this._labelFn = null;
     this._drag = null;
     canvas.addEventListener('pointerdown', e => this._down(e));
     canvas.addEventListener('pointermove', e => this._move(e));
@@ -95,6 +136,7 @@ export class LayoutEditor {
     if (this.sel >= items.length) this.sel = -1;
     this.fit();
     this.refreshConflicts();
+    this.refreshLabels();
     this.draw();
   }
 
@@ -155,6 +197,128 @@ export class LayoutEditor {
   }
 
   bedLoop() { return this.bed ? bedLoop(this.container, this.bed) : null; }
+
+  // Where placed labels come from. `fn()` returns the label geometry for the
+  // layout as it stands (empty when labelling is off), `extra` is the state's
+  // free-floating layout-label array.
+  setLabelSource(fn, extra) {
+    this._labelFn = typeof fn === 'function' ? fn : null;
+    this.layoutLabels = extra || [];
+    this.refreshLabels();
+  }
+
+  // Re-ask for the label geometry: after a move, a rotate, or any change to
+  // the layout under it. Cheap enough to call on every pointermove.
+  refreshLabels() {
+    this.labels = (this._labelFn ? this._labelFn() : []) || [];
+    if (this.selLabel >= this.labels.length) this.selLabel = -1;
+  }
+
+  // Back to auto-placement for item `i`: drop the manual position and the
+  // manual turn, so the label goes back to tracking its pocket.
+  resetLabelPlacement(i) {
+    const it = this.items[i];
+    if (!it || (!it.labelAt && !Number.isFinite(it.labelRot))) return false;
+    delete it.labelAt;
+    delete it.labelRot;
+    this.refreshLabels();
+    this.draw();
+    return true;
+  }
+
+  // The round rotate handle for a placed label, below its anchor in the
+  // label's own frame — the trace editor's handle, in layout mm.
+  _labelHandle(L) {
+    if (!L || !L.at) return null;
+    const th = ((L.rot || 0) * Math.PI) / 180;
+    const off = (L.height || 6) * 0.75 + 3;
+    return { x: L.at.x - Math.sin(th) * off, y: L.at.y + Math.cos(th) * off };
+  }
+
+  // Topmost placed label whose glyph box contains the point, or -1.
+  // A press on a label's actual glyphs, which is the only way to reach a label
+  // that sits inside its own pocket. On a layered build every base label is
+  // auto-placed at the pocket centroid, so its box is always over the tool and
+  // the box test below can never be reached for it.
+  _hitLabelGlyphs(mm) {
+    for (let i = this.labels.length - 1; i >= 0; i--) {
+      const L = this.labels[i];
+      if (!L.loops || !L.loops.length) continue;
+      for (const loop of L.loops) if (pointInPolygon(mm, loop)) return i;
+    }
+    return -1;
+  }
+
+  _hitLabel(mm) {
+    const pad = 1;
+    for (let i = this.labels.length - 1; i >= 0; i--) {
+      const b = this.labels[i].bounds;
+      if (!b) continue;
+      if (mm.x >= b.minX - pad && mm.x <= b.maxX + pad &&
+          mm.y >= b.minY - pad && mm.y <= b.maxY + pad) return i;
+    }
+    return -1;
+  }
+
+  // What a label drag writes to: the placed item for a tool label, the
+  // free-floating entry for a drawer label.
+  _labelTarget(L) {
+    return L.src === 'item' ? this.items[L.i] : this.layoutLabels[L.i];
+  }
+
+  // Start a label move or rotate. Selecting a tool's label selects the tool
+  // too, so the selection panel shows whose label is being moved.
+  _labelDown(e, mm, idx, part) {
+    const L = this.labels[idx];
+    const target = this._labelTarget(L);
+    if (!target) return false;
+    this.selLabel = idx;
+    this.bedSel = false;
+    this._drag = part === 'rotate'
+      ? { kind: 'labelRotate', src: L.src, target, at: { x: L.at.x, y: L.at.y },
+          rot0: L.src === 'item'
+            ? (Number.isFinite(target.labelRot) ? target.labelRot : 0)
+            : (target.rot || 0),
+          a0: Math.atan2(mm.y - L.at.y, mm.x - L.at.x), x0: mm.x, y0: mm.y }
+      : { kind: 'labelMove', src: L.src, target,
+          gx: L.at.x - mm.x, gy: L.at.y - mm.y, x0: mm.x, y0: mm.y };
+    this.canvas.setPointerCapture(e.pointerId);
+    if (L.src === 'item' && this.sel !== L.i) {
+      this.sel = L.i;
+      if (this.cb.onSelect) this.cb.onSelect(L.i);
+    }
+    this.draw();
+    return true;
+  }
+
+  // Live label drag: a move stores the position, a rotate the extra turn.
+  // Manual wins from here on, which is the whole point (labelling PRD,
+  // "Auto-placement is a starting point, never a lock").
+  _labelMove(mm, shift) {
+    const d = this._drag;
+    // A press that has not travelled yet writes nothing. Pens and touchscreens
+    // emit a pointermove on essentially every tap, and without this a tap
+    // meant to select the tool would quietly store the label's own auto
+    // position as a manual one and drop it out of auto-placement for good,
+    // with nothing on screen moving to say so.
+    if (!d.moved) {
+      const slop = 2 / this.view.scale; // 2 screen px, in mm
+      if (Math.hypot(mm.x - d.x0, mm.y - d.y0) <= slop) return;
+      d.moved = true;
+    }
+    if (d.kind === 'labelMove') {
+      const at = { x: mm.x + d.gx, y: mm.y + d.gy };
+      if (d.src === 'item') d.target.labelAt = { dx: at.x - d.target.x, dy: at.y - d.target.y };
+      else { d.target.x = at.x; d.target.y = at.y; }
+    } else {
+      let deg = d.rot0 + ((Math.atan2(mm.y - d.at.y, mm.x - d.at.x) - d.a0) * 180) / Math.PI;
+      if (shift) deg = Math.round(deg / 15) * 15; // Shift snaps to 15°, as in the trace editor
+      deg = Math.round(deg * 10) / 10;
+      if (d.src === 'item') d.target.labelRot = deg;
+      else d.target.rot = deg;
+    }
+    this.refreshLabels();
+  }
 
   // Move the plate itself by (dx, dy) mm. The stored offset is the layout's
   // position ON the plate, so moving the plate right moves the layout left
@@ -284,6 +448,12 @@ export class LayoutEditor {
     if (!this.container) return;
     const mm = this.screenToMm(e);
     const tolPx = 12 / this.view.scale;
+    // The selected label's rotate handle, before anything else can claim it.
+    if (this.selLabel >= 0 && this.labels[this.selLabel]) {
+      const lh = this._labelHandle(this.labels[this.selLabel]);
+      if (lh && Math.hypot(mm.x - lh.x, mm.y - lh.y) < tolPx &&
+          this._labelDown(e, mm, this.selLabel, 'rotate')) return;
+    }
     if (this.sel >= 0 && this.items[this.sel]) {
       const h = this._rotHandle(this.items[this.sel]);
       if (Math.hypot(mm.x - h.x, mm.y - h.y) < tolPx) {
@@ -299,13 +469,29 @@ export class LayoutEditor {
         return;
       }
     }
-    // Topmost item under the pointer, found before the plate is offered the
-    // press. Once a layout has to be tiled the plate's edge necessarily runs
-    // through the drawer, and a tool sitting on a seam has to stay selectable
-    // and draggable; the plate keeps every other point of its edge.
+    // Topmost item under the pointer, found before the plate OR a label is
+    // offered the press. Once a layout has to be tiled the plate's edge
+    // necessarily runs through the drawer, and a tool sitting on a seam has to
+    // stay selectable and draggable; the plate keeps every other point of its
+    // edge. The same rule settles labels: a label's box is the box of the
+    // whole string, which is routinely wider than the pocket it names and, on
+    // a layered build, sits right on top of it, so letting it take the press
+    // would leave the tool underneath impossible to drag.
+    // Glyphs first, and only glyphs: a letter is a sliver of the pocket it sits
+    // in, so the tool keeps every other point of itself and stays draggable.
+    // Without this a base label, which is auto-placed inside its pocket, could
+    // never be grabbed at all.
+    const glyphHit = this._hitLabelGlyphs(mm);
+    if (glyphHit >= 0 && this._labelDown(e, mm, glyphHit, 'move')) return;
     let hit = -1;
     for (let i = this.items.length - 1; i >= 0; i--) {
       if (pointInPolygon(mm, placeLoop(this.items[i].outer, this.items[i]))) { hit = i; break; }
+    }
+    // A label's own glyphs, wherever no tool is under the pointer. Labels are
+    // auto-placed in the gap beside their pocket, so this is where they are.
+    if (hit < 0) {
+      const labelHit = this._hitLabel(mm);
+      if (labelHit >= 0 && this._labelDown(e, mm, labelHit, 'move')) return;
     }
     // The plate outline, grabbed anywhere along its edge that is not a tool.
     const bl = hit < 0 ? this.bedLoop() : null;
@@ -314,6 +500,7 @@ export class LayoutEditor {
       this._drag = { kind: 'bed', x0: mm.x, y0: mm.y, ox: off.x || 0, oy: off.y || 0 };
       this.bedSel = true;
       this.sel = -1;
+      this.selLabel = -1;
       this.canvas.setPointerCapture(e.pointerId);
       if (this.cb.onSelect) this.cb.onSelect(-1);
       this.draw();
@@ -322,6 +509,7 @@ export class LayoutEditor {
     if (hit >= 0) {
       this.sel = hit;
       this.bedSel = false;
+      this.selLabel = -1;
       this._drag = { kind: 'move', idx: hit, dx: this.items[hit].x - mm.x, dy: this.items[hit].y - mm.y };
       this.canvas.setPointerCapture(e.pointerId);
       if (this.cb.onSelect) this.cb.onSelect(hit);
@@ -330,6 +518,7 @@ export class LayoutEditor {
     }
     this.sel = -1;
     this.bedSel = false;
+    this.selLabel = -1;
     if (this.cb.onSelect) this.cb.onSelect(-1);
     this.draw();
   }
@@ -341,6 +530,12 @@ export class LayoutEditor {
       // The plate follows the pointer; the offset runs the other way.
       this.bed.offset.x = this._drag.ox - (mm.x - this._drag.x0);
       this.bed.offset.y = this._drag.oy - (mm.y - this._drag.y0);
+      this.draw();
+      if (this.cb.onChange) this.cb.onChange(false);
+      return;
+    }
+    if (this._drag.kind === 'labelMove' || this._drag.kind === 'labelRotate') {
+      this._labelMove(mm, !!e.shiftKey);
       this.draw();
       if (this.cb.onChange) this.cb.onChange(false);
       return;
@@ -362,6 +557,9 @@ export class LayoutEditor {
         (Math.atan2(mm.y - it.y, mm.x - it.x) * 180) / Math.PI + 90, e.shiftKey);
       it.rot = ((deg % 360) + 360) % 360;
     }
+    // Labels ride along live: an auto-placed one tracks its pocket, a
+    // hand-placed one keeps the offset the user gave it.
+    this.refreshLabels();
     this.draw();
     if (this.cb.onChange) this.cb.onChange(false);
   }
@@ -370,6 +568,7 @@ export class LayoutEditor {
     if (!this._drag) return;
     this._drag = null;
     this.refreshConflicts();
+    this.refreshLabels();
     this.draw();
     if (this.cb.onChange) this.cb.onChange(true);
   }
@@ -474,6 +673,58 @@ export class LayoutEditor {
         ctx.strokeStyle = '#fff';
         ctx.stroke();
       }
+    });
+
+    this._drawLabels();
+  }
+
+  // Placed labels, on top of everything, as filled glyph outlines: what the
+  // laser engraves or the printer debosses, not a canvas font. The selected
+  // one gets a dashed box and the round rotate handle.
+  _drawLabels() {
+    const { ctx } = this;
+    this.labels.forEach((L, i) => {
+      if (!L.loops || !L.loops.length) return;
+      const sel = i === this.selLabel;
+      ctx.beginPath();
+      for (const loop of L.loops) {
+        loop.forEach((p, k) => {
+          const s = this.mmToScreen(p);
+          if (k === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+        });
+        ctx.closePath();
+      }
+      ctx.fillStyle = 'rgba(16,185,129,0.22)';
+      ctx.fill('evenodd');
+      ctx.strokeStyle = sel ? '#10b981' : 'rgba(16,185,129,0.85)';
+      ctx.lineWidth = sel ? 1.8 : 1.2;
+      ctx.stroke();
+      if (!sel) return;
+      const b = L.bounds;
+      if (b) {
+        const c1 = this.mmToScreen({ x: b.minX, y: b.minY });
+        const c2 = this.mmToScreen({ x: b.maxX, y: b.maxY });
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(c1.x, c1.y, c2.x - c1.x, c2.y - c1.y);
+        ctx.restore();
+      }
+      const hnd = this._labelHandle(L);
+      if (!hnd) return;
+      const a = this.mmToScreen(L.at), h = this.mmToScreen(hnd);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y); ctx.lineTo(h.x, h.y);
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#10b981';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.stroke();
     });
   }
 }
