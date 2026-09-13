@@ -4513,6 +4513,31 @@ const nestFix = await page.evaluate(async () => {
   const eq1 = nestLayout(eqC, eqItems, { rotationStep: 90, restarts: 20 });
   const eq2 = nestLayout(eqC, eqItems, { rotationStep: 90, restarts: 20 });
 
+  // 10. Criterion 7 on a NON-CONVEX container. The API takes a container loop
+  //     rather than a rectangle on purpose, so a traced tote or a compartmented
+  //     tray is a legal drawer, and for those the reason half of the answer is
+  //     easy to get wrong: the middle of a U-shaped loop is the divider, not
+  //     foam, so a tool that fits the left leg perfectly well fails a probe
+  //     parked at the bbox centre. It must still come back as 'noRoom'. Each of
+  //     these items is checked to fit the empty tote on its own, which is
+  //     exactly what 'tooLarge' claims is impossible.
+  const uLoop = [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 160 }, { x: 130, y: 160 },
+    { x: 130, y: 40 }, { x: 70, y: 40 }, { x: 70, y: 160 }, { x: 0, y: 160 }];
+  const uOpts = { minWeb: 4, border: 5, clearance: 0.5, rotationStep: 90, notchClear: 0 };
+  const uItems = [mk('leg tool 1', rect(50, 100)), mk('leg tool 2', rect(50, 100)),
+    mk('long bar', rect(180, 20)), mk('spare', rect(40, 60))];
+  const uRes = nestLayout(uLoop, uItems, uOpts);
+  const uSolo = uItems.map(it => nestLayout(uLoop, [it], uOpts).placements.length);
+  // The same tote turned round, so the bite is at the top rather than the
+  // bottom and one lucky corner probe would not rescue it either.
+  const uFlip = uLoop.map(p => ({ x: 200 - p.x, y: 160 - p.y })).reverse();
+  const uFlipRes = nestLayout(uFlip, uItems, uOpts);
+  // The control, so the reason is not simply always 'noRoom' now: a slab that
+  // genuinely fits neither leg of an L-shaped tray is still tooLarge.
+  const lLoop = [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 60 },
+    { x: 60, y: 60 }, { x: 60, y: 200 }, { x: 0, y: 200 }];
+  const lRes = nestLayout(lLoop, [mk('big slab', rect(150, 150))], uOpts);
+
   return {
     stack: { n: stack.placements.length, gap: stackGap, clash: clash(stackC, stackItems, stack) },
     tuck: {
@@ -4541,6 +4566,14 @@ const nestFix = await page.evaluate(async () => {
       }) },
     eq: { passes: eq1.stats.passes, n: eq1.placements.length,
       same: JSON.stringify(eq1.placements) === JSON.stringify(eq2.placements) },
+    tote: {
+      solo: uSolo.join(','), left: uRes.unplaced.length,
+      reasons: uRes.unplaced.map(u => u.reason).join(','),
+      flip: uFlipRes.unplaced.map(u => u.reason).join(','),
+      flipLeft: uFlipRes.unplaced.length,
+      clash: clash(uLoop, uItems, uRes),
+      control: lRes.unplaced.map(u => u.reason).join(','),
+    },
   };
 });
 
@@ -4583,6 +4616,14 @@ check('rotation policy: locked to current, locked to an angle, or free on the st
 check('bounded restarts shuffle the equal-area group and still reproduce',
   nestFix.eq.passes > 1 && nestFix.eq.n === 4 && nestFix.eq.same,
   `${nestFix.eq.passes} distinct passes, identical ${nestFix.eq.same}`);
+check('a tool that fits one leg of a U-shaped tote is noRoom, never tooLarge',
+  nestFix.tote.solo === '1,1,1,1' && nestFix.tote.left === 3 &&
+  nestFix.tote.reasons === 'noRoom,noRoom,noRoom' &&
+  nestFix.tote.flipLeft === 3 && nestFix.tote.flip === 'noRoom,noRoom,noRoom' &&
+  nestFix.tote.clash[0] === 0 && nestFix.tote.clash[1] === 0,
+  `${nestFix.tote.left} left as [${nestFix.tote.reasons}], flipped [${nestFix.tote.flip}], each fits alone ${nestFix.tote.solo}`);
+check('and a slab that fits neither leg of an L-shaped tray is still tooLarge',
+  nestFix.tote.control === 'tooLarge', nestFix.tote.control);
 
 // Step 2 of the same PRD: the conflict-freeness property. Success criterion 1
 // says a nested result must come back `collisions.size === 0 &&

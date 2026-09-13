@@ -827,15 +827,28 @@ export function nestLayout(containerOuter, items, opts = {}) {
     }
   }
 
-  // Why an item did not make it: park the variant in the middle of the empty
-  // container, the most forgiving single position, and see if even that fails.
+  // Why an item did not make it: does it fit the EMPTY container in any
+  // allowed orientation? One probe cannot answer that. Parking the variant in
+  // the middle of the container is the most forgiving single position only
+  // while the container is convex; the bbox centre of a U or an L shaped
+  // container loop is not even inside the loop, so a tool that fits the left
+  // leg perfectly well would come back as 'too large in every orientation',
+  // which is the wrong half of the answer. Probe the four inner-bbox corners
+  // as well: between them and the centre they reach every leg of the
+  // non-convex container shapes a traced tray or a compartmented tote makes.
+  const probesFor = v => [
+    [(limitBB.minX + limitBB.maxX) / 2 - (v.bb.minX + v.bb.maxX) / 2,
+      (limitBB.minY + limitBB.maxY) / 2 - (v.bb.minY + v.bb.maxY) / 2],
+    [limitBB.minX - v.bb.minX, limitBB.minY - v.bb.minY],
+    [limitBB.maxX - v.bb.maxX, limitBB.minY - v.bb.minY],
+    [limitBB.minX - v.bb.minX, limitBB.maxY - v.bb.maxY],
+    [limitBB.maxX - v.bb.maxX, limitBB.maxY - v.bb.maxY],
+  ];
   function reasonFor(i) {
     for (const a of nestAngles(list[i], o)) {
       const v = variantOf(i, a);
       if (!v) continue;
-      const X = (limitBB.minX + limitBB.maxX) / 2 - (v.bb.minX + v.bb.maxX) / 2;
-      const Y = (limitBB.minY + limitBB.maxY) / 2 - (v.bb.minY + v.bb.maxY) / 2;
-      if (validAt(v, X, Y, [])) return 'noRoom';
+      for (const [X, Y] of probesFor(v)) if (validAt(v, X, Y, [])) return 'noRoom';
     }
     return 'tooLarge';
   }
