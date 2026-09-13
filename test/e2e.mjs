@@ -9360,6 +9360,231 @@ check('the undecodable-photo block leaves the library, the folder and Step 1 as 
   `step ${queueTen.restored.step}, library restored ${queueTen.restored.lib}, ` +
   `queue ${queueTen.restored.queue}, handle ${queueTen.restored.handle}`);
 
+// ---------- a tool is ticked by its own project, not by a shared name ----------
+//
+// A bench folder with a shelfA and a shelfB, each holding a wrench.jpg, and
+// shelfA's was traced in an earlier session, so its wrench.json is already
+// beside it. Tracing shelfB's writes a second wrench.json, and reading the
+// folder again to pick up newly added photos puts both in the palette. The
+// project file's name on its own is no identity there: matched on the name
+// alone, this session's tool claims shelfA's row, which carries a different
+// outline, and a second tool traced from another shelf would claim the same row
+// again and Add all would place fewer tools than were traced.
+const queueEleven = await page.evaluate(async () => {
+  const app = window.__app;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    ref: app.queue.snapshot(),
+    items: app.state.layout.items.slice(),
+    sel: app.layoutEditor.sel,
+  };
+  localStorage.setItem('2p5d.library.v1', '[]');
+  app.state.layout.items.length = 0;
+
+  // A folder that keeps what is written into it, so reading it again really
+  // does hand both projects to the palette.
+  const writes = [];
+  const fileHandle = (name, file) => ({ kind: 'file', name, getFile: async () => file });
+  const mkDir = (name, children) => {
+    const h = {
+      kind: 'directory', name, children,
+      values: async function* () { for (const c of h.children) yield c; },
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      getDirectoryHandle: async n => {
+        const kid = h.children.find(c => c.kind === 'directory' && c.name === n);
+        if (!kid) throw new Error('no such folder');
+        return kid;
+      },
+      getFileHandle: async n => ({
+        createWritable: async () => ({
+          write: async text => {
+            writes.push(`${h.name}/${n}`);
+            const f = new File([String(text)], n, { type: 'application/json' });
+            const kid = { kind: 'file', name: n, getFile: async () => f };
+            const at = h.children.findIndex(c => c.kind === 'file' && c.name === n);
+            if (at >= 0) h.children[at] = kid; else h.children.push(kid);
+          },
+          close: async () => {},
+        }),
+      }),
+    };
+    return h;
+  };
+
+  // shelfA's wrench was traced last week: a long flat outline, nothing like the
+  // one traced below, so a row ticked by mistake is visible in what is placed.
+  const oldProject = JSON.stringify({
+    app: '2.5D', version: 1, fileName: 'wrench',
+    regions: [{ thickness: 6 }],
+    trace: { outer: rect(5, 5, 90, 12), holes: [], circles: [] },
+  });
+  const shelfA = mkDir('shelfA', [
+    fileHandle('wrench.jpg', await photoFile('wrench.jpg', 340, 260)),
+    fileHandle('wrench.json', new File([oldProject], 'wrench.json', { type: 'application/json' })),
+  ]);
+  const shelfB = mkDir('shelfB', [
+    fileHandle('wrench.jpg', await photoFile('wrench.jpg', 300, 380)),
+  ]);
+  const bench = mkDir('bench', [shelfA, shelfB]);
+
+  app.queue.clear();
+  await app.queue.ingestFolder(bench, 'bench');
+  const queued = {
+    paths: app.state.queue.map(q => q.path),
+    statuses: app.state.queue.map(q => q.status),
+    palette: app.palette.folder.entries.map(e => e.source.path),
+  };
+
+  // Trace shelfB's wrench, the only one this session touches.
+  app.queue.load(app.state.queue[1]);
+  await wait(700);
+  app.traceEditor.setTrace(rect(8, 8, 24, 50), []);
+  await app.queue.walk.next();
+  await wait(500);
+  // Add folder… on the same folder again, the way a user picks up photos added
+  // since: both projects now read back into the palette.
+  await app.queue.ingestFolder(bench, 'bench');
+  await wait(300);
+  const walked = {
+    writes: writes.slice(),
+    libNames: JSON.parse(localStorage.getItem('2p5d.library.v1')).map(o => o.name),
+    traced: app.queue.traced.map(t => t.name),
+    palette: app.palette.folder.entries.map(e => `${e.name}|${e.source.path}`),
+  };
+
+  const got = app.queue.organize();
+  await wait(300);
+  document.getElementById('layPalAddAllBtn').click();
+  await wait(250);
+  const mine = {
+    picked: got.picked,
+    missing: got.missing,
+    picks: app.palette.picks.slice(),
+    n: app.state.layout.items.length,
+    // The outline that was placed: shelfB's upright wrench, not shelfA's.
+    tall: app.state.layout.items.length === 1 &&
+      app.state.layout.items[0].outer.every(p => p.x <= 40),
+  };
+
+  // The second shelf's wrench traced too: two tools, two rows, two placements.
+  app.state.layout.items.length = 0;
+  app.queue.load(app.state.queue[0]);
+  await wait(700);
+  app.traceEditor.setTrace(rect(10, 10, 55, 22), []);
+  await app.queue.walk.next();
+  await wait(500);
+  await app.queue.ingestFolder(bench, 'bench');
+  await wait(300);
+  const gotBoth = app.queue.organize();
+  await wait(300);
+  document.getElementById('layPalAddAllBtn').click();
+  await wait(250);
+  const both = {
+    traced: app.queue.traced.map(t => t.name),
+    picked: gotBoth.picked,
+    missing: gotBoth.missing,
+    picks: app.palette.picks.slice().sort(),
+    n: app.state.layout.items.length,
+    writes: writes.slice(),
+  };
+
+  // Put the layout, the library, the folder, the queue and Step 1 back.
+  app.state.layout.items.length = 0;
+  app.state.layout.items.push(...before.items);
+  app.layoutEditor.sel = before.sel;
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.palette.refresh();
+  app.queue.applyRef(before.ref);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles);
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await wait(300);
+  app.refreshLayoutEditor();
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    lib: localStorage.getItem('2p5d.library.v1') === before.lib,
+    queue: app.state.queue.length,
+    handle: app.folderBackend.handle,
+    palette: app.palette.folder.entries.length,
+    picks: app.palette.picks.length,
+    items: app.state.layout.items.length === before.items.length,
+  };
+
+  return { queued, walked, mine, both, restored };
+});
+
+check('Organize ticks the project this session wrote, not the same-named one next door',
+  JSON.stringify(queueEleven.queued.paths) === JSON.stringify(
+    ['bench/shelfA/wrench.jpg', 'bench/shelfB/wrench.jpg']) &&
+  JSON.stringify(queueEleven.queued.statuses) === JSON.stringify(['traced', 'pending']) &&
+  JSON.stringify(queueEleven.queued.palette) === JSON.stringify(['bench/shelfA/wrench.json']) &&
+  JSON.stringify(queueEleven.walked.writes) === JSON.stringify(['shelfB/wrench.json']) &&
+  JSON.stringify(queueEleven.walked.palette) === JSON.stringify(
+    ['wrench|bench/shelfA/wrench.json', 'wrench|bench/shelfB/wrench.json']) &&
+  queueEleven.mine.picked === 1 && queueEleven.mine.missing === 0 &&
+  JSON.stringify(queueEleven.mine.picks) === JSON.stringify(
+    ['folder:bench/shelfB/wrench.json|wrench']) &&
+  queueEleven.mine.n === 1 && queueEleven.mine.tall,
+  `palette ${JSON.stringify(queueEleven.walked.palette)} → ticked ` +
+  `${JSON.stringify(queueEleven.mine.picks)}, placed ${queueEleven.mine.n} (this session’s outline ` +
+  `${queueEleven.mine.tall})`);
+
+check('with both shelves traced, each tool keeps its own row and Add all places both',
+  JSON.stringify(queueEleven.both.traced) === JSON.stringify(['wrench', 'wrench (shelfA)']) &&
+  JSON.stringify(queueEleven.both.writes) === JSON.stringify(
+    ['shelfB/wrench.json', 'shelfA/wrench.json']) &&
+  queueEleven.both.picked === 2 && queueEleven.both.missing === 0 &&
+  JSON.stringify(queueEleven.both.picks) === JSON.stringify([
+    'folder:bench/shelfA/wrench.json|wrench', 'folder:bench/shelfB/wrench.json|wrench']) &&
+  queueEleven.both.n === 2,
+  `traced ${JSON.stringify(queueEleven.both.traced)} → ticks ${JSON.stringify(queueEleven.both.picks)}, ` +
+  `placed ${queueEleven.both.n}`);
+
+check('the two-subfolder block leaves the layout, the library, the folder and Step 1 as it found them',
+  queueEleven.restored.step === 3 && queueEleven.restored.image && queueEleven.restored.lib &&
+  queueEleven.restored.queue === 0 && queueEleven.restored.handle === null &&
+  queueEleven.restored.palette === 0 && queueEleven.restored.picks === 0 &&
+  queueEleven.restored.items,
+  `step ${queueEleven.restored.step}, library restored ${queueEleven.restored.lib}, ` +
+  `queue ${queueEleven.restored.queue}, palette ${queueEleven.restored.palette}`);
+
 // ---------- snap to grid in the layout editor (Part B) ----------
 // Snapping is a property of the gesture: a drag, an arrow-key nudge and a
 // rotation-handle drag land on the grid, and nothing already placed moves when

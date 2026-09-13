@@ -1244,6 +1244,16 @@ async function queueDirFor(path) {
   return dir || null;
 }
 
+// Where the project Next wrote for a photo sits, as a path in the same shape
+// the ingest gives the photo. The written file name on its own is no identity:
+// two subfolders can each hold a wrench.jpg, and each gets a wrench.json.
+function queueJsonPath(path, written) {
+  const parts = String(path || '').split('/');
+  parts.pop();
+  parts.push(written);
+  return parts.join('/');
+}
+
 // serializeProject(false) leaves the photo out: the photo is the sibling file,
 // so embedding it would double the folder's size for nothing.
 async function queueWriteProject(item) {
@@ -1255,6 +1265,7 @@ async function queueWriteProject(item) {
       if (dir) {
         const written = await writeProjectFile(dir, base, text);
         item.json = written;
+        item.jsonPath = queueJsonPath(item.path, written);
         return { kind: 'folder', name: written };
       }
     } catch {
@@ -1268,6 +1279,7 @@ async function queueWriteProject(item) {
   const name = `${base}.json`;
   downloadBlob(new Blob([text], { type: 'application/json' }), name);
   item.json = name;
+  item.jsonPath = queueJsonPath(item.path, name);
   const first = !queueDownloadNoted;
   queueDownloadNoted = true;
   return { kind: 'download', name, first };
@@ -1307,7 +1319,10 @@ async function queueNext() {
   const wrote = await queueWriteProject(item);
   item.status = 'traced';
   item.picked = false;
-  queueTraced.push({ id: item.id, name, fileName: state.fileName, path: item.path, json: item.json });
+  queueTraced.push({
+    id: item.id, name, fileName: state.fileName, path: item.path,
+    json: item.json, jsonPath: item.jsonPath,
+  });
   const nxt = queueAdvance(item, 'next');
   const tail = nxt
     ? ` Now on “${nxt.name}”.`
@@ -1371,11 +1386,19 @@ function queueSyncWalk() {
 // this session ticked in the palette, so Add all places exactly them and not
 // whatever else the library happens to hold.
 
-// A palette row is this session's tool when it is the project Next wrote beside
-// the photo, or when it carries the name Next saved it under.
-function queueTracedMatch(entry, t) {
+// A palette row is this session's tool when it is the very project file Next
+// wrote for it. The whole path has to agree: shelfA/wrench.jpg and
+// shelfB/wrench.jpg each write a wrench.json, so on the file name alone both
+// tools claim the first row, one tool silently loses its place, and Add all
+// places fewer tools than were traced.
+function queueTracedFile(entry, t) {
   const path = entry.source && entry.source.path;
-  if (t.json && path && String(path).split('/').pop() === t.json) return true;
+  return !!(t.jsonPath && path && String(path) === t.jsonPath);
+}
+
+// Failing that, a row that carries the name Next saved the tool under, or the
+// photo's own file name.
+function queueTracedNamed(entry, t) {
   return entry.name === t.name || entry.name === t.fileName;
 }
 
@@ -1386,12 +1409,41 @@ function queueTracedMatch(entry, t) {
 function queueSelectTraced() {
   laySelected.clear();
   const lib = libLoad().filter(o => o.kind !== 'container');
-  let missing = 0;
+  // One row per tool, and one tool per row: a row already claimed is not
+  // offered to the next tool, or two tools would collapse into one tick and
+  // the count would still look right. The project files are matched first, so
+  // a tool that can be named exactly never loses its row to a tool that can
+  // only be matched on a name the two of them share.
+  const used = new Set();
+  const rest = [];
   for (const t of queueTraced) {
-    const folder = layFolder.entries.find(e => queueTracedMatch(e, t));
-    if (folder) { laySelected.add(layRowKey('folder', folder)); continue; }
-    const row = lib.find(o => o.name === t.name);
-    if (row) { laySelected.add(layRowKey('lib', row)); continue; }
+    const folder = layFolder.entries.find(
+      e => !used.has(layRowKey('folder', e)) && queueTracedFile(e, t));
+    if (folder) {
+      const key = layRowKey('folder', folder);
+      used.add(key);
+      laySelected.add(key);
+      continue;
+    }
+    rest.push(t);
+  }
+  let missing = 0;
+  for (const t of rest) {
+    const folder = layFolder.entries.find(
+      e => !used.has(layRowKey('folder', e)) && queueTracedNamed(e, t));
+    if (folder) {
+      const key = layRowKey('folder', folder);
+      used.add(key);
+      laySelected.add(key);
+      continue;
+    }
+    const row = lib.find(o => !used.has(layRowKey('lib', o)) && o.name === t.name);
+    if (row) {
+      const key = layRowKey('lib', row);
+      used.add(key);
+      laySelected.add(key);
+      continue;
+    }
     missing++;
   }
   return { picked: laySelected.size, missing };
