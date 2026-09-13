@@ -4863,9 +4863,24 @@ const nestWeb = await page.evaluate(async () => {
       left: res.unplaced.map(u => `${u.name}/${u.reason}`).join(','),
       reach: Number.isFinite(reach) ? reach : -1,
       clash: cf.collisions.size + cf.escaped.size,
+      pins: res.stats.pinned.join(','),
+      pinAt: res.placements.filter(p => p.pinned)
+        .map(p => `${p.x},${p.y},${p.rot}`).join(';'),
     };
   };
   const pair = [plate, slab];
+
+  // A PINNED tool with a notch. Criterion 5 says a pinned item keeps its exact
+  // x / y / rot, so the nester never gets to move it and 'require' never gets
+  // to refuse it: validAt() only ever runs on free placements. That leaves the
+  // one case where the stricter policy could say less about the geometry than
+  // the looser one, and criterion 3 is worded "every item's finger notch", not
+  // every free one. This plate is pinned with its notch 6 mm off the back wall
+  // against a 15 mm reach, and the layout is otherwise entirely legal, so
+  // stats.notchWarnings is the only channel that can report it.
+  const pinPlate = mk('pinned plate', rect(60, 40),
+    { notch: { dia: 10, x: 30, y: 0 }, pin: true, x: 60, y: 31.5 });
+  const pinPair = [pinPlate, mk('small slab', rect(40, 30))];
   return {
     webs, notchClear: NOTCH_CLEAR,
     sealWarn: reachRun(pair, 200, 200, 'warn'),
@@ -4874,6 +4889,8 @@ const nestWeb = await page.evaluate(async () => {
     tightReq: reachRun(pair, 100, 260, 'require'),
     wallWarn: reachRun([wallPlate], 120, 160, 'warn'),
     wallReq: reachRun([wallPlate], 120, 160, 'require'),
+    pinWarn: reachRun(pinPair, 120, 160, 'warn'),
+    pinReq: reachRun(pinPair, 120, 160, 'require'),
   };
 });
 
@@ -4911,6 +4928,13 @@ check('require: with nowhere legal left the tool is refused rather than sealing 
   nestWeb.tightReq.n === 1 && nestWeb.tightReq.left === 'slab/noRoom' &&
   nestWeb.tightReq.reach >= nestWeb.notchClear - 1e-6 && nestWeb.tightReq.clash === 0,
   `warn placed ${nestWeb.tightWarn.n} and warned on [${nestWeb.tightWarn.warnings}], require placed ${nestWeb.tightReq.n} and reported ${nestWeb.tightReq.left}`);
+check('a pinned tool keeps its millimetre and its sealed notch is reported under BOTH policies',
+  nestWeb.pinWarn.pinAt === '60,31.5,0' && nestWeb.pinReq.pinAt === '60,31.5,0' &&
+  nestWeb.pinWarn.n === 2 && nestWeb.pinReq.n === 2 &&
+  nestWeb.pinReq.reach < nestWeb.notchClear && nestWeb.pinWarn.warnings === '0' &&
+  nestWeb.pinReq.warnings === '0' && nestWeb.pinReq.clash === 0 &&
+  nestWeb.pinReq.left === '',
+  `warn [${nestWeb.pinWarn.warnings}], require [${nestWeb.pinReq.warnings}], ${nestWeb.pinReq.reach.toFixed(2)} mm of reach against ${nestWeb.notchClear}, pin at ${nestWeb.pinReq.pinAt}`);
 
 // Step 4 of the same PRD: the reference fixture behind success criterion 2. A
 // set of 12 hand tools in a 550 x 380 mm drawer, and the claim that the nester

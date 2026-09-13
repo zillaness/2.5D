@@ -861,9 +861,15 @@ export function nestLayout(containerOuter, items, opts = {}) {
     .map(i => ({ i, name: nameOf(i), reason: pinFailed.includes(i) ? 'tooLarge' : reasonFor(i) }));
 
   // Under 'warn' a sealed notch is reported rather than refused, because a
-  // travel toolbox legitimately trades access away.
+  // travel toolbox legitimately trades access away. Under 'require' validAt()
+  // has already refused every free placement that would seal one, so this pass
+  // finds nothing to say about them, but it still has to run, because a
+  // PINNED item never goes through validAt() at all. Its notch can be sealed
+  // by the drawer wall or by another pin, and skipping the pass under
+  // 'require' left the stricter policy reporting strictly less about the same
+  // geometry than the looser one did.
   const notchWarnings = [];
-  if (o.notchPolicy !== 'require' && Number(o.notchClear) > 0) {
+  if (Number(o.notchClear) > 0) {
     for (const p of best.placed) {
       if (!p.disc) continue;
       let sealed = clipArea(p.disc, inner, CT.ctDifference) > NEST_TOL;
