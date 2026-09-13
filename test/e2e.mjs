@@ -2381,6 +2381,29 @@ const labelPlace = await page.evaluate(async () => {
   cover.item = { x: st.layout.items[0].x, y: st.layout.items[0].y };
   cover.auto = ed.labels[0].auto;
 
+  // ...and the label must still be reachable by its own glyphs. A base label is
+  // auto-placed at its pocket centroid, so if the box test were the only way in
+  // it could never be pressed at all and step 6 would be dead for the very
+  // construction base labels exist for. A glyph is a sliver of the pocket, so
+  // the tool keeps every other point of itself.
+  st.layout.items = [
+    { name: 'TORX T25 DRIVER', outer: rect(20, 8), holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 60, y: 45 },
+  ];
+  ed.sel = -1; ed.selLabel = -1;
+  app.refreshLayoutEditor();
+  const glyph = { pt: null };
+  const gb = ed.labels[0].bounds;
+  for (let gx = 0; gx <= 200 && !glyph.pt; gx++) {
+    for (let gy = 0; gy <= 40; gy++) {
+      const p = { x: gb.minX + (gb.maxX - gb.minX) * gx / 200, y: gb.minY + (gb.maxY - gb.minY) * gy / 40 };
+      if (ed._hitLabelGlyphs(p) === 0) { glyph.pt = p; break; }
+    }
+  }
+  glyph.found = !!glyph.pt;
+  glyph.kind = glyph.pt ? drag(glyph.pt, { x: glyph.pt.x + 16, y: glyph.pt.y + 12 }) : 'none';
+  glyph.labelAt = st.layout.items[0].labelAt ? { ...st.layout.items[0].labelAt } : null;
+  glyph.toolAt = { x: st.layout.items[0].x, y: st.layout.items[0].y };
+
   // Same rule in a plain pocket build, where a long label lies across the NEXT
   // tool along: pressing that tool moves that tool, and does not quietly pin
   // its neighbour's label to a manual position behind the user's back.
@@ -2442,7 +2465,7 @@ const labelPlace = await page.evaluate(async () => {
     enabled: st.layout.labels.enabled, readout: $('layLabelInfo').textContent };
   app.goStep(before.step);
   await new Promise(r => setTimeout(r, 150));
-  return { auto, moveKind, moved, rebuilt, relaid, rotKind, turned, snapped, followed,
+  return { glyph, auto, moveKind, moved, rebuilt, relaid, rotKind, turned, snapped, followed,
     clash, resetLive, reset, extraIdx, extraSrc, extraMoved, extraTurned, cleared,
     cover, neighbour, tap, live, step: st.step, stepBefore: before.step };
 });
@@ -2506,6 +2529,12 @@ check('a label covering its own tool on a layered build still leaves the tool dr
   `covers ${labelPlace.cover.covers}, auto ${labelPlace.cover.auto}, box ` +
   `${labelPlace.cover.box.minX.toFixed(1)}..${labelPlace.cover.box.maxX.toFixed(1)} x ` +
   `${labelPlace.cover.box.minY.toFixed(1)}..${labelPlace.cover.box.maxY.toFixed(1)}`);
+check('a base label inside its own pocket is still grabbable by its glyphs',
+  labelPlace.glyph.found && labelPlace.glyph.kind === 'labelMove' && labelPlace.glyph.labelAt &&
+  labelPlace.glyph.toolAt.x === 60 && labelPlace.glyph.toolAt.y === 45,
+  `found ${labelPlace.glyph.found}, kind ${labelPlace.glyph.kind}, ` +
+  `labelAt ${JSON.stringify(labelPlace.glyph.labelAt)}, ` +
+  `tool still at ${labelPlace.glyph.toolAt.x}, ${labelPlace.glyph.toolAt.y}`);
 check('a neighbour’s label lying across a tool does not steal that tool’s press',
   labelPlace.neighbour.onB && labelPlace.neighbour.kind === 'move' &&
   near(labelPlace.neighbour.b.x, 110, 1.5) && near(labelPlace.neighbour.b.y, 58, 1e-6) &&

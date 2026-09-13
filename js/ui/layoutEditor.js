@@ -172,6 +172,19 @@ export class LayoutEditor {
   }
 
   // Topmost placed label whose glyph box contains the point, or -1.
+  // A press on a label's actual glyphs, which is the only way to reach a label
+  // that sits inside its own pocket. On a layered build every base label is
+  // auto-placed at the pocket centroid, so its box is always over the tool and
+  // the box test below can never be reached for it.
+  _hitLabelGlyphs(mm) {
+    for (let i = this.labels.length - 1; i >= 0; i--) {
+      const L = this.labels[i];
+      if (!L.loops || !L.loops.length) continue;
+      for (const loop of L.loops) if (pointInPolygon(mm, loop)) return i;
+    }
+    return -1;
+  }
+
   _hitLabel(mm) {
     const pad = 1;
     for (let i = this.labels.length - 1; i >= 0; i--) {
@@ -400,6 +413,12 @@ export class LayoutEditor {
     // whole string, which is routinely wider than the pocket it names and, on
     // a layered build, sits right on top of it, so letting it take the press
     // would leave the tool underneath impossible to drag.
+    // Glyphs first, and only glyphs: a letter is a sliver of the pocket it sits
+    // in, so the tool keeps every other point of itself and stays draggable.
+    // Without this a base label, which is auto-placed inside its pocket, could
+    // never be grabbed at all.
+    const glyphHit = this._hitLabelGlyphs(mm);
+    if (glyphHit >= 0 && this._labelDown(e, mm, glyphHit, 'move')) return;
     let hit = -1;
     for (let i = this.items.length - 1; i >= 0; i--) {
       if (pointInPolygon(mm, placeLoop(this.items[i].outer, this.items[i]))) { hit = i; break; }
