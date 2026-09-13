@@ -2052,6 +2052,30 @@ for (const btn of document.querySelectorAll('.tool-btn')) {
   });
 }
 
+// Select-tool sub-mode and brush radius. Shift+drag in Edit mode draws the
+// same shape, so the row stays visible whichever tool is active; the radius
+// slider is only meaningful for the brush and is hidden otherwise.
+function refreshSelectSubMode() {
+  const sub = traceEditor.selectSubMode;
+  for (const b of document.querySelectorAll('#selSubRow [data-selsub]')) {
+    b.classList.toggle('primary', b.dataset.selsub === sub);
+  }
+  $('brushRadiusField').hidden = sub !== 'brush';
+  $('brushRadius').value = String(traceEditor.brushRadiusPx);
+  $('brushRadiusVal').textContent = `${traceEditor.brushRadiusPx} px`;
+}
+for (const btn of document.querySelectorAll('#selSubRow [data-selsub]')) {
+  btn.addEventListener('click', () => {
+    traceEditor.setSelectSubMode(btn.dataset.selsub);
+    refreshSelectSubMode();
+  });
+}
+$('brushRadius').addEventListener('input', e => {
+  traceEditor.setBrushRadius(e.target.value);
+  refreshSelectSubMode();
+});
+refreshSelectSubMode();
+
 // ---------- label (emboss / deboss) panel ----------
 
 function activeLabel() {
@@ -2491,7 +2515,11 @@ $('suggestRegionsBtn').addEventListener('click', () => {
 // Multi-select selection tools.
 function refreshSelectionTools() {
   const count = traceEditor.selectedVerts.length;
-  $('selCount').textContent = count ? `${count} points` : '';
+  const holes = traceEditor.selectedCircles.length;
+  const parts = [];
+  if (count) parts.push(`${count} points`);
+  if (holes) parts.push(`${holes} hole${holes > 1 ? 's' : ''}`);
+  $('selCount').textContent = parts.join(' + ');
   const run3 = traceEditor.hasMultiRun(3);
   const run2 = traceEditor.hasMultiRun(2);
   $('fitArcBtn').disabled = !run3;
@@ -2500,7 +2528,7 @@ function refreshSelectionTools() {
   $('simplifySelBtn').disabled = !run3;
   $('densifyBtn').disabled = !run2;
   $('straightenBtn').disabled = !run2;
-  $('clearSelBtn').disabled = !count;
+  $('clearSelBtn').disabled = !count && !holes;
   if (!count) $('arcRadiusField').hidden = true;
   // Reflect whether the current selection is a live tangent fillet arc.
   const liveArc = !!traceEditor._selectedArc();
@@ -2612,7 +2640,7 @@ document.addEventListener('keydown', e => {
     traceEditor.cancelPendingPick();
     return;
   }
-  if (e.key === 'Escape' && traceEditor.selectedVerts.length) {
+  if (e.key === 'Escape' && (traceEditor.selectedVerts.length || traceEditor.selectedCircles.length)) {
     traceEditor.clearMultiSelect();
     $('arcRadiusField').hidden = true;
     refreshSelectionTools();

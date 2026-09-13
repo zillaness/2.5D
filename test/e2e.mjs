@@ -926,6 +926,1311 @@ check('fit arc replaces a run with a smooth arc (>5 pts)',
 check('fit line straightens a run to 2 endpoints (7 -> 4 pts)',
   groupB.lineOk && groupB.lineLen === 4, `${groupB.lineLen} pts`);
 
+// ---------- 10b. Part A: selection gesture resolvers ----------
+
+// Every gesture resolver takes screen-space geometry and returns a plain
+// [{loop, idx}] list, so each one is driven here without a mouse. The fixture
+// is a 40 x 40 mm square whose corners are, in order:
+//   0 (20,20)  1 (60,20)  2 (60,60)  3 (20,60)
+
+const selA = await page.evaluate(() => {
+  const app = window.__app;
+  const te = app.traceEditor;
+  const ppm = 4;
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 400; // 100 x 100 mm of trace space
+  const g = c.getContext('2d');
+  g.fillStyle = '#eee'; g.fillRect(0, 0, 400, 400);
+  app.state.rect = { canvas: c, pxPerMm: ppm };
+  app.state.diffMap = null;
+  te.setRectified(c, ppm);
+  te.setCircles([]);
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+
+  // A box over the top half of the square: corners 0 and 1, nothing else.
+  const a = S(15, 15), b = S(65, 40);
+  const topHalf = key(te._verticesInRect({ x0: a.x, y0: a.y, x1: b.x, y1: b.y }));
+
+  // The same rect drawn in the opposite corner order resolves the same way.
+  const reversed = key(te._verticesInRect({ x0: b.x, y0: b.y, x1: a.x, y1: a.y }));
+
+  // A box over the whole square takes all four.
+  const w0 = S(10, 10), w1 = S(70, 70);
+  const all = key(te._verticesInRect({ x0: w0.x, y0: w0.y, x1: w1.x, y1: w1.y }));
+
+  // Stray-click guard: a sub-3 px box leaves the selection alone.
+  te.selectedVerts = [{ loop: -1, idx: 2 }];
+  te._applyMarquee({ x0: a.x, y0: a.y, x1: a.x + 2, y1: a.y + 2 });
+  const strayKept = key(te.selectedVerts);
+
+  // A real box release replaces through the single writer.
+  te._applyMarquee({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
+  const applied = key(te.selectedVerts);
+  const clearedSingle = te.selection === null;
+
+  te.selectedVerts = [];
+  te.selection = null;
+  return { topHalf, reversed, all, strayKept, applied, clearedSingle };
+});
+
+console.log('\nPart A step 1 — rect resolver + the single selection writer');
+check('_verticesInRect returns exactly the enclosed corners',
+  selA.topHalf === '-1:0,-1:1', selA.topHalf || '(none)');
+check('_verticesInRect ignores the drag corner order', selA.reversed === '-1:0,-1:1', selA.reversed);
+check('_verticesInRect over the whole square takes all four corners',
+  selA.all === '-1:0,-1:1,-1:2,-1:3', selA.all);
+check('a sub-3 px marquee is a stray click and leaves the selection alone',
+  selA.strayKept === '-1:2', selA.strayKept || '(cleared)');
+check('_applySelection replace sets the multi-selection and clears the single one',
+  selA.applied === '-1:0,-1:1' && selA.clearedSingle, `${selA.applied}, single=${selA.clearedSingle}`);
+
+const selLasso = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const path = mm => mm.map(([x, y]) => S(x, y));
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+
+  // A triangle over the top of the square catches corners 0 and 1 only.
+  const tri = path([[5, 5], [75, 5], [40, 45]]);
+  const triSel = key(te._verticesInPolygon(tri));
+
+  // Under the area guard: a 2.8 x 2.8 px square sitting right on corner 0.
+  const c0 = S(20, 20);
+  const tiny = [
+    { x: c0.x - 1.4, y: c0.y - 1.4 }, { x: c0.x + 1.4, y: c0.y - 1.4 },
+    { x: c0.x + 1.4, y: c0.y + 1.4 }, { x: c0.x - 1.4, y: c0.y + 1.4 },
+  ];
+  const tinySel = key(te._verticesInPolygon(tiny));
+  const tinyArea = Math.abs(te._pathAreaPx(tiny));
+  const twoPtSel = key(te._verticesInPolygon([S(5, 5), S(75, 5)]));
+
+  // Driving the gesture: a stray lasso leaves the selection alone, a real one
+  // replaces it.
+  te.selectedVerts = [{ loop: -1, idx: 2 }];
+  te._lasso = tiny.slice();
+  te._up();
+  const strayKept = key(te.selectedVerts);
+  te._lasso = tri.slice();
+  te._up();
+  const gestureSel = key(te.selectedVerts);
+  const lassoCleared = te._lasso === null && te.dragging === false;
+
+  // Concave: a C opening to the right, with vertex 2 sitting in its mouth.
+  te.setTrace([
+    { x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 40 },
+    { x: 60, y: 60 }, { x: 20, y: 60 },
+  ], []);
+  const cShape = path([
+    [10, 10], [70, 10], [70, 30], [40, 30], [40, 50], [70, 50], [70, 70], [10, 70],
+  ]);
+  const cSel = key(te._verticesInPolygon(cShape));
+
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+  te.selectedVerts = [];
+  te.selection = null;
+  return { triSel, tinySel, tinyArea, twoPtSel, strayKept, gestureSel, lassoCleared, cSel };
+});
+
+console.log('\nPart A step 2 — lasso');
+check('a triangle lasso takes the two corners it encloses',
+  selLasso.triSel === '-1:0,-1:1', selLasso.triSel || '(none)');
+check('a lasso under the ~9 px2 area guard resolves to nothing',
+  selLasso.tinySel === '' && selLasso.tinyArea < 9, `area ${selLasso.tinyArea.toFixed(2)} px2, got "${selLasso.tinySel}"`);
+check('a lasso with fewer than 3 points resolves to nothing', selLasso.twoPtSel === '');
+check('a stray lasso release changes nothing', selLasso.strayKept === '-1:2', selLasso.strayKept);
+check('a lasso release replaces the selection and ends the gesture',
+  selLasso.gestureSel === '-1:0,-1:1' && selLasso.lassoCleared, selLasso.gestureSel);
+check('a concave C lasso excludes the vertex in its mouth',
+  selLasso.cSel === '-1:0,-1:1,-1:3,-1:4', selLasso.cSel || '(none)');
+
+const selBrush = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+  const defaultR = te.brushRadiusPx;
+
+  // Two samples on the top edge's endpoints, a 3 px brush: the two corners it
+  // touches, and neither of the bottom pair 40 mm away.
+  const topEdge = key(te._verticesNearPath([S(20, 20), S(60, 20)], 3));
+
+  // One sample, no drag: the circle select.
+  const dot = key(te._verticesNearPath([S(20, 20)], 3));
+  const dotEmpty = key(te._verticesNearPath([S(40, 40)], 3));
+
+  // The segment test, not the sample test: a vertex mid-edge with the two
+  // samples 100 px away on either side of it.
+  te.setTrace([
+    { x: 20, y: 20 }, { x: 40, y: 20 }, { x: 60, y: 20 },
+    { x: 60, y: 60 }, { x: 20, y: 60 },
+  ], []);
+  const mid = S(40, 20);
+  const farPath = [{ x: mid.x - 100, y: mid.y }, { x: mid.x + 100, y: mid.y }];
+  const farSel = te._verticesNearPath(farPath, 3);
+  const farKeys = key(farSel);
+  const minSampleDist = Math.min(...farPath.map(p => Math.hypot(p.x - mid.x, p.y - mid.y)));
+  const bottom = S(20, 60);
+  const bottomFar = Math.abs(bottom.y - mid.y);
+
+  // Driving the gesture: the release resolves at the editor's own radius.
+  te.setTrace([{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }], []);
+  te.setBrushRadius(3);
+  te.selectedVerts = [{ loop: -1, idx: 2 }];
+  te._brush = [S(20, 20), S(60, 20)];
+  te._up();
+  const gestureSel = key(te.selectedVerts);
+  const brushCleared = te._brush === null && te.dragging === false;
+
+  te.setBrushRadius(1);
+  const clampLo = te.brushRadiusPx;
+  te.setBrushRadius(500);
+  const clampHi = te.brushRadiusPx;
+  te.setBrushRadius(12);
+
+  te.selectedVerts = [];
+  te.selection = null;
+  return {
+    defaultR, topEdge, dot, dotEmpty, farKeys, minSampleDist, bottomFar,
+    gestureSel, brushCleared, clampLo, clampHi,
+  };
+});
+
+console.log('\nPart A step 3 — radius brush');
+check('brush radius defaults to 12 px and clamps to 4..60',
+  selBrush.defaultR === 12 && selBrush.clampLo === 4 && selBrush.clampHi === 60,
+  `${selBrush.defaultR}, ${selBrush.clampLo}, ${selBrush.clampHi}`);
+check('a 2-sample brush along the top edge takes its endpoints, not the far corners',
+  selBrush.topEdge === '-1:0,-1:1', selBrush.topEdge || '(none)');
+check('a single-sample brush path is the circle select',
+  selBrush.dot === '-1:0' && selBrush.dotEmpty === '', `${selBrush.dot} / "${selBrush.dotEmpty}"`);
+check('the brush tests the segment, not the samples: a vertex 100 px from either sample is caught',
+  selBrush.farKeys.split(',').includes('-1:1') && selBrush.minSampleDist > 3,
+  `${selBrush.farKeys}, nearest sample ${selBrush.minSampleDist.toFixed(0)} px`);
+check('the swept segment does not reach vertices off the line',
+  !selBrush.farKeys.split(',').includes('-1:4') && selBrush.bottomFar > 3,
+  `${selBrush.farKeys}, bottom row ${selBrush.bottomFar.toFixed(0)} px off`);
+check('a brush release replaces the selection and ends the gesture',
+  selBrush.gestureSel === '-1:0,-1:1' && selBrush.brushCleared, selBrush.gestureSel);
+
+const selBox = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+
+  // Direction is the sign of x1 - x0 at release; vertical direction is ignored.
+  const a = S(15, 15), b = S(65, 40);
+  const dirWindow = te._rectIsCrossing({ x0: a.x, y0: b.y, x1: b.x, y1: a.y });
+  const dirCross = te._rectIsCrossing({ x0: b.x, y0: a.y, x1: a.x, y1: b.y });
+
+  // A live first-class fillet arc, which is what a crossing box expands to:
+  // an L-corner with a blunt 3-point run, rounded by makeTangentSelection.
+  te.setTrace([
+    { x: 10, y: 60 }, { x: 40, y: 60 },
+    { x: 54, y: 60 }, { x: 60, y: 56 }, { x: 60, y: 50 },
+    { x: 60, y: 30 }, { x: 60, y: 10 },
+    { x: 10, y: 10 },
+  ], []);
+  te.selectedVerts = [2, 3, 4].map(idx => ({ loop: -1, idx }));
+  const made = te.makeTangentSelection();
+  const run = key(te.selectedVerts);          // the arc's whole run, re-seeded for us
+  const runIdx = te.selectedVerts.map(v => v.idx);
+  const runLen = runIdx.length;
+  const arcCount = te.arcs.length;
+
+  // A 5 px box over one vertex in the middle of the run.
+  const mp = te._mmToScreen(te.outer[runIdx[Math.floor(runLen / 2)]]);
+  te._applyMarquee({ x0: mp.x - 2.5, y0: mp.y - 2.5, x1: mp.x + 2.5, y1: mp.y + 2.5 });
+  const boxWindow = key(te.selectedVerts);
+  const boxWindowLen = te.selectedVerts.length;
+  te._applyMarquee({ x0: mp.x + 2.5, y0: mp.y - 2.5, x1: mp.x - 2.5, y1: mp.y + 2.5 });
+  const boxCross = key(te.selectedVerts);
+
+  // The other half of the crossing rule, isolated by passing an empty vertex
+  // list: a box that holds no vertex of the run, but that the run's polyline
+  // passes through, still takes the whole run.
+  let gapD = -1, gapMid = { x: 0, y: 0 };
+  for (let k = 0; k + 1 < runLen; k++) {
+    const p = te._mmToScreen(te.outer[runIdx[k]]);
+    const q = te._mmToScreen(te.outer[runIdx[k + 1]]);
+    const d = Math.hypot(q.x - p.x, q.y - p.y);
+    if (d > gapD) { gapD = d; gapMid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 }; }
+  }
+  const hw = Math.min(3, gapD / 3);
+  const crossedRun = key(te._expandToArcRuns([], {
+    x0: gapMid.x - hw, y0: gapMid.y - hw, x1: gapMid.x + hw, y1: gapMid.y + hw }));
+  const missedRun = key(te._expandToArcRuns([], {
+    x0: S(5, 5).x, y0: S(5, 5).y, x1: S(8, 8).x, y1: S(8, 8).y }));
+
+  // A crossing band over a plain edge of the square expands nothing.
+  te.setTrace(square(), []);
+  const top = S(0, 0).y - 500, bot = S(0, 100).y + 500;
+  const edgeX = S(40, 0).x;
+  te.selectedVerts = [{ loop: -1, idx: 2 }];
+  te._applyMarquee({ x0: edgeX + 1, y0: top, x1: edgeX - 1, y1: bot });
+  const plainEdge = key(te.selectedVerts);
+  const plainArcs = te.arcs.length;
+
+  // Holes. The bore rim of a 10 mm hole at (40, 40) sits 5 mm from its centre.
+  te.setCircles([hole(40, 40, 10)]);
+  const rimPx = te._circleScreen(te.circles[0]).r;
+  const c0 = S(30, 30), c1 = S(40, 40);
+  te._applyMarquee({ x0: c0.x, y0: c0.y, x1: c1.x, y1: c1.y });
+  const clipWindow = te.selectedCircles.join(',');
+  te._applyMarquee({ x0: c1.x, y0: c0.y, x1: c0.x, y1: c1.y });
+  const clipCross = te.selectedCircles.join(',');
+  const w0 = S(30, 30), w1 = S(50, 50);
+  te._applyMarquee({ x0: w0.x, y0: w0.y, x1: w1.x, y1: w1.y });
+  const wholeWindow = te.selectedCircles.join(',');
+
+  // Lasso takes a hole by its centre; the brush takes one by its rim.
+  const lassoIn = te._circlesInGesture('lasso', [S(30, 30), S(50, 30), S(50, 50), S(30, 50)]).join(',');
+  const lassoOut = te._circlesInGesture('lasso', [S(5, 5), S(15, 5), S(15, 15), S(5, 15)]).join(',');
+  const brushRim = te._circlesInGesture('brush', { path: [S(45, 40)], r: 3 }).join(',');
+  const brushFar = te._circlesInGesture('brush', { path: [S(20, 20)], r: 3 }).join(',');
+
+  // Group move carries a selected hole's centre along with the vertices.
+  te._clearMulti();
+  te.selectedVerts = [{ loop: -1, idx: 0 }, { loop: -1, idx: 1 }];
+  te.selectedCircles = [0];
+  te._beginGroupDrag({ x: 0, y: 0 });
+  te._moveGroupTo({ x: 5, y: 5 });
+  te._groupDrag = null;
+  te.dragging = false;
+  const movedVert = { ...te.outer[0] };
+  const movedHole = { cx: te.circles[0].cx, cy: te.circles[0].cy };
+
+  // Delete takes the selected holes too.
+  te.setTrace(square(), []);
+  te.setCircles([hole(40, 40, 10), hole(70, 70, 6)]);
+  te._clearMulti();
+  te.selectedCircles = [0];
+  te.deleteSelected();
+  const leftCount = te.circles.length;
+  const leftCx = te.circles.length ? te.circles[0].cx : null;
+  const clearedAfterDelete = te._multiCount();
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return {
+    dirWindow, dirCross, madeOk: !!made.ok, run, runLen, arcCount,
+    boxWindow, boxWindowLen, boxCross, crossedRun, missedRun, gapD,
+    plainEdge, plainArcs, rimPx,
+    clipWindow, clipCross, wholeWindow,
+    lassoIn, lassoOut, brushRim, brushFar,
+    movedVert, movedHole, leftCount, leftCx, clearedAfterDelete,
+  };
+});
+
+console.log('\nPart A step 4 — directional box, arc runs, holes in the selection');
+check('the box direction is the sign of x1 - x0, read on release',
+  selBox.dirWindow === false && selBox.dirCross === true,
+  `window=${selBox.dirWindow}, crossing=${selBox.dirCross}`);
+check('a right-to-left box over one vertex of a fillet run takes the whole run',
+  selBox.madeOk && selBox.arcCount === 1 && selBox.boxCross === selBox.run,
+  `${selBox.runLen}-vertex run, got ${selBox.boxCross}`);
+check('the same box left-to-right takes only what it encloses',
+  selBox.boxWindowLen > 0 && selBox.boxWindowLen < selBox.runLen &&
+  selBox.boxWindow !== selBox.run,
+  `${selBox.boxWindowLen} of ${selBox.runLen}`);
+check('a crossing box crossed only by the run polyline still takes the whole run',
+  selBox.crossedRun === selBox.run && selBox.missedRun === '',
+  `crossed ${selBox.crossedRun} (widest gap ${selBox.gapD.toFixed(1)} px), missed "${selBox.missedRun}"`);
+check('a crossing box touching only a plain edge selects nothing',
+  selBox.plainEdge === '' && selBox.plainArcs === 0, `got "${selBox.plainEdge}"`);
+check('a window box clipping a hole rim skips it, a crossing box takes it',
+  selBox.rimPx > 5 && selBox.clipWindow === '' && selBox.clipCross === '0' && selBox.wholeWindow === '0',
+  `rim ${selBox.rimPx.toFixed(1)} px, window "${selBox.clipWindow}", crossing "${selBox.clipCross}", enclosed "${selBox.wholeWindow}"`);
+check('lasso takes a hole by its centre, the brush by its rim',
+  selBox.lassoIn === '0' && selBox.lassoOut === '' &&
+  selBox.brushRim === '0' && selBox.brushFar === '',
+  `lasso "${selBox.lassoIn}"/"${selBox.lassoOut}", brush "${selBox.brushRim}"/"${selBox.brushFar}"`);
+check('group move shifts a selected hole centre with the vertices',
+  Math.abs(selBox.movedVert.x - 25) < 1e-6 && Math.abs(selBox.movedVert.y - 25) < 1e-6 &&
+  Math.abs(selBox.movedHole.cx - 45) < 1e-6 && Math.abs(selBox.movedHole.cy - 45) < 1e-6,
+  `vertex ${selBox.movedVert.x},${selBox.movedVert.y}; hole ${selBox.movedHole.cx},${selBox.movedHole.cy}`);
+check('Delete removes the selected holes and clears the multi-selection',
+  selBox.leftCount === 1 && selBox.leftCx === 70 && selBox.clearedAfterDelete === 0,
+  `${selBox.leftCount} left, first at ${selBox.leftCx}`);
+
+const selMod = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const topTri = () => [S(5, 5), S(75, 5), S(40, 45)];   // encloses corners 0 and 1
+  const wholeSheet = () => [S(5, 5), S(75, 5), S(75, 75), S(5, 75)];
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+
+  // The modifier map, the same for every sub-mode.
+  const modes = [
+    te._gestureSelectMode({}),
+    te._gestureSelectMode({ shiftKey: true }),
+    te._gestureSelectMode({ altKey: true }),
+    te._gestureSelectMode({ altKey: true, shiftKey: true }),
+  ].join(',');
+
+  // Lasso replace, then brush add: the union.
+  te._lasso = topTri();
+  te._up();
+  const afterLasso = key(te.selectedVerts);
+  te.setBrushRadius(4);
+  te._selectGestureMode = 'add';
+  te._brush = [S(20, 60)];
+  te._up();
+  const afterAdd = key(te.selectedVerts);
+
+  // Then Alt-lasso over the same two corners: the difference.
+  te._selectGestureMode = 'subtract';
+  te._lasso = topTri();
+  te._up();
+  const afterSub = key(te.selectedVerts);
+
+  // Overlapping gestures never duplicate.
+  te._lasso = wholeSheet();
+  te._up();
+  const allCount = te.selectedVerts.length;
+  te._selectGestureMode = 'add';
+  te._lasso = wholeSheet();
+  te._up();
+  const dupCount = te.selectedVerts.length;
+
+  // The modifier is consumed at release, so the next gesture is a plain
+  // replace even though the one before it added.
+  te._lasso = topTri();
+  te._up();
+  const afterConsumed = key(te.selectedVerts);
+
+  // Subtract takes holes out of the selection too.
+  te.setCircles([{ cx: 40, cy: 40, d: 10, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } }]);
+  te._clearMulti();
+  te._lasso = [S(30, 30), S(50, 30), S(50, 50), S(30, 50)];
+  te._up();
+  const holeIn = te.selectedCircles.join(',');
+  te._selectGestureMode = 'subtract';
+  te._lasso = [S(30, 30), S(50, 30), S(50, 50), S(30, 50)];
+  te._up();
+  const holeOut = te.selectedCircles.join(',');
+
+  // Alt+click deletes a vertex in Edit mode, and is skipped in Select mode.
+  te.setCircles([]);
+  te._clearMulti();
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, o) => Object.assign({
+    pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false,
+  }, o || {});
+
+  te.setTrace(square(), []);
+  te.mode = 'edit';
+  te._down(ev(S(20, 20), { altKey: true }));
+  te._up();
+  const editDeleted = te.outer.length;
+
+  te.setTrace(square(), []);
+  te.mode = 'select';
+  te._down(ev(S(20, 20), { altKey: true }));
+  te._up();
+  const selectKept = te.outer.length;
+
+  te.mode = 'edit';
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te.setBrushRadius(12);
+  te._clearMulti();
+  te.selection = null;
+  te._selectGestureMode = 'replace';
+  return {
+    modes, afterLasso, afterAdd, afterSub, allCount, dupCount, afterConsumed,
+    holeIn, holeOut, editDeleted, selectKept,
+  };
+});
+
+console.log('\nPart A step 5 — add and subtract modifiers');
+check('drag replaces, Shift adds, Alt subtracts (Alt wins when both are down)',
+  selMod.modes === 'replace,add,subtract,subtract', selMod.modes);
+check('a lasso replace followed by a brush add is the union',
+  selMod.afterLasso === '-1:0,-1:1' && selMod.afterAdd === '-1:0,-1:1,-1:3',
+  `${selMod.afterLasso} then ${selMod.afterAdd}`);
+check('an Alt lasso over the same corners leaves the difference',
+  selMod.afterSub === '-1:3', selMod.afterSub || '(empty)');
+check('overlapping gestures never duplicate a vertex',
+  selMod.allCount === 4 && selMod.dupCount === 4,
+  `${selMod.allCount} then ${selMod.dupCount}`);
+check('the modifier is consumed at release, so the next gesture replaces',
+  selMod.afterConsumed === '-1:0,-1:1', selMod.afterConsumed);
+check('subtract takes holes out of the selection too',
+  selMod.holeIn === '0' && selMod.holeOut === '', `"${selMod.holeIn}" then "${selMod.holeOut}"`);
+check('Alt+click deletes a vertex in Edit mode and is skipped in Select mode',
+  selMod.editDeleted === 3 && selMod.selectKept === 4,
+  `edit ${selMod.editDeleted} pts, select ${selMod.selectKept} pts`);
+
+const selUI = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const sub = s => document.querySelector(`#selSubRow [data-selsub="${s}"]`);
+  const $$ = id => document.getElementById(id);
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+
+  // Drive the real pointer path. Capture is a no-op here because the events
+  // are hand-built and carry no live pointer.
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, o) => Object.assign({
+    pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false,
+  }, o || {});
+  const drag = (pts, o) => {
+    te._down(ev(pts[0], o));
+    for (let i = 1; i < pts.length; i++) te._move(ev(pts[i], o));
+    te._up();
+  };
+  // A triangle over the top of the square: corners 0 and 1 only.
+  const topTri = [S(5, 5), S(75, 5), S(40, 45)];
+
+  // The toolbar gains one button, and it is the only way into the mode.
+  const btn = document.querySelector('.tool-btn[data-tool="select"]');
+  btn.click();
+  const selMode = te.mode;
+  const selActive = btn.classList.contains('active');
+  const boxCursor = cv.style.cursor;
+
+  // Sub-mode control: Brush hides the cursor (the ring is the cursor) and is
+  // the only sub-mode that shows the radius slider.
+  sub('brush').click();
+  const brushSub = te.selectSubMode;
+  const brushCursor = cv.style.cursor;
+  const brushMarked = sub('brush').classList.contains('primary') &&
+    !sub('box').classList.contains('primary');
+  const radiusShown = !$$('brushRadiusField').hidden;
+  const slider = $$('brushRadius');
+  slider.value = '30';
+  slider.dispatchEvent(new Event('input', { bubbles: true }));
+  const radiusSet = te.brushRadiusPx;
+  const radiusLabel = $$('brushRadiusVal').textContent;
+
+  sub('lasso').click();
+  const lassoSub = te.selectSubMode;
+  const lassoCursor = cv.style.cursor;
+  const radiusHidden = $$('brushRadiusField').hidden;
+
+  // A plain drag in the Select tool selects, through the current sub-mode.
+  drag(topTri);
+  const plainDrag = key(te.selectedVerts);
+  const countText = $$('selCount').textContent;
+  const notPanning = te.panning === false;
+
+  // Shift still adds and Alt still subtracts once the tool is active.
+  drag([S(15, 55), S(65, 55), S(65, 75), S(15, 75)], { shiftKey: true });
+  const shiftAdded = key(te.selectedVerts);
+  drag(topTri, { altKey: true });
+  const altRemoved = key(te.selectedVerts);
+
+  // Back in Edit mode: a plain drag on empty space still pans and clears,
+  // and Shift+drag selects with whatever sub-mode is current.
+  document.querySelector('.tool-btn[data-tool="edit"]').click();
+  const editMode = te.mode;
+  te._clearMulti();
+  te._down(ev(S(5, 5)));
+  const editPans = te.panning === true;
+  const editPlainSel = te.selectedVerts.length;
+  te._up();
+  drag(topTri, { shiftKey: true });
+  const editShiftSel = key(te.selectedVerts);
+
+  const hint = $$('selHint').textContent.replace(/\s+/g, ' ');
+
+  // Leave the page as the blocks after this one expect to find it.
+  sub('box').click();
+  slider.value = '12';
+  slider.dispatchEvent(new Event('input', { bubbles: true }));
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  te._selectGestureMode = 'replace';
+  te._notifySelect();
+  const restored = `${te.mode}/${te.selectSubMode}/${te.brushRadiusPx}/${$$('selCount').textContent}`;
+  return {
+    selMode, selActive, boxCursor, brushSub, brushCursor, brushMarked,
+    radiusShown, radiusSet, radiusLabel, lassoSub, lassoCursor, radiusHidden,
+    plainDrag, countText, notPanning, shiftAdded, altRemoved,
+    editMode, editPans, editPlainSel, editShiftSel, hint, restored,
+  };
+});
+
+console.log('\nPart A step 6 — the Select tool, its sub-modes and the panel');
+check('the toolbar Select button puts the editor in select mode',
+  selUI.selMode === 'select' && selUI.selActive, `${selUI.selMode}, active=${selUI.selActive}`);
+check('Box and Lasso use a crosshair, Brush hides the cursor for its ring',
+  selUI.boxCursor === 'crosshair' && selUI.brushCursor === 'none' && selUI.lassoCursor === 'crosshair',
+  `box "${selUI.boxCursor}", brush "${selUI.brushCursor}", lasso "${selUI.lassoCursor}"`);
+check('the sub-mode buttons switch the editor sub-mode and mark the active one',
+  selUI.brushSub === 'brush' && selUI.lassoSub === 'lasso' && selUI.brushMarked,
+  `${selUI.brushSub} then ${selUI.lassoSub}, marked=${selUI.brushMarked}`);
+check('the radius slider is shown only for Brush and sets the brush radius',
+  selUI.radiusShown && selUI.radiusHidden && selUI.radiusSet === 30 && selUI.radiusLabel === '30 px',
+  `shown=${selUI.radiusShown}, hidden after=${selUI.radiusHidden}, r=${selUI.radiusSet}, label "${selUI.radiusLabel}"`);
+check('a plain drag in the Select tool resolves through the current sub-mode',
+  selUI.plainDrag === '-1:0,-1:1' && selUI.notPanning, `${selUI.plainDrag || '(none)'}, panning=${!selUI.notPanning}`);
+check('the selection count reads out both points and holes',
+  selUI.countText === '2 points', `"${selUI.countText}"`);
+check('Shift adds and Alt subtracts through the Select tool pointer path',
+  selUI.shiftAdded === '-1:0,-1:1,-1:2,-1:3' && selUI.altRemoved === '-1:2,-1:3',
+  `${selUI.shiftAdded} then ${selUI.altRemoved}`);
+check('a plain drag on empty space still pans in Edit mode',
+  selUI.editMode === 'edit' && selUI.editPans && selUI.editPlainSel === 0,
+  `mode ${selUI.editMode}, panning=${selUI.editPans}, ${selUI.editPlainSel} selected`);
+check('Shift+drag in Edit mode selects with the current sub-mode',
+  selUI.editShiftSel === '-1:0,-1:1', selUI.editShiftSel || '(none)');
+check('the Selection panel hint names the three shapes and the modifiers',
+  /Box:/.test(selUI.hint) && /Lasso:/.test(selUI.hint) && /Brush:/.test(selUI.hint) &&
+  /Shift adds, Alt removes, Escape clears/.test(selUI.hint), selUI.hint);
+check('the step 6 block leaves the editor back in Edit mode with an empty selection',
+  selUI.restored === 'edit/box/12/', selUI.restored);
+
+const selAnchor = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  // Two holes 20 mm apart, centre distance constrained: dragging either one
+  // should pin it under the cursor and move the other.
+  const fixture = () => {
+    te.setTrace(square(), []);
+    te.setCircles([hole(30, 30, 8), hole(50, 30, 8)]);
+    te.measurements = []; te.arcs = []; te.lines = [];
+    te.constraints = [{ type: 'dist',
+      refs: [{ kind: 'center', idx: 0 }, { kind: 'center', idx: 1 }], value: 20 }];
+    te._clearMulti();
+    te.selection = null;
+  };
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = sp => ({ pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false });
+  const anchorKey = () => te._dragAnchors()
+    .map(a => a.kind === 'vert' ? `vert ${a.loop}:${a.idx}` : `${a.kind} ${a.idx}`).join(',');
+  const drag = (from, to) => { te._down(ev(from)); te._move(ev(to)); te._up(); };
+
+  // A group drag pressed on the hole: one outline vertex and the left hole.
+  fixture();
+  te.selectedVerts = [{ loop: -1, idx: 0 }];
+  te.selectedCircles = [0];
+  te._down(ev(S(30, 30)));
+  const groupAnchors = anchorKey();
+  te._move(ev(S(35, 30)));
+  te._up();
+  const groupHeld = te.circles[0].cx, groupOther = te.circles[1].cx;
+  const groupVert = te.outer[0].x;
+
+  // The same hole, same constraint, dragged on its own.
+  fixture();
+  te._down(ev(S(30, 30)));
+  const singleAnchors = anchorKey();
+  te._move(ev(S(35, 30)));
+  te._up();
+  const singleHeld = te.circles[0].cx, singleOther = te.circles[1].cx;
+
+  // Holes only in the selection: the one under the cursor is still an anchor.
+  fixture();
+  te.selectedCircles = [0, 1];
+  te.constraints = [{ type: 'dist',
+    refs: [{ kind: 'center', idx: 0 }, { kind: 'vert', loop: -1, idx: 1 }], value: 30 }];
+  drag(S(30, 30), S(35, 30));
+  const holesOnlyHeld = te.circles[0].cx;
+  const holesOnlyDist = Math.hypot(te.outer[1].x - te.circles[0].cx, te.outer[1].y - te.circles[0].cy);
+  const holesOnlyCornerMoved = Math.abs(te.outer[1].x - 60) > 1e-3;
+
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te.constraints = [];
+  te._clearMulti();
+  te.selection = null;
+  return {
+    groupAnchors, groupHeld, groupOther, groupVert,
+    singleAnchors, singleHeld, singleOther,
+    holesOnlyHeld, holesOnlyDist, holesOnlyCornerMoved,
+  };
+});
+
+console.log('\nPart A step 4 — a dragged hole anchors the constraint solver');
+check('a group drag anchors every selected hole, not just the vertices',
+  selAnchor.groupAnchors === 'vert -1:0,center 0' && selAnchor.singleAnchors === 'center 0',
+  `group "${selAnchor.groupAnchors}", single "${selAnchor.singleAnchors}"`);
+check('a constrained hole group-dragged lands under the cursor, like a single drag',
+  Math.abs(selAnchor.groupHeld - 35) < 1e-3 && Math.abs(selAnchor.groupOther - 55) < 1e-3 &&
+  Math.abs(selAnchor.groupVert - 25) < 1e-3 &&
+  Math.abs(selAnchor.singleHeld - 35) < 1e-3 && Math.abs(selAnchor.singleOther - 55) < 1e-3,
+  `group held ${selAnchor.groupHeld.toFixed(3)} other ${selAnchor.groupOther.toFixed(3)} vertex ${selAnchor.groupVert.toFixed(3)}; ` +
+  `single held ${selAnchor.singleHeld.toFixed(3)} other ${selAnchor.singleOther.toFixed(3)}`);
+check('a holes-only group drag still pins the hole under the cursor',
+  Math.abs(selAnchor.holesOnlyHeld - 35) < 1e-3 && selAnchor.holesOnlyCornerMoved &&
+  Math.abs(selAnchor.holesOnlyDist - 30) < 1e-3,
+  `held ${selAnchor.holesOnlyHeld.toFixed(3)}, corner moved ${selAnchor.holesOnlyCornerMoved}, ` +
+  `distance ${selAnchor.holesOnlyDist.toFixed(3)}`);
+
+const selWrap = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort((a, b) => a.localeCompare(b)).join(',');
+  // A rounded end, the gesture the lasso exists for: 16 points round a circle
+  // with vertex 0 at the rightmost point, so a lasso over the right cap wraps
+  // the index origin.
+  const ring = () => {
+    const pts = [];
+    for (let k = 0; k < 16; k++) {
+      const a = k * Math.PI / 8;
+      pts.push({ x: 40 + 20 * Math.cos(a), y: 40 + 20 * Math.sin(a) });
+    }
+    return pts;
+  };
+  const fixture = () => {
+    te.setTrace(ring(), []);
+    te.setCircles([]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+
+  fixture();
+  const nBefore = te.outer.length;
+  // Lasso the right cap.
+  te._lasso = [S(54, 16), S(74, 16), S(74, 64), S(54, 64)];
+  te._up();
+  const capSel = key(te.selectedVerts);
+  const capIdx = te.selectedVerts.map(v => v.idx).sort((a, b) => a - b);
+  const wraps = capIdx.includes(0) && capIdx.includes(nBefore - 1) && capIdx.length < nBefore;
+  const capRun = te.hasMultiRun(3);
+  const capSpan = te._selectionSpan(3);
+  const capArc = te.fitArcToSelection();
+  const nAfterArc = te.outer.length;
+  const capLine = te.fitLineToSelection();
+  const nAfterLine = te.outer.length;
+  const capStraight = te.straightenSelection();
+  const capStraightOk = !!(capStraight && capStraight.ok);
+  const nAfterStraight = te.outer.length;
+
+  // The same count of points as a plain run, away from the origin: the tools
+  // are still available and still act on that run alone.
+  fixture();
+  te.selectedVerts = capIdx.map((_, i) => ({ loop: -1, idx: 4 + i }));
+  const runRun = te.hasMultiRun(3);
+  const runArc = te.fitArcToSelection();
+  const runKeepsEnds = te.outer[0].x === ring()[0].x && te.outer[0].y === ring()[0].y;
+
+  fixture();
+  return {
+    nBefore, capSel, wraps, capRun, capSpan, capArc, nAfterArc,
+    capLine, nAfterLine, capStraight, capStraightOk, nAfterStraight,
+    runRun, runArc, runKeepsEnds,
+  };
+});
+
+console.log('\nPart A step 2 — a lasso that wraps the index origin is not a run');
+check('a lasso round a rounded end takes the cap and wraps vertex 0',
+  selWrap.wraps && selWrap.nBefore === 16, `${selWrap.capSel} of ${selWrap.nBefore}`);
+check('a wrapping selection reports no span, so the run tools stay disabled',
+  selWrap.capRun === false && selWrap.capSpan === null,
+  `hasMultiRun=${selWrap.capRun}, span=${JSON.stringify(selWrap.capSpan)}`);
+check('Fit arc, Fit line and Straighten refuse it instead of rewriting the whole outline',
+  selWrap.capArc === null && selWrap.capLine === false && selWrap.capStraightOk === false &&
+  selWrap.nAfterArc === 16 && selWrap.nAfterLine === 16 && selWrap.nAfterStraight === 16,
+  `arc ${selWrap.capArc}, line ${selWrap.capLine}, straighten ${JSON.stringify(selWrap.capStraight)}, ` +
+  `outline ${selWrap.nBefore} -> ${selWrap.nAfterArc}/${selWrap.nAfterLine}/${selWrap.nAfterStraight}`);
+check('the same number of points as a run away from the origin still fits an arc',
+  selWrap.runRun === true && typeof selWrap.runArc === 'number' && selWrap.runKeepsEnds,
+  `hasMultiRun=${selWrap.runRun}, radius ${selWrap.runArc}, vertex 0 untouched=${selWrap.runKeepsEnds}`);
+
+const selRim = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = sp => ({ pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false });
+  const drag = (from, to) => { te._down(ev(from)); te._move(ev(to)); te._up(); };
+  const fixture = multi => {
+    te.setMode('edit');
+    te.setTrace(square(), []);
+    te.setCircles([hole(40, 40, 10)]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+    if (multi) { te.selectedVerts = [{ loop: -1, idx: 0 }]; te.selectedCircles = [0]; }
+  };
+
+  // The rim of a 10 mm hole at (40, 40) sits 5 mm out from its centre.
+  const rimRegion = (fixture(false), te._hitCircle(S(45, 40)).region);
+
+  fixture(false);
+  drag(S(45, 40), S(50, 40));
+  const aloneD = te.circles[0].d, aloneCx = te.circles[0].cx;
+
+  // The same press with the hole in a multi-selection still resizes, and
+  // leaves the co-selected vertex where it was.
+  fixture(true);
+  const multiRegion = te._hitCircle(S(45, 40)).region;
+  drag(S(45, 40), S(50, 40));
+  const multiD = te.circles[0].d, multiCx = te.circles[0].cx;
+  const multiVert = te.outer[0].x;
+
+  // Pressing the interior of the same hole is still the group handle.
+  fixture(true);
+  drag(S(40, 40), S(45, 40));
+  const moveD = te.circles[0].d, moveCx = te.circles[0].cx;
+  const moveVert = te.outer[0].x;
+
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return { rimRegion, multiRegion, aloneD, aloneCx, multiD, multiCx, multiVert,
+    moveD, moveCx, moveVert };
+});
+
+console.log('\nPart A step 4 — the rim of a selected hole still resizes it');
+check('a rim drag resizes the hole whether or not it is in a multi-selection',
+  selRim.rimRegion === 'resize' && selRim.multiRegion === 'resize' &&
+  Math.abs(selRim.aloneD - 20) < 1e-6 && Math.abs(selRim.multiD - 20) < 1e-6 &&
+  Math.abs(selRim.multiCx - 40) < 1e-6 && Math.abs(selRim.multiVert - 20) < 1e-6,
+  `alone d ${selRim.aloneD}, in a selection d ${selRim.multiD} at cx ${selRim.multiCx}, vertex ${selRim.multiVert}`);
+check('pressing the interior of a selected hole still drags the whole group',
+  Math.abs(selRim.moveD - 10) < 1e-6 && Math.abs(selRim.moveCx - 45) < 1e-6 &&
+  Math.abs(selRim.moveVert - 25) < 1e-6,
+  `d ${selRim.moveD}, hole at ${selRim.moveCx}, vertex ${selRim.moveVert}`);
+
+const selStale = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, o) => Object.assign({ pointerId: 1, button: 0,
+    clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: false, metaKey: false }, o || {});
+  const cxs = () => te.circles.map(c => c.cx).join(',');
+  const fixture = () => {
+    te.setMode('edit');
+    te.setTrace(square(), []);
+    te.setCircles([hole(25, 30, 8), hole(40, 30, 8), hole(55, 30, 8)]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+  // A window box round the right hole alone, then a right-click delete of the
+  // left one, which renumbers everything above it.
+  const selectRight = () => {
+    const a = S(48, 23), b = S(62, 37);
+    te._applyMarquee({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
+  };
+
+  fixture();
+  selectRight();
+  const picked = te.selectedCircles.join(',');
+  te._down(ev(S(25, 30), { button: 2 }));   // right-click delete of the left hole
+  te._up();
+  const afterDelete = cxs();
+  const stillSelected = te.selectedCircles.join(',');
+  const count = te._multiCount();
+  const marked = te.circles.map((c, i) => te._circleInMulti(i) ? c.cx : null).join(',');
+  te.deleteSelected();
+  const afterGroupDelete = cxs();
+
+  // Deleting the selected hole itself drops it from the selection.
+  fixture();
+  selectRight();
+  te._down(ev(S(55, 30), { button: 2 }));
+  te._up();
+  const selfCount = te._multiCount();
+  const selfLeft = cxs();
+
+  cv.setPointerCapture = capture;
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return { picked, afterDelete, stillSelected, count, marked, afterGroupDelete,
+    selfCount, selfLeft };
+});
+
+console.log('\nPart A step 4 — deleting a hole renumbers the hole selection');
+check('a hole selection follows its hole when a lower-indexed hole is deleted',
+  selStale.picked === '2' && selStale.afterDelete === '40,55' &&
+  selStale.stillSelected === '1' && selStale.count === 1 && selStale.marked === ',55',
+  `picked ${selStale.picked}, holes ${selStale.afterDelete}, selection ${selStale.stillSelected}, highlighted ${selStale.marked}`);
+check('Delete then removes the hole that is actually selected',
+  selStale.afterGroupDelete === '40', selStale.afterGroupDelete);
+check('deleting the selected hole itself empties the selection',
+  selStale.selfCount === 0 && selStale.selfLeft === '25,40',
+  `${selStale.selfCount} selected, holes ${selStale.selfLeft}`);
+
+const selDraw = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const proto = CanvasRenderingContext2D.prototype;
+  const realArc = proto.arc;
+  let radii = [];
+  proto.arc = function (x, y, r, a0, a1, ccw) { radii.push(r); return realArc.call(this, x, y, r, a0, a1, ccw); };
+  // VERT_R is 4.5, so a selected handle is 6.5 and a plain one 4.5.
+  const shot = () => {
+    radii = [];
+    te.draw();
+    return `${radii.filter(r => Math.abs(r - 6.5) < 1e-6).length}/` +
+           `${radii.filter(r => Math.abs(r - 4.5) < 1e-6).length}`;
+  };
+
+  te.setMode('edit');
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+  te._clearMulti();
+  te.selection = null;
+  te.showPoints = true;
+  te.selectedVerts = [{ loop: -1, idx: 0 }, { loop: -1, idx: 1 }];
+
+  const edit = shot();
+  te.setMode('select');
+  te.setSelectSubMode('box');
+  const selBox = shot();
+  te.setSelectSubMode('lasso');
+  const selLasso = shot();
+  te.setSelectSubMode('brush');
+  const selBrush = shot();
+
+  // Mid-gesture, while a lasso is being drawn, the points are still there to
+  // aim at: the same handles are painted under the lasso overlay.
+  te.setSelectSubMode('lasso');
+  const S = (x, y) => te._mmToScreen({ x, y });
+  te._beginSelectGesture(S(10, 10), 'replace');
+  te._lasso.push({ x: S(70, 10).x, y: S(70, 10).y }, { x: S(70, 70).x, y: S(70, 70).y });
+  const midGesture = shot();
+  te._lasso = null;
+  te.dragging = false;
+
+  // Hiding the handles still hides them, and a mode that does not edit points
+  // (region) still draws none.
+  te.showPoints = false;
+  const hidden = shot();
+  te.showPoints = true;
+  te.setMode('region');
+  const region = shot();
+
+  proto.arc = realArc;
+  te.setMode('edit');
+  te.setSelectSubMode('box');
+  te._clearMulti();
+  te.selection = null;
+  te.setTrace(square(), []);
+  return { edit, selBox, selLasso, selBrush, midGesture, hidden, region };
+});
+
+console.log('\nPart A step 6 — the Select tool draws the handles it selects');
+check('the Select tool paints the vertex handles in every sub-mode',
+  selDraw.selBox === '2/2' && selDraw.selLasso === '2/2' && selDraw.selBrush === '2/2',
+  `box ${selDraw.selBox}, lasso ${selDraw.selLasso}, brush ${selDraw.selBrush} (selected/plain)`);
+check('one selection renders the same in the Select tool as in Edit',
+  selDraw.edit === selDraw.selBox, `edit ${selDraw.edit}, select ${selDraw.selBox}`);
+check('the handles are on screen during the gesture, not only after release',
+  selDraw.midGesture === '2/2', selDraw.midGesture);
+check('hiding the points, and a mode that does not edit points, still draw none',
+  selDraw.hidden === '0/0' && selDraw.region === '0/0',
+  `hidden ${selDraw.hidden}, region ${selDraw.region}`);
+
+const selCtrl = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const holeLoop = () => [{ x: 30, y: 30 }, { x: 45, y: 30 }, { x: 45, y: 45 }, { x: 30, y: 45 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, mod) => ({ pointerId: 1, button: 0, clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: false, shiftKey: false, ctrlKey: !!(mod && mod.ctrl), metaKey: !!(mod && mod.meta) });
+  const key = list => list.map(v => `${v.loop}:${v.idx}`).sort().join(',');
+  const fixture = (mode, holes, circles) => {
+    te.setMode(mode);
+    te.setSelectSubMode('box');
+    te.setTrace(square(), holes || []);
+    te.setCircles(circles || []);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+  const ctrlDrag = (from, to, mod) => { te._down(ev(from, mod)); te._move(ev(to, mod)); te._up(); };
+
+  // The midpoint of the top edge: 20 mm from either corner, so no vertex is
+  // within the 8 px hit radius but the edge is right under the cursor.
+  fixture('select');
+  ctrlDrag(S(40, 20), S(40, 32), { ctrl: true });
+  const edgeCount = te.outer.length, edgeMoved = te.outer.some(p => Math.abs(p.y - 32) < 1e-6);
+
+  // Cmd behaves like Ctrl, and a press with no drag at all must not insert.
+  fixture('select');
+  te._down(ev(S(40, 20), { meta: true }));
+  const metaDragging = te.dragging;
+  te._up();
+  const metaCount = te.outer.length;
+
+  // The documented binding still works: Ctrl on a vertex toggles it.
+  fixture('select');
+  te._down(ev(S(20, 20), { ctrl: true }));
+  te._up();
+  const toggled = key(te.selectedVerts), toggleCount = te.outer.length;
+
+  // Inside a traced hole loop, and on a drilled hole's rim.
+  fixture('select', [holeLoop()]);
+  ctrlDrag(S(37, 37), S(47, 47), { ctrl: true });
+  const holeX = te.holes[0][0].x;
+
+  fixture('select', [], [hole(40, 40, 10)]);
+  ctrlDrag(S(45, 40), S(52, 40), { ctrl: true });
+  const rimD = te.circles[0].d;
+
+  // Edit mode keeps its meaning: the same Ctrl+drag on the edge still inserts.
+  fixture('edit');
+  ctrlDrag(S(40, 20), S(40, 32), { ctrl: true });
+  const editCount = te.outer.length;
+
+  cv.setPointerCapture = capture;
+  fixture('edit');
+  return { edgeCount, edgeMoved, metaDragging, metaCount, toggled, toggleCount,
+    holeX, rimD, editCount };
+});
+
+console.log('\nPart A step 6 — Ctrl/Cmd+click in the Select tool never edits geometry');
+check('a Ctrl+drag that misses every vertex inserts nothing into the outline',
+  selCtrl.edgeCount === 4 && selCtrl.edgeMoved === false,
+  `${selCtrl.edgeCount} points, moved=${selCtrl.edgeMoved}`);
+check('a Cmd press with no drag inserts nothing either',
+  selCtrl.metaCount === 4 && selCtrl.metaDragging === false,
+  `${selCtrl.metaCount} points, dragging=${selCtrl.metaDragging}`);
+check('Ctrl+click on a vertex still toggles it in the Select tool',
+  selCtrl.toggled === '-1:0' && selCtrl.toggleCount === 4,
+  `${selCtrl.toggled || '(none)'}, ${selCtrl.toggleCount} points`);
+check('a missed Ctrl+click neither drags a traced hole nor resizes a drilled one',
+  Math.abs(selCtrl.holeX - 30) < 1e-6 && Math.abs(selCtrl.rimD - 10) < 1e-6,
+  `hole at ${selCtrl.holeX}, bore ⌀${selCtrl.rimD}`);
+check('Edit mode keeps the edge insert that Ctrl+drag has there today',
+  selCtrl.editCount === 5, `${selCtrl.editCount} points`);
+
+const selWhole = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const ring = (n, r) => Array.from({ length: n }, (_, i) => {
+    const a = (i / n) * Math.PI * 2;
+    return { x: 40 + r * Math.cos(a), y: 40 + r * Math.sin(a) };
+  });
+  const fixture = n => {
+    te.setMode('edit');
+    te.setTrace(ring(n, 20), []);
+    te.setCircles([]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+  const selectAll = () => {
+    te.selectedVerts = te.outer.map((_, i) => ({ loop: -1, idx: i }));
+  };
+
+  // A box round the entire trace: every vertex of the one loop, no gap.
+  fixture(16);
+  selectAll();
+  const allRun2 = te.hasMultiRun(2), allRun3 = te.hasMultiRun(3);
+  const span = te._selectionSpan(2);
+  const spanKey = span ? `${span.lo}..${span.hi}` : null;
+  const densified = te.densifySelection();
+  const afterDensify = te.outer.length;
+
+  fixture(16);
+  selectAll();
+  const v0 = { ...te.outer[0] };
+  const reduced = te.simplifySelection(2);
+  const afterReduce = te.outer.length;
+  const keptEnd = Math.abs(te.outer[0].x - v0.x) < 1e-9 && Math.abs(te.outer[0].y - v0.y) < 1e-9;
+
+  // A selection that really does wrap the index origin still reports no run:
+  // it holds vertex 0 and vertex n-1 but has a gap in the middle.
+  fixture(16);
+  te.selectedVerts = [0, 1, 14, 15].map(i => ({ loop: -1, idx: i }));
+  const wrapRun = te.hasMultiRun(2);
+  const wrapDensified = te.densifySelection();
+  const afterWrap = te.outer.length;
+
+  fixture(16);
+  return { allRun2, allRun3, spanKey, densified, afterDensify,
+    reduced, afterReduce, keptEnd, wrapRun, wrapDensified, afterWrap };
+});
+
+console.log('\nPart A step 2 — a selection of the whole loop is still one run');
+check('every vertex of one loop reports a run, so Densify and Reduce stay live',
+  selWhole.allRun2 === true && selWhole.allRun3 === true && selWhole.spanKey === '0..15',
+  `run2=${selWhole.allRun2}, run3=${selWhole.allRun3}, span ${selWhole.spanKey}`);
+check('Densify over a box round the whole outline adds a midpoint per edge',
+  selWhole.densified === true && selWhole.afterDensify === 31,
+  `${selWhole.densified}, 16 -> ${selWhole.afterDensify}`);
+check('Reduce over the whole outline thins it and keeps the end points',
+  selWhole.reduced === true && selWhole.afterReduce < 16 && selWhole.afterReduce >= 2 &&
+  selWhole.keptEnd, `${selWhole.reduced}, 16 -> ${selWhole.afterReduce}, ends kept=${selWhole.keptEnd}`);
+check('a selection with a gap round the index origin is still not a run',
+  selWhole.wrapRun === false && selWhole.wrapDensified === false && selWhole.afterWrap === 16,
+  `run=${selWhole.wrapRun}, densify=${selWhole.wrapDensified}, ${selWhole.afterWrap} points`);
+
+const selRecess = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 5, y: 5 }, { x: 75, y: 5 }, { x: 75, y: 75 }, { x: 5, y: 75 }];
+  const hole = (cx, cy, d, extra) => Object.assign({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } }, extra || {});
+  const fixture = c => {
+    te.setMode('edit');
+    te.setTrace(square(), []);
+    te.setCircles([c]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te._clearMulti();
+    te.selection = null;
+  };
+  const box = (x0, y0, x1, y1) => {
+    const a = S(x0, y0), b = S(x1, y1);
+    te._applyMarquee({ x0: a.x, y0: a.y, x1: b.x, y1: b.y });
+    return te.selectedCircles.join(',');
+  };
+
+  // A counterbored M3-style hole: a 5 mm bore inside a 20 mm counterbore, so
+  // the hole is drawn 20 mm across and _hitCircle picks up that outer ring.
+  fixture(hole(40, 40, 5, { type: 'cb', cbDia: 20 }));
+  const maxDia = te._holeMaxDia(te.circles[0]);
+  const scr = te._circleScreen(te.circles[0]);
+  const outerRatio = scr.rOuter / scr.r;
+  const ringRegion = te._hitCircle(S(50, 40)).region;
+
+  // A window box that stays inside the counterbore and encloses only the bore
+  // does not enclose the hole the user sees, so it must not take it.
+  const boreWindow = box(36, 36, 44, 44);
+  // Left to right round the whole 20 mm ring does enclose it.
+  const wholeWindow = box(28, 28, 52, 52);
+  // A right-to-left band across the visible ring at x = 50, well clear of the
+  // bore, cuts a rim the user can see.
+  const ringCross = box(52, 35, 48, 45);
+  // The same band left to right encloses nothing, so it takes nothing.
+  const ringWindow = box(48, 35, 52, 45);
+  // The bore rim is still a rim: a crossing box over it keeps working.
+  const boreCross = box(44, 36, 36, 44);
+  // A brush stroke painted along the visible ring picks the hole up.
+  const brushRing = te._circlesInGesture('brush',
+    { path: [S(50, 35), S(50, 45)], r: 3 }).join(',');
+  // A stroke in the empty annulus between bore and ring reaches neither rim.
+  const brushGap = te._circlesInGesture('brush',
+    { path: [S(45, 40)], r: 3 }).join(',');
+
+  // A plain through hole with a 2 mm top chamfer is drawn 9 mm across.
+  fixture(hole(40, 40, 5, { edgeTop: { mode: 'chamfer', size: 2 } }));
+  const chamferMax = te._holeMaxDia(te.circles[0]);
+  const chamferWindow = box(36, 36, 44, 44);
+  const chamferWhole = box(33, 33, 47, 47);
+
+  // A plain through hole is unchanged: bore and outer ring are the same circle.
+  fixture(hole(40, 40, 10));
+  const plainSame = te._circleScreen(te.circles[0]).rOuter === te._circleScreen(te.circles[0]).r;
+  const plainWindow = box(33, 33, 47, 47);
+  const plainClip = box(30, 30, 40, 40);
+
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return { maxDia, outerRatio, ringRegion, boreWindow, wholeWindow, ringCross,
+    ringWindow, boreCross, brushRing, brushGap,
+    chamferMax, chamferWindow, chamferWhole, plainSame, plainWindow, plainClip };
+});
+
+console.log('\nPart A step 4 — a gesture measures the hole that is drawn, not the bore alone');
+check('a window box inside the counterbore does not take the hole it clips',
+  selRecess.maxDia === 20 && Math.abs(selRecess.outerRatio - 4) < 1e-9 &&
+  selRecess.ringRegion === 'resize' && selRecess.boreWindow === '' &&
+  selRecess.wholeWindow === '0',
+  `⌀${selRecess.maxDia} drawn, bore window "${selRecess.boreWindow}", whole "${selRecess.wholeWindow}"`);
+check('a crossing box across the drawn recess ring takes the hole',
+  selRecess.ringCross === '0' && selRecess.ringWindow === '' && selRecess.boreCross === '0',
+  `ring crossing "${selRecess.ringCross}", ring window "${selRecess.ringWindow}", bore crossing "${selRecess.boreCross}"`);
+check('the brush takes a hole by its drawn rim, not only by its bore',
+  selRecess.brushRing === '0' && selRecess.brushGap === '',
+  `on the ring "${selRecess.brushRing}", in the annulus "${selRecess.brushGap}"`);
+check('a chamfered through hole is measured over its chamfer',
+  selRecess.chamferMax === 9 && selRecess.chamferWindow === '' && selRecess.chamferWhole === '0',
+  `⌀${selRecess.chamferMax} drawn, bore window "${selRecess.chamferWindow}", whole "${selRecess.chamferWhole}"`);
+check('a plain through hole is unaffected: bore and drawn rim are one circle',
+  selRecess.plainSame && selRecess.plainWindow === '0' && selRecess.plainClip === '',
+  `same=${selRecess.plainSame}, enclosed "${selRecess.plainWindow}", clipped "${selRecess.plainClip}"`);
+
+const selGroupMove = await page.evaluate(() => {
+  const te = window.__app.traceEditor;
+  const S = (x, y) => te._mmToScreen({ x, y });
+  const square = () => [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 60 }, { x: 20, y: 60 }];
+  const hole = (cx, cy, d) => ({ cx, cy, d, type: 'through', side: 'top',
+    csAngle: 90, csDia: 9, cbDia: 9, cbDepth: 3,
+    edgeTop: { mode: 'none', size: 0.5 }, edgeBottom: { mode: 'none', size: 0.5 },
+    screw: { std: 'custom', size: '', fit: 'clearance' } });
+  const cv = te.canvas;
+  const capture = cv.setPointerCapture;
+  cv.setPointerCapture = () => {};
+  const box = cv.getBoundingClientRect();
+  const ev = (sp, mod) => ({ pointerId: 1, button: 0,
+    clientX: box.left + sp.x, clientY: box.top + sp.y,
+    altKey: !!(mod && mod.alt), shiftKey: !!(mod && mod.shift),
+    ctrlKey: false, metaKey: false });
+  const drag = (from, to, mod) => { te._down(ev(from, mod)); te._move(ev(to, mod)); te._up(); };
+  const fixture = sub => {
+    te.setMode('select');
+    te.setSelectSubMode(sub || 'box');
+    te.setTrace(square(), []);
+    te.setCircles([hole(40, 40, 10)]);
+    te.measurements = []; te.arcs = []; te.lines = []; te.constraints = [];
+    te.showPoints = true;
+    te._clearMulti();
+    te.selection = null;
+    te.selectedVerts = [{ loop: -1, idx: 0 }, { loop: -1, idx: 1 }];
+    te.selectedCircles = [0];
+  };
+  const shot = () => ({ v0: te.outer[0].x, v1: te.outer[1].x,
+    cx: te.circles[0].cx, n: te._multiCount() });
+
+  // The panel hint and the README both say a drag on a selected point moves
+  // the group. That has to hold in the Select tool, not only in Edit mode.
+  fixture('box');
+  drag(S(20, 20), S(25, 25));
+  const vertDrag = shot();
+
+  // The interior of a selected hole is a group handle in the Select tool too.
+  fixture('box');
+  drag(S(40, 40), S(45, 45));
+  const holeDrag = shot();
+  te.undo();
+  const undone = shot();
+
+  // Brush is the sub-mode that would otherwise wipe the selection on a press
+  // with no drag at all.
+  fixture('brush');
+  drag(S(20, 20), S(25, 25));
+  const brushDrag = shot();
+
+  // Empty space still starts a gesture, and a box round nothing replaces the
+  // selection with nothing.
+  fixture('box');
+  drag(S(70, 70), S(75, 75));
+  const emptyDrag = shot();
+
+  // A press on a selected point that misses the multi-selection is a gesture:
+  // Shift adds and Alt subtracts, and neither moves the geometry.
+  fixture('box');
+  drag(S(20, 20), S(25, 25), { shift: true });
+  const shiftDrag = shot();
+  fixture('box');
+  drag(S(20, 20), S(25, 25), { alt: true });
+  const altDrag = shot();
+
+  // The hole's rim keeps meaning resize in Edit mode, and in the Select tool
+  // a rim press is a gesture rather than a group move or a resize.
+  fixture('box');
+  drag(S(45, 40), S(50, 40));
+  const rimDrag = { d: te.circles[0].d, cx: te.circles[0].cx };
+
+  cv.setPointerCapture = capture;
+  te.setMode('edit');
+  te.setTrace(square(), []);
+  te.setCircles([]);
+  te._clearMulti();
+  te.selection = null;
+  return { vertDrag, holeDrag, undone, brushDrag, emptyDrag, shiftDrag, altDrag, rimDrag };
+});
+
+console.log('\nPart A step 6 — the Select tool keeps group move');
+check('dragging a selected point in the Select tool moves the group, not the selection',
+  Math.abs(selGroupMove.vertDrag.v0 - 25) < 1e-6 &&
+  Math.abs(selGroupMove.vertDrag.v1 - 65) < 1e-6 &&
+  Math.abs(selGroupMove.vertDrag.cx - 45) < 1e-6 && selGroupMove.vertDrag.n === 3,
+  `v0 ${selGroupMove.vertDrag.v0}, v1 ${selGroupMove.vertDrag.v1}, hole ${selGroupMove.vertDrag.cx}, ${selGroupMove.vertDrag.n} selected`);
+check('dragging a selected hole in the Select tool moves the group, and undo restores it',
+  Math.abs(selGroupMove.holeDrag.cx - 45) < 1e-6 &&
+  Math.abs(selGroupMove.holeDrag.v0 - 25) < 1e-6 && selGroupMove.holeDrag.n === 3 &&
+  Math.abs(selGroupMove.undone.cx - 40) < 1e-6 && Math.abs(selGroupMove.undone.v0 - 20) < 1e-6,
+  `moved to ${selGroupMove.holeDrag.cx}/${selGroupMove.holeDrag.v0}, undone ${selGroupMove.undone.cx}/${selGroupMove.undone.v0}`);
+check('the Brush sub-mode moves the group too instead of painting over it',
+  Math.abs(selGroupMove.brushDrag.v0 - 25) < 1e-6 &&
+  Math.abs(selGroupMove.brushDrag.cx - 45) < 1e-6 && selGroupMove.brushDrag.n === 3,
+  `v0 ${selGroupMove.brushDrag.v0}, hole ${selGroupMove.brushDrag.cx}, ${selGroupMove.brushDrag.n} selected`);
+check('a drag that starts on empty space still selects and moves nothing',
+  Math.abs(selGroupMove.emptyDrag.v0 - 20) < 1e-6 &&
+  Math.abs(selGroupMove.emptyDrag.cx - 40) < 1e-6 && selGroupMove.emptyDrag.n === 0,
+  `v0 ${selGroupMove.emptyDrag.v0}, hole ${selGroupMove.emptyDrag.cx}, ${selGroupMove.emptyDrag.n} selected`);
+check('Shift and Alt on a selected point stay the add and subtract modifiers',
+  Math.abs(selGroupMove.shiftDrag.v0 - 20) < 1e-6 && selGroupMove.shiftDrag.n === 3 &&
+  Math.abs(selGroupMove.altDrag.v0 - 20) < 1e-6 && selGroupMove.altDrag.n === 2,
+  `shift v0 ${selGroupMove.shiftDrag.v0} (${selGroupMove.shiftDrag.n} selected), alt v0 ${selGroupMove.altDrag.v0} (${selGroupMove.altDrag.n} selected)`);
+check('a press on a selected hole rim in the Select tool neither resizes nor moves it',
+  Math.abs(selGroupMove.rimDrag.d - 10) < 1e-6 && Math.abs(selGroupMove.rimDrag.cx - 40) < 1e-6,
+  `⌀${selGroupMove.rimDrag.d} at ${selGroupMove.rimDrag.cx}`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
