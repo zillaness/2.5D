@@ -525,6 +525,26 @@ end of a fillet the way a crossing box does.
 The sub-mode and the brush radius last for the session and go back to Box and
 12 px when the page reloads.
 
+### Moving a label by hand
+
+With labelling on, every placed tool gets a label centred under its own pocket,
+and it tracks that pocket as the tool moves. Auto-placement is only a starting
+point: drag the letters in the layout editor to put a label where you want it.
+A round handle sits below the selected label, and dragging that turns it, with
+Shift snapping the angle to 15 degree steps. Dragging a label also selects the
+tool it names, so the panel on the left shows whose label is moving.
+
+From then on your position wins. It is kept as an offset from the tool, so the
+label rides along when the tool is moved or turned, and it survives a rebuild
+of the layout and a re-nest. The same placement is what the cut template
+engraves and what the printed insert debosses, and a label you drop on another
+tool's pocket is reported in the labels readout rather than quietly moved. Press
+**Auto** beside the label text to hand the label back to auto-placement. With
+**Turn labels with their tool** on, your own turn is added to the tool's
+rotation instead of replacing it.
+
+Free-floating drawer labels such as "TOP DRAWER" drag and turn the same way.
+
 ## Tips for good photos
 
 - Shoot from directly above, with the object roughly centred over the paper.

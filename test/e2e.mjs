@@ -2231,6 +2231,201 @@ check('a press on a selected hole rim in the Select tool neither resizes nor mov
   Math.abs(selGroupMove.rimDrag.d - 10) < 1e-6 && Math.abs(selGroupMove.rimDrag.cx - 40) < 1e-6,
   `⌀${selGroupMove.rimDrag.d} at ${selGroupMove.rimDrag.cx}`);
 
+// ---------- 10c. Labelling step 6: drag and rotate a placed label ----------
+
+const labelPlace = await page.evaluate(async () => {
+  const app = window.__app, st = app.state, ed = app.layoutEditor;
+  const $ = id => document.getElementById(id);
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  // Everything this block borrows goes back at the end.
+  const before = {
+    step: st.step,
+    items: st.layout.items,
+    labels: structuredClone(st.layout.labels),
+    sel: ed.sel,
+  };
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 250));
+  st.layout.items = [
+    { name: '13 mm', outer: rect(50, 16), holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 60, y: 45 },
+    { name: 'pliers', label: 'LINESMAN', outer: rect(40, 30), holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 150, y: 100 },
+  ];
+  Object.assign(st.layout.labels, {
+    enabled: true, height: 6, margin: 2, follow: false, process: 'laser', extra: [],
+  });
+  ed.sel = -1; ed.selLabel = -1; ed.bedSel = false;
+  app.refreshLayoutEditor();
+
+  const cv = ed.canvas, r = cv.getBoundingClientRect();
+  const client = mm => {
+    const s = ed.mmToScreen(mm);
+    return { x: r.left + s.x * (r.width / cv.width), y: r.top + s.y * (r.height / cv.height) };
+  };
+  const cap = cv.setPointerCapture, rel = cv.releasePointerCapture;
+  cv.setPointerCapture = () => {}; cv.releasePointerCapture = () => {};
+  const ev = (type, p, shift) => cv.dispatchEvent(new PointerEvent(type, {
+    clientX: p.x, clientY: p.y, pointerId: 1, shiftKey: !!shift, bubbles: true,
+  }));
+  const drag = (from, to, shift) => {
+    ev('pointerdown', client(from), shift);
+    const kind = ed._drag && ed._drag.kind;
+    ev('pointermove', client(to), shift);
+    ev('pointerup', client(to), shift);
+    return kind;
+  };
+  const at = i => {
+    const L = ed.labels[i];
+    return L ? { x: L.at.x, y: L.at.y, rot: L.rot, auto: L.auto, text: L.text, src: L.src,
+      w: L.bounds.maxX - L.bounds.minX, h: L.bounds.maxY - L.bounds.minY } : null;
+  };
+
+  // Auto-placement is the starting point: centred under each pocket.
+  const auto = { n: ed.labels.length, a: at(0), b: at(1) };
+
+  // Drag the first label up and to the left, well clear of every pocket.
+  const moveKind = drag({ x: auto.a.x, y: auto.a.y }, { x: 40, y: 20 });
+  const moved = { a: at(0), labelAt: structuredClone(st.layout.items[0].labelAt),
+    sel: ed.sel, selLabel: ed.selLabel, panel: !$('laySelPanel').hidden };
+
+  // A rebuild recomputes every pocket from scratch: manual position wins.
+  app.refreshLayoutEditor();
+  const rebuilt = at(0);
+
+  // A re-layout that moves and turns the tool carries the label with it by
+  // the offset the user chose, instead of snapping back under the pocket.
+  st.layout.items[0].x += 30;
+  st.layout.items[0].rot = 25;
+  st.layout.clearance = 1.5;
+  app.refreshLayoutEditor();
+  const relaid = at(0);
+  st.layout.items[0].x -= 30;
+  st.layout.items[0].rot = 0;
+  st.layout.clearance = 0.5;
+  app.refreshLayoutEditor();
+
+  // The round handle below the label turns it. Dragging from straight below
+  // the anchor round to due right of it is a quarter turn anticlockwise.
+  const anchor = at(0);
+  const hnd = { x: anchor.x, y: anchor.y + 6 * 0.75 + 3 };
+  const rotKind = drag(hnd, { x: anchor.x + 12, y: anchor.y });
+  const turned = { a: at(0), labelRot: st.layout.items[0].labelRot };
+
+  // Shift snaps the turn to 15°, as it does in the trace editor.
+  const h2 = ed._labelHandle(ed.labels[0]);
+  drag(h2, { x: anchor.x + 11, y: anchor.y + 4 }, true);
+  const snapped = st.layout.items[0].labelRot;
+
+  // The follow flag still applies: the label rides round with its tool and
+  // the hand-made turn rides on top of that.
+  st.layout.items[0].labelRot = -90;
+  st.layout.labels.follow = true;
+  st.layout.items[0].rot = 40;
+  app.refreshLayoutEditor();
+  const followed = { rot: ed.labels[0].rot, autoRot: ed.labels[0].autoRot, manual: ed.labels[0].manualRot };
+  st.layout.labels.follow = false;
+  st.layout.items[0].rot = 0;
+  app.refreshLayoutEditor();
+
+  // A hand-placed label that lands on another tool's pocket is reported, not
+  // moved: the same geometry the exporters read drives the readout.
+  drag({ x: ed.labels[0].at.x, y: ed.labels[0].at.y }, { x: 150, y: 100 });
+  const clash = { text: $('layLabelInfo').textContent, cls: $('layLabelInfo').className };
+
+  // Auto-place puts it back, and the button is dead until there is something
+  // to put back.
+  app.syncLaySelPanel(0);
+  const resetLive = !$('laySelLabelAuto').disabled;
+  $('laySelLabelAuto').click();
+  const reset = { a: at(0), labelAt: st.layout.items[0].labelAt,
+    labelRot: st.layout.items[0].labelRot, dead: $('laySelLabelAuto').disabled };
+
+  // A free-floating drawer label drags and turns the same way, writing into
+  // the layout's own label array.
+  st.layout.labels.extra = [{ text: 'TOP DRAWER', x: 60, y: 130, height: 8, rot: 0,
+    font: 'bold sans-serif', mirror: false }];
+  ed.sel = -1; ed.selLabel = -1;
+  app.refreshLayoutEditor();
+  const extraIdx = ed.labels.length - 1;
+  const extraSrc = ed.labels[extraIdx].src;
+  drag({ x: 60, y: 130 }, { x: 100, y: 132 });
+  const extraMoved = structuredClone(st.layout.labels.extra[0]);
+  const eh = ed._labelHandle(ed.labels[extraIdx]);
+  drag(eh, { x: st.layout.labels.extra[0].x + 14, y: st.layout.labels.extra[0].y });
+  const extraTurned = st.layout.labels.extra[0].rot;
+
+  // Put the page back: no items, no labels, nothing selected, same step.
+  cv.setPointerCapture = cap; cv.releasePointerCapture = rel;
+  st.layout.items = before.items;
+  st.layout.labels = before.labels;
+  ed.sel = -1; ed.selLabel = -1; ed.bedSel = false;
+  app.syncLaySelPanel(-1);
+  app.refreshLayoutEditor();
+  const cleared = { labels: ed.labels.length, items: st.layout.items.length,
+    enabled: st.layout.labels.enabled, readout: $('layLabelInfo').textContent };
+  app.goStep(before.step);
+  await new Promise(r => setTimeout(r, 150));
+  return { auto, moveKind, moved, rebuilt, relaid, rotKind, turned, snapped, followed,
+    clash, resetLive, reset, extraIdx, extraSrc, extraMoved, extraTurned, cleared,
+    step: st.step, stepBefore: before.step };
+});
+
+console.log('\nLabelling step 6 — drag and rotate a placed label');
+check('auto-placement seeds one label per tool, centred under its pocket',
+  labelPlace.auto.n === 2 && labelPlace.auto.a.auto === true && labelPlace.auto.b.auto === true &&
+  labelPlace.auto.a.text === '13 mm' && labelPlace.auto.b.text === 'LINESMAN' &&
+  near(labelPlace.auto.a.x, 60, 0.2) && near(labelPlace.auto.a.y, 58.5, 0.6) &&
+  near(labelPlace.auto.b.x, 150, 0.2) && near(labelPlace.auto.b.y, 120.5, 0.6),
+  `${labelPlace.auto.n} labels, a ${JSON.stringify(labelPlace.auto.a)}`);
+check('dragging a label moves it, selects its tool, and stores a manual position',
+  labelPlace.moveKind === 'labelMove' && near(labelPlace.moved.a.x, 40, 1.5) &&
+  near(labelPlace.moved.a.y, 20, 1.5) && labelPlace.moved.a.auto === false &&
+  near(labelPlace.moved.labelAt.dx, -20, 1.5) && near(labelPlace.moved.labelAt.dy, -25, 1.5) &&
+  labelPlace.moved.sel === 0 && labelPlace.moved.selLabel === 0 && labelPlace.moved.panel,
+  `kind ${labelPlace.moveKind}, at ${JSON.stringify(labelPlace.moved.a)}, ` +
+  `offset ${JSON.stringify(labelPlace.moved.labelAt)}, tool ${labelPlace.moved.sel}`);
+check('the moved label survives a rebuild of the layout',
+  near(labelPlace.rebuilt.x, labelPlace.moved.a.x, 1e-6) &&
+  near(labelPlace.rebuilt.y, labelPlace.moved.a.y, 1e-6) && labelPlace.rebuilt.auto === false,
+  `${JSON.stringify(labelPlace.rebuilt)} vs ${JSON.stringify(labelPlace.moved.a)}`);
+check('manual position survives a re-layout, riding with the tool it names',
+  near(labelPlace.relaid.x, labelPlace.moved.a.x + 30, 1e-6) &&
+  near(labelPlace.relaid.y, labelPlace.moved.a.y, 1e-6),
+  `${JSON.stringify(labelPlace.relaid)} from ${JSON.stringify(labelPlace.moved.a)}`);
+check('the round handle turns a placed label a quarter turn, glyphs and all',
+  labelPlace.rotKind === 'labelRotate' && near(labelPlace.turned.labelRot, -90, 2) &&
+  near(labelPlace.turned.a.rot, -90, 2) &&
+  labelPlace.auto.a.w > labelPlace.auto.a.h && labelPlace.turned.a.h > labelPlace.turned.a.w,
+  `kind ${labelPlace.rotKind}, ${labelPlace.turned.labelRot}°, ` +
+  `box ${labelPlace.turned.a.w.toFixed(1)} × ${labelPlace.turned.a.h.toFixed(1)} mm`);
+check('Shift snaps a label rotation to 15° steps',
+  Number.isFinite(labelPlace.snapped) && labelPlace.snapped % 15 === 0 &&
+  labelPlace.snapped !== labelPlace.turned.labelRot,
+  `${labelPlace.snapped}°`);
+check('with follow on, the hand-made turn rides on top of the tool’s rotation',
+  labelPlace.followed.autoRot === 40 && labelPlace.followed.manual === -90 &&
+  near(labelPlace.followed.rot, -50, 1e-6),
+  JSON.stringify(labelPlace.followed));
+check('a hand-placed label over another pocket is reported, not moved back',
+  labelPlace.clash.cls === 'warn' && /overlapping a pocket/.test(labelPlace.clash.text),
+  `"${labelPlace.clash.text}"`);
+check('Auto-place drops the manual position and turn and goes live only when needed',
+  labelPlace.resetLive && labelPlace.reset.dead && labelPlace.reset.labelAt === undefined &&
+  labelPlace.reset.labelRot === undefined && labelPlace.reset.a.auto === true &&
+  near(labelPlace.reset.a.x, 60, 0.2) && near(labelPlace.reset.a.y, 58.5, 0.6) &&
+  labelPlace.reset.a.rot === 0,
+  `live ${labelPlace.resetLive}, back to ${JSON.stringify(labelPlace.reset.a)}`);
+check('a free-floating drawer label drags and turns into the layout’s own array',
+  labelPlace.extraSrc === 'layout' && near(labelPlace.extraMoved.x, 100, 1.5) &&
+  near(labelPlace.extraMoved.y, 132, 1.5) && near(labelPlace.extraTurned, -90, 2),
+  `moved to ${labelPlace.extraMoved.x.toFixed(1)}, ${labelPlace.extraMoved.y.toFixed(1)}, ` +
+  `turned ${labelPlace.extraTurned}°`);
+check('the block leaves an unlabelled, empty layout behind',
+  labelPlace.cleared.labels === 0 && labelPlace.cleared.items === 0 &&
+  labelPlace.cleared.enabled === false && labelPlace.cleared.readout === '' &&
+  labelPlace.step === labelPlace.stepBefore,
+  `${labelPlace.cleared.labels} labels, ${labelPlace.cleared.items} items, ` +
+  `step ${labelPlace.step} (was ${labelPlace.stepBefore})`);
+
 // ---------- 11. Group C: rotate 90°, coin scale math, outline library ----------
 
 const groupC = await page.evaluate(async () => {
