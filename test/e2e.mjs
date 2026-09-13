@@ -9192,6 +9192,174 @@ check('the loose-photo block leaves the library, the folder and Step 1 as it fou
   `step ${queueNine.restored.step}, library restored ${queueNine.restored.lib}, ` +
   `queue ${queueNine.restored.queue}, handle ${queueNine.restored.handle}`);
 
+// ---------- a photo that will not decode never becomes the photo on screen ----------
+//
+// One corrupt file in a folder of phone shots. The walk advances onto it, the
+// decode fails, and the photo before it is still on screen. Left alone, the
+// user traces what they see and Next files that outline under the corrupt
+// photo's name, writes it as its sibling project and marks it traced, which the
+// resume rule then honours for good. The failed photo is retired instead, the
+// way a HEIC is, and the walk lets go of it.
+const queueTen = await page.evaluate(async () => {
+  const app = window.__app;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    ref: app.queue.snapshot(),
+  };
+  localStorage.setItem('2p5d.library.v1', '[]');
+
+  const writes = [];
+  const fileHandle = (name, file) => ({ kind: 'file', name, getFile: async () => file });
+  const bench = {
+    kind: 'directory', name: 'bench', children: [],
+    values: async function* () { for (const c of bench.children) yield c; },
+    queryPermission: async () => 'granted',
+    requestPermission: async () => 'granted',
+    getDirectoryHandle: async () => { throw new Error('no such folder'); },
+    getFileHandle: async n => ({
+      createWritable: async () => ({
+        write: async text => { writes.push({ dir: 'bench', name: n, text: String(text) }); },
+        close: async () => {},
+      }),
+    }),
+  };
+  // A JPEG header and then nothing usable: the canvas will not open it, and it
+  // is not HEIC, so nothing at ingest marks it out.
+  const broken = new File(
+    [new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4, 5, 6, 7, 8])],
+    'broken.jpg', { type: 'image/jpeg' });
+  bench.children = [
+    fileHandle('awl.jpg', await photoFile('awl.jpg', 320, 240)),
+    fileHandle('broken.jpg', broken),
+  ];
+
+  app.queue.clear();
+  await app.queue.ingestFolder(bench, 'bench');
+  const ingested = {
+    names: app.state.queue.map(q => q.name),
+    statuses: app.state.queue.map(q => q.status),
+  };
+
+  app.queue.load(app.state.queue[0]);
+  await wait(700);
+  app.traceEditor.setTrace(rect(10, 10, 50, 25), []);
+  await app.queue.walk.next();
+  await wait(900);
+  const failed = {
+    // The awl is still the photo on screen, and Step 1 says so again.
+    wide: app.state.image && app.state.image.naturalWidth,
+    fileName: app.state.fileName,
+    label: document.getElementById('fileLabelText').textContent,
+    current: app.state.queueCurrentId,
+    nameField: document.getElementById('queueSaveName').value,
+    nextDisabled: document.getElementById('queueNextBtn').disabled,
+    status: app.state.queue[1].status,
+    picked: app.state.queue[1].picked,
+    badge: document.querySelectorAll('#queueList .queue-item')[1]
+      .querySelector('.queue-badge').textContent,
+    writes: writes.map(w => `${w.dir}/${w.name}`),
+  };
+
+  // Trace what is on screen and press Next: nothing is saved under the failed
+  // photo's name, nothing is written beside it, and it is not marked traced.
+  app.traceEditor.setTrace(rect(6, 6, 40, 18), []);
+  const ret = await app.queue.walk.next();
+  await wait(400);
+  const guarded = {
+    ret,
+    writes: writes.map(w => `${w.dir}/${w.name}`),
+    libNames: JSON.parse(localStorage.getItem('2p5d.library.v1')).map(o => o.name),
+    status: app.state.queue[1].status,
+    // The walk has nothing ticked and pending left to offer.
+    next: app.queue.next(null),
+    // Clicking its thumbnail says why rather than loading it.
+    reload: app.queue.load(app.state.queue[1]),
+  };
+
+  // Put the library, the folder, the queue and Step 1 back.
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.palette.refresh();
+  app.queue.applyRef(before.ref);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles);
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await wait(300);
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    lib: localStorage.getItem('2p5d.library.v1') === before.lib,
+    queue: app.state.queue.length,
+    handle: app.folderBackend.handle,
+    palette: app.palette.folder.entries.length,
+  };
+
+  return { ingested, failed, guarded, restored };
+});
+
+check('a photo that will not decode is retired and the walk lets go of it',
+  JSON.stringify(queueTen.ingested.names) === JSON.stringify(['awl', 'broken']) &&
+  JSON.stringify(queueTen.ingested.statuses) === JSON.stringify(['pending', 'pending']) &&
+  queueTen.failed.wide === 320 && queueTen.failed.fileName === 'awl' &&
+  queueTen.failed.label === 'awl.jpg' && queueTen.failed.current === null &&
+  queueTen.failed.nameField === '' && queueTen.failed.nextDisabled &&
+  queueTen.failed.status === 'unsupported' && queueTen.failed.picked === false &&
+  queueTen.failed.badge === 'unsupported' &&
+  JSON.stringify(queueTen.failed.writes) === JSON.stringify(['bench/awl.json']),
+  `the photo on screen is still ${queueTen.failed.wide} px “${queueTen.failed.fileName}” ` +
+  `(label “${queueTen.failed.label}”), broken is ${queueTen.failed.status}, ` +
+  `current ${queueTen.failed.current}, Next disabled ${queueTen.failed.nextDisabled}`);
+
+check('and the outline still on screen is never saved under the failed photo',
+  queueTen.guarded.ret === null &&
+  JSON.stringify(queueTen.guarded.writes) === JSON.stringify(['bench/awl.json']) &&
+  JSON.stringify(queueTen.guarded.libNames) === JSON.stringify(['awl']) &&
+  queueTen.guarded.status === 'unsupported' && queueTen.guarded.next === null &&
+  queueTen.guarded.reload === false,
+  `Next returned ${queueTen.guarded.ret}, folder writes ${JSON.stringify(queueTen.guarded.writes)}, ` +
+  `library ${JSON.stringify(queueTen.guarded.libNames)}, broken ${queueTen.guarded.status}`);
+
+check('the undecodable-photo block leaves the library, the folder and Step 1 as it found them',
+  queueTen.restored.step === 3 && queueTen.restored.image && queueTen.restored.lib &&
+  queueTen.restored.queue === 0 && queueTen.restored.handle === null &&
+  queueTen.restored.palette === 0,
+  `step ${queueTen.restored.step}, library restored ${queueTen.restored.lib}, ` +
+  `queue ${queueTen.restored.queue}, handle ${queueTen.restored.handle}`);
+
 // ---------- snap to grid in the layout editor (Part B) ----------
 // Snapping is a property of the gesture: a drag, an arrow-key nudge and a
 // rotation-handle drag land on the grid, and nothing already placed moves when

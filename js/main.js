@@ -562,6 +562,12 @@ const QUEUE_HEIC_MSG =
   'HEIC photos cannot be opened by the browser — export them as JPEG first ' +
   '(on iPhone: Settings › Camera › Formats › Most Compatible).';
 
+// A photo that is not HEIC and still will not decode: a half-copied file, a
+// truncated download, a camera format this browser has no decoder for.
+const QUEUE_BAD_PHOTO_MSG =
+  'could not be opened — the file may be damaged or in a format this browser ' +
+  'cannot decode. Open it in another app and save it again as JPEG or PNG.';
+
 const QUEUE_BADGES = {
   pending: { text: 'pending', color: 'var(--muted)' },
   traced: { text: 'traced', color: 'var(--good)' },
@@ -729,15 +735,44 @@ function queueClearTrace() {
 // the corner auto-detect, the step buttons and the file label all follow.
 function queueLoad(item) {
   if (!item) return false;
-  if (item.status === 'unsupported') { toast(QUEUE_HEIC_MSG); return false; }
+  if (item.status === 'unsupported') { toast(item.note || QUEUE_HEIC_MSG); return false; }
   state.queueCurrentId = item.id;
   // The library name this photo will be saved under, editable before Next.
   $('queueSaveName').value = item.libName || item.name;
   queueClearTrace();
-  loadFile(item.file);
+  // What Step 1 says now, so a decode that fails can put it back: the name and
+  // the label move to this photo before the decode is even attempted.
+  const was = { fileName: state.fileName, label: $('fileLabelText').textContent };
+  loadFile(item.file, () => queueLoadFailed(item, was));
   if (state.step !== 1) goStep(1);
   renderQueue();
   return true;
+}
+
+// A photo the browser cannot decode never reaches the screen: state.image is
+// still the photo before it, while the file name, the label, the save name and
+// the walk have all moved on to this one. Tracing what is on screen and
+// pressing Next would then file the previous photo's outline under this
+// photo's name, write it as this photo's sibling project, and mark this photo
+// traced, which the resume rule would honour on every later reopen. So the
+// photo that would not open is retired the way a HEIC is, the walk lets go of
+// it, and Step 1 goes back to saying what it is actually showing.
+function queueLoadFailed(item, was) {
+  if (!item) return;
+  item.status = 'unsupported';
+  item.picked = false;
+  item.note = `“${item.name}” ${QUEUE_BAD_PHOTO_MSG}`;
+  if (state.queueCurrentId === item.id) {
+    state.queueCurrentId = null;
+    $('queueSaveName').value = '';
+    if (was) {
+      state.fileName = was.fileName;
+      $('fileLabelText').textContent = was.label;
+    }
+  }
+  renderQueue();
+  queueSyncWalk();
+  toast(item.note, 6000);
 }
 
 // The queue lets go of the photo on screen. "Choose photo…" and a single
