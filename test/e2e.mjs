@@ -4584,6 +4584,134 @@ check('bounded restarts shuffle the equal-area group and still reproduce',
   nestFix.eq.passes > 1 && nestFix.eq.n === 4 && nestFix.eq.same,
   `${nestFix.eq.passes} distinct passes, identical ${nestFix.eq.same}`);
 
+// Step 2 of the same PRD: the conflict-freeness property. Success criterion 1
+// says a nested result must come back `collisions.size === 0 &&
+// escaped.size === 0` from the SAME layoutConflicts() the editor validates
+// with, not "usually", and that this is the test that gates the feature. So
+// rather than a handful of hand-drawn cases, generate item sets and settings
+// from a seeded generator, nest each one, apply the result the way the editor
+// would, and hold every single one to that predicate. The generator is seeded,
+// so a failure here is a case anybody can reproduce exactly.
+const nestProp = await page.evaluate(async () => {
+  const { nestLayout, applyNest, layoutPockets, layoutConflicts, roundedRect } =
+    await import('/js/holders.js');
+  const rnd = seed => {
+    let a = seed >>> 0 || 1;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const pick = (R, arr) => arr[Math.floor(R() * arr.length)];
+
+  // One generated drawer: 3 to 10 tools drawn from four outline families (a
+  // plain rectangle, an L with a real concavity, a lopsided convex blob with a
+  // hole in it, and a rectangle with a finger notch), a quarter of them with a
+  // rotation lock, sometimes one pinned, and a settings bag that ranges over
+  // every web, rotation step and notch policy the profiles can produce.
+  // `tight` halves the drawer so the honest-failure path gets exercised too.
+  function genSet(seed, tight) {
+    const R = rnd(seed);
+    const n = 3 + Math.floor(R() * 8);
+    const items = [];
+    for (let k = 0; k < n; k++) {
+      const w = 16 + Math.round(R() * 54), h = 12 + Math.round(R() * 33);
+      const kind = Math.floor(R() * 4);
+      let outer, notch = null, holes = [];
+      if (kind === 0) outer = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+      else if (kind === 1) outer = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h * 0.4 },
+        { x: w * 0.35, y: h * 0.4 }, { x: w * 0.35, y: h }, { x: 0, y: h }];
+      else if (kind === 2) {
+        outer = [{ x: 0, y: h / 2 }, { x: w * 0.35, y: 0 }, { x: w, y: h * 0.2 },
+          { x: w * 0.85, y: h }, { x: w * 0.2, y: h * 0.95 }];
+        holes = [[{ x: w * 0.4, y: h * 0.4 }, { x: w * 0.6, y: h * 0.4 },
+          { x: w * 0.6, y: h * 0.6 }, { x: w * 0.4, y: h * 0.6 }]];
+      } else {
+        outer = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+        notch = { dia: 10, x: w / 2, y: 0 };
+      }
+      const it = { name: `s${seed}t${k}`, outer, holes, circles: [],
+        x: 6 + k * 4, y: 6 + k * 3, rot: 0, depth: null, thickness: 6 };
+      if (notch) it.notch = notch;
+      if (R() < 0.25) it.rotLock = pick(R, ['current', 0, 90]);
+      items.push(it);
+    }
+    const opts = {
+      minWeb: pick(R, [2, 4, 6, 8]), rotationStep: pick(R, [15, 45, 90]),
+      rotationFree: R() < 0.75, border: pick(R, [4, 5, 8]),
+      clearance: pick(R, [0.3, 0.5, 1]), restarts: pick(R, [1, 5, 20]),
+      notchPolicy: pick(R, ['warn', 'require']), notchClear: 8,
+    };
+    let cw = 200 + Math.round(R() * 140), ch = 140 + Math.round(R() * 90);
+    if (tight) { cw = Math.round(cw * 0.5); ch = Math.round(ch * 0.5); }
+    else if (R() < 0.5) items[0] = { ...items[0], pin: true, x: cw / 2, y: ch / 2, rot: 90 };
+    return { items, opts, outer: roundedRect(cw / 2, ch / 2, cw, ch, 4), cw, ch };
+  }
+
+  const SETS = 16;
+  const rows = [];
+  for (let s = 1; s <= SETS; s++) {
+    const g = genSet(s * 1009, s % 4 === 0);
+    const res = nestLayout(g.outer, g.items, g.opts);
+    // Apply it exactly as the editor would, then re-derive the pockets from
+    // the moved items rather than trusting anything the nester kept.
+    const moved = applyNest(g.items, res);
+    const pockets = layoutPockets(res.placements.map(p => moved[p.i]), g.opts.clearance);
+    const cf = layoutConflicts(g.outer, pockets, g.opts.border);
+    const again = nestLayout(g.outer, g.items, g.opts);
+    const pi = g.items.findIndex(it => it.pin);
+    const pp = pi >= 0 ? res.placements.find(p => p.i === pi) : null;
+    rows.push({
+      s, n: g.items.length, placed: res.placements.length, left: res.unplaced.length,
+      collisions: cf.collisions.size, escaped: cf.escaped.size,
+      accounted: res.placements.length + res.unplaced.length === g.items.length &&
+        new Set(res.placements.map(p => p.i).concat(res.unplaced.map(u => u.i))).size === g.items.length,
+      finite: res.placements.every(p =>
+        Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.rot)),
+      named: res.unplaced.every(u => !!u.name && (u.reason === 'tooLarge' || u.reason === 'noRoom')),
+      repeats: JSON.stringify(res.placements) === JSON.stringify(again.placements),
+      pinOk: pi < 0 ? true : !!pp && pp.x === g.cw / 2 && pp.y === g.ch / 2 && pp.rot === 90,
+      pins: pi >= 0 ? 1 : 0,
+    });
+  }
+  const bad = k => rows.filter(r => (typeof r[k] === 'boolean' ? !r[k] : r[k] > 0)).map(r => r.s);
+  return {
+    sets: rows.length,
+    items: rows.reduce((a, r) => a + r.n, 0),
+    placed: rows.reduce((a, r) => a + r.placed, 0),
+    left: rows.reduce((a, r) => a + r.left, 0),
+    crowded: rows.filter(r => r.left > 0).length,
+    pinnedSets: rows.reduce((a, r) => a + r.pins, 0),
+    badCollisions: bad('collisions'), badEscaped: bad('escaped'),
+    badAccounted: bad('accounted'), badFinite: bad('finite'), badNamed: bad('named'),
+    badRepeats: bad('repeats'), badPins: bad('pinOk'),
+  };
+});
+
+check(`no nested layout collides, across ${nestProp.sets} generated drawers`,
+  nestProp.badCollisions.length === 0,
+  nestProp.badCollisions.length ? `sets ${nestProp.badCollisions.join(',')}` : `${nestProp.placed} pockets`);
+check('no nested pocket crosses the border inset, in any generated drawer',
+  nestProp.badEscaped.length === 0,
+  nestProp.badEscaped.length ? `sets ${nestProp.badEscaped.join(',')}` : `${nestProp.placed} pockets`);
+check('every generated item comes back exactly once, placed or named as unplaced',
+  nestProp.badAccounted.length === 0 && nestProp.badFinite.length === 0 &&
+  nestProp.badNamed.length === 0 &&
+  nestProp.placed + nestProp.left === nestProp.items,
+  `${nestProp.placed} placed + ${nestProp.left} unplaced of ${nestProp.items}`);
+check('the property is not vacuous: drawers that overflow are in the sample',
+  nestProp.placed > 60 && nestProp.crowded >= 3 && nestProp.left > 0,
+  `${nestProp.crowded} of ${nestProp.sets} drawers overflowed, ${nestProp.left} tools left over`);
+check('generated pins all came back on their exact millimetre',
+  nestProp.badPins.length === 0 && nestProp.pinnedSets >= 3,
+  nestProp.badPins.length ? `sets ${nestProp.badPins.join(',')}` : `${nestProp.pinnedSets} pinned drawers`);
+check('every generated drawer nests to the identical answer on a second run',
+  nestProp.badRepeats.length === 0,
+  nestProp.badRepeats.length ? `sets ${nestProp.badRepeats.join(',')}` : `${nestProp.sets} drawers`);
+
 // ---------- Gridfinity bin (holders.js) ----------
 
 const grid = await page.evaluate(async () => {
