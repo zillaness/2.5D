@@ -4983,6 +4983,35 @@ const nestRef = await page.evaluate(async () => {
   const bulk = nestLayout(bulkC, many, opts);
   const bulkMs = performance.now() - t0;
 
+  // That fixture alone is not criterion 6, and it took a while to notice why.
+  // It is twelve distinct shapes repeated out to thirty, so every equal-area
+  // group holds nothing but interchangeable copies, every seeded shuffle
+  // re-serialises to the same shapeKey order, and the restart loop collapses
+  // to a SINGLE pass however many restarts are configured. The number it
+  // prints is therefore one twentieth of what the module's own defaults can
+  // cost on thirty items, and a regression in the restart path cannot move it
+  // at all. So here is the same thirty-item size built so the restarts really
+  // run: each tool is paired with a rotation-locked twin, which shares its
+  // pocket area (rotation does not change area, so they land in one group) but
+  // not its allowed angles, so the shuffles survive de-duplication. Unbounded,
+  // this ran for tens of seconds; testBudget is what makes the ceiling a
+  // property of the module rather than of the input.
+  const twins = [];
+  for (let k = 0; k < 30; k++) {
+    const src = { ...items[Math.floor(k / 2) % 12], name: `twin ${k}`,
+      x: 20 + k * 3, y: 20 + k * 2 };
+    twins.push(k % 2 ? { ...src, rotLock: 'current', rot: 90 } : src);
+  }
+  const t1 = performance.now();
+  const twin = nestLayout(bulkC, twins, opts);
+  const twinMs = performance.now() - t1;
+  const twinMoved = applyNest(twins, twin);
+  const twinCf = layoutConflicts(bulkC,
+    layoutPockets(twin.placements.map(p => twinMoved[p.i]), opts.clearance), opts.border);
+  // One pass of the same set, so the work the default 20 restarts would have
+  // spent without a budget is a measured number rather than an assertion.
+  const one = nestLayout(bulkC, twins, { ...opts, restarts: 1 });
+
   return {
     hand: { clash: handCf.collisions.size + handCf.escaped.size,
       w: hb.maxX - hb.minX, h: hb.maxY - hb.minY,
@@ -4993,7 +5022,13 @@ const nestRef = await page.evaluate(async () => {
       area: (nb.maxX - nb.minX) * (nb.maxY - nb.minY),
       names: res.unplaced.map(u => u.name).join(','),
       rots: Array.from(new Set(res.placements.map(p => p.rot))).sort((a, b) => a - b).join(',') },
-    bulk: { placed: bulk.placements.length, ms: Math.round(bulkMs) },
+    bulk: { placed: bulk.placements.length, ms: Math.round(bulkMs),
+      passes: bulk.stats.passes },
+    twin: { placed: twin.placements.length, left: twin.unplaced.length,
+      ms: Math.round(twinMs), passes: twin.stats.passes, tests: twin.stats.tests,
+      budget: twin.stats.testBudget, budgetHit: twin.stats.budgetHit,
+      onePass: one.stats.tests, restarts: 20,
+      clash: twinCf.collisions.size + twinCf.escaped.size },
   };
 });
 
@@ -5010,6 +5045,23 @@ check('and uses no more bounding area than the careful hand arrangement',
 check('30 tools nest without the run running away (criterion 6, generous ceiling)',
   nestRef.bulk.placed === 30 && nestRef.bulk.ms < 8000,
   `${nestRef.bulk.placed} placed in ${nestRef.bulk.ms} ms`);
+check('that 30-item fixture measures ONE pass, so criterion 6 needs a second one',
+  nestRef.bulk.passes === 1 && nestRef.twin.passes > 1,
+  `repeated shapes ran ${nestRef.bulk.passes} pass, live restarts ran ${nestRef.twin.passes}`);
+check('30 tools whose restarts really fire still nest completely and conflict-free',
+  nestRef.twin.placed === 30 && nestRef.twin.left === 0 && nestRef.twin.clash === 0,
+  `${nestRef.twin.placed} placed, ${nestRef.twin.left} left, ${nestRef.twin.clash} conflicts`);
+// The work counter is a pure count of candidate tests, so unlike the
+// millisecond figures it means the same thing on every machine. It is the half
+// of criterion 6 this suite can actually hold to a number.
+check('the work budget bounds the restart loop instead of letting 20 passes run away',
+  nestRef.twin.budgetHit && nestRef.twin.passes < nestRef.twin.restarts &&
+  nestRef.twin.tests < 2 * nestRef.twin.budget &&
+  nestRef.twin.onePass * nestRef.twin.restarts > 4 * nestRef.twin.tests,
+  `${nestRef.twin.tests} tests over ${nestRef.twin.passes} passes against a ${nestRef.twin.budget} budget, vs ~${nestRef.twin.onePass * nestRef.twin.restarts} for the ${nestRef.twin.restarts} unbounded`);
+check('30 tools with live restarts nest inside the ceiling too (criterion 6)',
+  nestRef.twin.ms < 8000,
+  `${nestRef.twin.ms} ms for ${nestRef.twin.passes} passes`);
 
 // ---------- Gridfinity bin (holders.js) ----------
 

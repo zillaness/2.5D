@@ -477,6 +477,18 @@ export function layoutConflicts(containerOuter, pockets, border) {
 //
 // Determinism is a hard requirement: the restart shuffles run off a seeded
 // generator, and nothing in here reads the clock.
+//
+// Which is also why the runtime ceiling is a WORK budget and not a time
+// budget. The restarts are what dominate a large nest, and the cost of one
+// pass grows with the item count faster than linearly, so "20 restarts" is a
+// promise about iterations and not about seconds: a 30-item drawer whose
+// equal-area groups hold shapes the packer can tell apart runs every one of
+// the 20 and spends tens of seconds doing it. testBudget caps the total number
+// of candidate validity tests the restarts may spend instead, measured in the
+// same unit stats.tests reports. The first pass always runs to the end, so a
+// budget can only cost density, never a placement; a further restart only
+// starts while there is budget left. A clock would do the same job and break
+// determinism, which is not a trade this module is allowed to make.
 
 export const NEST_DEFAULTS = {
   clearance: 0.5,      // pocket offset, same units/meaning as layoutPockets
@@ -487,6 +499,7 @@ export const NEST_DEFAULTS = {
   notchClear: 10,      // radius of clear foam a finger notch wants, mm
   notchPolicy: 'warn', // 'warn' records it in stats; 'require' rejects
   restarts: 20,        // bounded seeded restarts over the equal-area groups
+  testBudget: 40000,   // work ceiling for those restarts, in candidate tests
   seed: 1,             // fixed: same input, same result, every time
   settleRounds: 6,     // slide up / slide left alternations
   settleTol: 0.25,     // mm, the binary-search floor for a slide
@@ -584,6 +597,7 @@ export function nestLayout(containerOuter, items, opts = {}) {
   const nameOf = i => String((list[i] && (list[i].name || list[i].label)) || `item ${i + 1}`);
   const statsBase = {
     placed: 0, unplaced: list.length, passes: 0, tests: 0,
+    budgetHit: false, testBudget: o.testBudget,
     bbox: null, area: 0,
     clearance: o.clearance, border: o.border, minWeb: o.minWeb,
     rotationStep: o.rotationStep, rotationFree: !!o.rotationFree,
@@ -793,9 +807,14 @@ export function nestLayout(containerOuter, items, opts = {}) {
   }
 
   let best = null;
+  let budgetHit = false;
   const seen = new Set();
   const passes = Math.min(200, Math.max(1, Math.round(Number(o.restarts) || 1)));
+  const budget = Math.max(0, Number(o.testBudget) || 0);
   for (let r = 0; r < passes; r++) {
+    // The work ceiling, checked before a restart is started rather than during
+    // one, so a pass is never left half finished and pass 0 always runs.
+    if (r > 0 && budget > 0 && tests >= budget) { budgetHit = true; break; }
     const order = orderFor(r);
     const key = order.map(shapeKey).join('>');
     if (seen.has(key)) continue;
@@ -854,6 +873,7 @@ export function nestLayout(containerOuter, items, opts = {}) {
       placed: placements.length,
       unplaced: unplaced.length,
       passes: seen.size,
+      budgetHit,
       tests,
       bbox: best.bbox,
       area: best.area,
