@@ -8157,6 +8157,266 @@ check('the organize block hands the layout, the library and the palette back',
   `ticks ${queueFour.restored.picks}, palette ${queueFour.restored.palette}`);
 
 
+// The five tests Part A's Scope asks for, walked end to end in one page:
+// ingest, Next, Skip, the resume rule, and the reference carry-over. The blocks
+// above test the parts as they were built; this one is the acceptance pass over
+// the whole flow, on a library that starts empty so every name it produces is
+// the photo's own.
+const queueFive = await page.evaluate(async () => {
+  const app = window.__app;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    orient: app.state.paper.orientation,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    ref: app.queue.snapshot(),
+  };
+
+  // An empty library, so the name Next saves under is the photo's file name
+  // and nothing else: no collision, no suffix.
+  localStorage.setItem('2p5d.library.v1', '[]');
+  const libNames = () => JSON.parse(localStorage.getItem('2p5d.library.v1')).map(o => o.name);
+
+  // The resume rule goes first, because the writable folder it opens is also
+  // where the walk below writes its projects. saw.json is a 2.5D project beside saw.jpg,
+  // so that photo is already traced and the walk must pass over it.
+  const sawJson = JSON.stringify({
+    app: '2.5D', version: 1, fileName: 'saw',
+    regions: [{ thickness: 6 }],
+    trace: { outer: rect(15, 15, 80, 30), holes: [], circles: [] },
+  });
+  const kitFiles = {
+    'saw.jpg': await photoFile('saw.jpg', 420, 320),
+    'saw.json': new File([sawJson], 'saw.json', { type: 'application/json' }),
+  };
+  const writes = [];
+  const dir = {
+    kind: 'directory', name: 'kit',
+    values: async function* () {
+      for (const n of ['saw.jpg', 'saw.json']) {
+        yield { kind: 'file', name: n, getFile: async () => kitFiles[n] };
+      }
+    },
+    queryPermission: async () => 'granted',
+    requestPermission: async () => 'granted',
+    getFileHandle: async n => ({
+      createWritable: async () => ({
+        write: async text => { writes.push({ name: n, text: String(text) }); },
+        close: async () => {},
+      }),
+    }),
+  };
+
+  app.queue.clear();
+  await app.queue.ingestFolder(dir, 'kit');
+  const resumed = {
+    paths: app.state.queue.map(q => q.path),
+    statuses: app.state.queue.map(q => q.status),
+    picked: app.state.queue.map(q => q.picked),
+    palette: app.palette.folder.entries.map(e => e.name),
+    // Nothing to trace, so the walk has no next photo to offer.
+    next: app.queue.next(null),
+  };
+
+  // One action, three photos, three pending items named from the files. A plain multi-select hands over File objects with no paths at all.
+  app.queue.clear();
+  const three = [
+    await photoFile('ratchet.jpg', 600, 450),
+    await photoFile('scriber.jpg', 460, 600),
+    await photoFile('tin snips.jpg', 520, 400),
+  ];
+  const added = await app.queue.add(three);
+  const ingested = {
+    added: added.length,
+    n: app.state.queue.length,
+    names: app.state.queue.map(q => q.name),
+    statuses: app.state.queue.map(q => q.status),
+    ticked: app.state.queue.filter(q => q.picked).length,
+    tiles: document.querySelectorAll('#queueList .queue-item').length,
+    lib: libNames().length,
+  };
+
+  // Photo one, with the reference settings a user would have dialled in on it
+  // and a fixture trace standing in for the Step 2 pass.
+  app.queue.load(app.state.queue[0]);
+  await wait(700);
+  app.state.reference = 'rect';
+  app.state.captureFrac = 1;
+  app.state.grid.ny = 9;
+  app.state.bar.lengthMm = 150;
+  app.state.coin.customD = 25.5;
+  document.getElementById('captureArea').value = '1';
+  app.traceEditor.setTrace(rect(12, 12, 60, 30), []);
+  const firstCorners = JSON.stringify(app.state.corners);
+
+  // Next: the entry is named from the file, the project is written beside the
+  // photo, and the queue advances to the next ticked photo.
+  const one = await app.queue.walk.next();
+  await wait(700);
+  const entry = JSON.parse(localStorage.getItem('2p5d.library.v1'))[0];
+  const saved = {
+    name: one && one.name,
+    libNames: libNames(),
+    kind: entry && entry.kind,
+    outer: entry && entry.outer.length,
+    wrote: one && one.wrote.kind,
+    wroteName: one && one.wrote.name,
+    written: writes.map(w => w.name),
+    status: app.state.queue[0].status,
+    ticked: app.state.queue[0].picked,
+    advanced: app.state.queueCurrentId === app.state.queue[1].id,
+    fileName: app.state.fileName,
+    nameField: document.getElementById('queueSaveName').value,
+    wide: app.state.image.naturalWidth,
+  };
+
+  // The carry-over: settings kept, corners re-detected, because the sheet moves
+  // between shots.
+  const carried = {
+    reference: app.state.reference,
+    captureFrac: app.state.captureFrac,
+    captureField: document.getElementById('captureArea').value,
+    refField: document.getElementById('refType').value,
+    ny: app.state.grid.ny,
+    bar: app.state.bar.lengthMm,
+    coinD: app.state.coin.customD,
+    cornersMoved: JSON.stringify(app.state.corners) !== firstCorners,
+    cornersInside: app.state.corners.every(p =>
+      p.x <= app.state.image.naturalWidth && p.y <= app.state.image.naturalHeight),
+  };
+
+  // Skip, with a perfectly good trace on screen, and the library does not grow.
+  app.traceEditor.setTrace(rect(20, 20, 40, 40), []);
+  const skip = app.queue.walk.skip();
+  await wait(700);
+  const skipped = {
+    status: app.state.queue[1].status,
+    ticked: app.state.queue[1].picked,
+    advanced: app.state.queueCurrentId === app.state.queue[2].id,
+    fileName: app.state.fileName,
+    libNames: libNames(),
+    written: writes.map(w => w.name),
+    next: skip && skip.next === app.state.queue[2].id,
+    stillQueued: app.state.queue.length,
+  };
+
+  // Put the library, the folder, the queue and Step 1 back.
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.palette.refresh();
+  app.queue.applyRef(before.ref);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles);
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  app.state.paper.orientation = before.orient;
+  document.getElementById('paperOrient').value = before.orient;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await wait(300);
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    lib: localStorage.getItem('2p5d.library.v1') === before.lib,
+    queue: app.state.queue.length,
+    handle: app.folderBackend.handle,
+    palette: app.palette.folder.entries.length,
+    trace: app.traceEditor.outer.length === before.trace.outer.length,
+    reference: app.state.reference === before.ref.reference,
+    captureFrac: app.state.captureFrac === before.ref.captureFrac,
+    stripHidden: document.getElementById('queueStrip').hidden,
+  };
+
+  return { resumed, ingested, saved, carried, skipped, restored };
+});
+
+check('the batch flow: a three-file list ingests as three pending photos',
+  queueFive.ingested.added === 3 && queueFive.ingested.n === 3 &&
+  JSON.stringify(queueFive.ingested.names) === JSON.stringify(['ratchet', 'scriber', 'tin snips']) &&
+  queueFive.ingested.statuses.every(s => s === 'pending') &&
+  queueFive.ingested.ticked === 3 && queueFive.ingested.tiles === 3 &&
+  queueFive.ingested.lib === 0,
+  `${queueFive.ingested.n} items ${JSON.stringify(queueFive.ingested.names)} as ` +
+  `${JSON.stringify(queueFive.ingested.statuses)}, ${queueFive.ingested.tiles} tiles`);
+
+check('the batch flow: Next saves a library entry named from the photo file and advances',
+  queueFive.saved.name === 'ratchet' &&
+  JSON.stringify(queueFive.saved.libNames) === JSON.stringify(['ratchet']) &&
+  queueFive.saved.kind === 'tool' && queueFive.saved.outer === 4 &&
+  queueFive.saved.wrote === 'folder' && queueFive.saved.wroteName === 'ratchet.json' &&
+  JSON.stringify(queueFive.saved.written) === JSON.stringify(['ratchet.json']) &&
+  queueFive.saved.status === 'traced' && queueFive.saved.ticked === false &&
+  queueFive.saved.advanced && queueFive.saved.fileName === 'scriber' &&
+  queueFive.saved.nameField === 'scriber' && queueFive.saved.wide === 460,
+  `saved “${queueFive.saved.name}” (library ${JSON.stringify(queueFive.saved.libNames)}, ` +
+  `project ${JSON.stringify(queueFive.saved.written)}), now on “${queueFive.saved.fileName}”`);
+
+check('the batch flow: Skip advances without saving and the photo stays in the queue',
+  queueFive.skipped.status === 'skipped' && queueFive.skipped.ticked === false &&
+  queueFive.skipped.advanced && queueFive.skipped.next &&
+  queueFive.skipped.fileName === 'tin snips' && queueFive.skipped.stillQueued === 3 &&
+  JSON.stringify(queueFive.skipped.libNames) === JSON.stringify(['ratchet']) &&
+  JSON.stringify(queueFive.skipped.written) === JSON.stringify(['ratchet.json']),
+  `scriber is ${queueFive.skipped.status}, now on “${queueFive.skipped.fileName}”, ` +
+  `library still ${JSON.stringify(queueFive.skipped.libNames)}`);
+
+check('the batch flow: a photo with its sibling project JSON resumes as traced',
+  JSON.stringify(queueFive.resumed.paths) === JSON.stringify(['kit/saw.jpg']) &&
+  JSON.stringify(queueFive.resumed.statuses) === JSON.stringify(['traced']) &&
+  JSON.stringify(queueFive.resumed.picked) === JSON.stringify([false]) &&
+  JSON.stringify(queueFive.resumed.palette) === JSON.stringify(['saw']) &&
+  queueFive.resumed.next === null,
+  `${JSON.stringify(queueFive.resumed.paths)} as ${JSON.stringify(queueFive.resumed.statuses)}, ` +
+  `palette ${JSON.stringify(queueFive.resumed.palette)}, next ${queueFive.resumed.next}`);
+
+check('the batch flow: the reference settings survive Next and the corners do not',
+  queueFive.carried.reference === 'rect' && queueFive.carried.refField === 'rect' &&
+  queueFive.carried.captureFrac === 1 && queueFive.carried.captureField === '1' &&
+  queueFive.carried.ny === 9 && queueFive.carried.bar === 150 &&
+  queueFive.carried.coinD === 25.5 && queueFive.carried.cornersMoved &&
+  queueFive.carried.cornersInside,
+  `capture ${queueFive.carried.captureFrac} (field “${queueFive.carried.captureField}”), ` +
+  `grid ny ${queueFive.carried.ny}, bar ${queueFive.carried.bar}, coin ⌀ ${queueFive.carried.coinD}, ` +
+  `corners re-detected ${queueFive.carried.cornersMoved}`);
+
+check('the acceptance block hands the library, the folder and Step 1 back',
+  queueFive.restored.step === 3 && queueFive.restored.image && queueFive.restored.lib &&
+  queueFive.restored.queue === 0 && queueFive.restored.handle === null &&
+  queueFive.restored.palette === 0 && queueFive.restored.trace &&
+  queueFive.restored.reference && queueFive.restored.captureFrac &&
+  queueFive.restored.stripHidden,
+  `step ${queueFive.restored.step}, library restored ${queueFive.restored.lib}, ` +
+  `queue ${queueFive.restored.queue}, palette ${queueFive.restored.palette}`);
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {
