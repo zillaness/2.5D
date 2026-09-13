@@ -1227,6 +1227,55 @@ function queueSyncWalk() {
   $('queueUndoBtn').hidden = !queueUndoable;
 }
 
+// ---------- "Organize what I have" ----------
+//
+// Stop tracing and lay out what is done. Step 4 opens with the tools traced
+// this session ticked in the palette, so Add all places exactly them and not
+// whatever else the library happens to hold.
+
+// A palette row is this session's tool when it is the project Next wrote beside
+// the photo, or when it carries the name Next saved it under.
+function queueTracedMatch(entry, t) {
+  const path = entry.source && entry.source.path;
+  if (t.json && path && String(path).split('/').pop() === t.json) return true;
+  return entry.name === t.name || entry.name === t.fileName;
+}
+
+// One row per tool traced this session, so Add all places each tool once even
+// when the folder has been re-read and the same trace shows in both lists. The
+// folder row wins there: it carries the photo crop its project was written
+// with.
+function queueSelectTraced() {
+  laySelected.clear();
+  const lib = libLoad().filter(o => o.kind !== 'container');
+  let missing = 0;
+  for (const t of queueTraced) {
+    const folder = layFolder.entries.find(e => queueTracedMatch(e, t));
+    if (folder) { laySelected.add(layRowKey('folder', folder)); continue; }
+    const row = lib.find(o => o.name === t.name);
+    if (row) { laySelected.add(layRowKey('lib', row)); continue; }
+    missing++;
+  }
+  return { picked: laySelected.size, missing };
+}
+
+function queueOrganize() {
+  const got = queueSelectTraced();
+  goStep(4);
+  refreshLayPalette();
+  if (!queueTraced.length) {
+    toast('Nothing is traced yet this session — the palette is all yours.');
+  } else if (got.missing) {
+    toast(`${got.picked} of ${queueTraced.length} tools traced this session are ticked; ` +
+      `${got.missing} are no longer in the palette.`, 5000);
+  } else {
+    toast(`${got.picked} tool${got.picked === 1 ? '' : 's'} traced this session ` +
+      `${got.picked === 1 ? 'is' : 'are'} ticked — Add all places exactly ` +
+      `${got.picked === 1 ? 'it' : 'them'}.`, 5000);
+  }
+  return got;
+}
+
 // ---------- wiring: the strip, "Add photos…" and "Add folder…" ----------
 
 $('queueToggle').addEventListener('click', () => {
@@ -1249,6 +1298,8 @@ $('queueClearDoneBtn').addEventListener('click', () => {
   state.queue.push(...keep);
   renderQueue();
 });
+
+$('queueOrganizeBtn').addEventListener('click', () => { queueOrganize(); });
 
 $('queueNextBtn').addEventListener('click', () => { queueNext(); });
 $('queueSkipBtn').addEventListener('click', () => { queueSkip(); });
@@ -2883,6 +2934,17 @@ function layPlaceTool(src) {
 // backends; empty until one of them runs.
 let layFolder = { entries: [], skipped: [], label: '' };
 
+// The ticked palette rows, as row keys (see layRowKey). This is what "Organize
+// what I have" preselects and what Add all places when it is not empty, so a
+// session's traced tools can be laid out without hunting for them in a library
+// that also holds last month's.
+const laySelected = new Set();
+
+function layRowKey(kind, row) {
+  if (kind === 'folder') return `folder:${(row.source && row.source.path) || ''}|${row.name}`;
+  return `lib:${row.name}`;
+}
+
 const SKIP_WORDS = {
   'not-json': 'not a .json file',
   'parse-error': 'not readable JSON',
@@ -2890,10 +2952,26 @@ const SKIP_WORDS = {
   container: 'a container outline, not a tool',
 };
 
-function layPaletteRow(name, hint, buttons) {
+// `pick` is the row's tick box, as { key }, or null for a list that has none.
+// The box goes before the name and the buttons keep their order, so a caller
+// (and a test) that reaches for the first button still finds Add.
+function layPaletteRow(name, hint, buttons, pick) {
   const row = document.createElement('div');
   row.className = 'pal-row';
   row.style.cssText = 'display:flex; align-items:center; gap:6px; padding:2px 0';
+  if (pick) {
+    row.dataset.key = pick.key;
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'pal-pick';
+    box.checked = laySelected.has(pick.key);
+    box.title = 'Tick to place this tool with Add ticked';
+    box.addEventListener('change', () => {
+      if (box.checked) laySelected.add(pick.key); else laySelected.delete(pick.key);
+      laySyncPicks();
+    });
+    row.appendChild(box);
+  }
   const label = document.createElement('span');
   label.style.cssText = 'flex:1; min-width:0; display:flex; gap:6px; align-items:baseline';
   const nm = document.createElement('span');
@@ -2958,7 +3036,7 @@ function refreshLayPalette() {
         syncLaySelPanel(i);
         refreshLayoutEditor();
       }],
-    ]));
+    ], { key: layRowKey('lib', o) }));
   }
 
   const group = $('layPalFolderGroup');
@@ -2970,7 +3048,6 @@ function refreshLayPalette() {
   const has = layFolder.entries.length > 0 || layFolder.skipped.length > 0 || !!layFolder.label;
   group.hidden = !has;
   $('layPalFolderName').textContent = layFolder.label || '';
-  $('layPalAddAllBtn').disabled = layFolder.entries.length === 0;
   const skip = $('layPalSkipped');
   skip.hidden = layFolder.skipped.length === 0;
   skip.textContent = layFolder.skipped.length
@@ -3000,8 +3077,60 @@ function refreshLayPalette() {
         refreshLayoutEditor();
       }],
       ['\u2606 Library', 'Save this trace to the outline library', () => layPaletteSaveToLibrary(e)],
-    ]));
+    ], { key: layRowKey('folder', e) }));
   }
+  // A tick on a row that is gone (a folder re-read, a library entry deleted)
+  // would inflate the count and place nothing, so the keys are pruned to the
+  // rows that exist.
+  const live = new Set([
+    ...lib.map(o => layRowKey('lib', o)),
+    ...layFolder.entries.map(e => layRowKey('folder', e)),
+  ]);
+  for (const key of Array.from(laySelected)) if (!live.has(key)) laySelected.delete(key);
+  laySyncPicks();
+}
+
+// The ticked rows, library first then folder, in the order the palette lists
+// them, so Add ticked places them the way they are read.
+function layPickedRows() {
+  const out = [];
+  for (const o of libLoad().filter(x => x.kind !== 'container')) {
+    if (laySelected.has(layRowKey('lib', o))) out.push(o);
+  }
+  for (const e of layFolder.entries) {
+    if (laySelected.has(layRowKey('folder', e))) out.push(e);
+  }
+  return out;
+}
+
+function laySyncPicks() {
+  const n = laySelected.size;
+  $('layPalPickRow').hidden = n === 0;
+  $('layPalPickCount').textContent = n ? `${n} tool${n === 1 ? '' : 's'} ticked` : '';
+  // Add all places the ticked tools when there are any, which is what
+  // "Organize what I have" leans on, so it must be reachable even when no
+  // folder is open and every ticked row is a library row.
+  const addAll = $('layPalAddAllBtn');
+  addAll.disabled = layFolder.entries.length === 0 && n === 0;
+  addAll.title = n
+    ? `Place the ${n} ticked tool${n === 1 ? '' : 's'} in the drawer`
+    : 'Place every trace in this folder in the drawer';
+  for (const row of $('layPalette').querySelectorAll('.pal-row')) {
+    const box = row.querySelector('.pal-pick');
+    if (box) box.checked = laySelected.has(row.dataset.key);
+  }
+}
+
+// Place exactly the ticked tools, with one redraw at the end.
+function layAddPicked() {
+  const rows = layPickedRows();
+  if (!rows.length) { toast('Tick the tools to place first.'); return 0; }
+  for (const row of rows) layPlaceTool(structuredClone(row));
+  layoutEditor.sel = state.layout.items.length - 1;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+  toast(`Added ${rows.length} ticked tool${rows.length === 1 ? '' : 's'} to the drawer.`);
+  return rows.length;
 }
 
 // Called by the folder backends once a folder has been read.
@@ -3126,6 +3255,9 @@ if (hasDirectoryPicker()) {
 }
 
 $('layPalAddAllBtn').addEventListener('click', () => {
+  // A selection is the whole point of "Organize what I have": Add all then
+  // places exactly the ticked tools and nothing else.
+  if (laySelected.size) { layAddPicked(); return; }
   if (!layFolder.entries.length) { toast('Open a folder of traces first.'); return; }
   // One redraw at the end, not one per tool.
   for (const e of layFolder.entries) layPlaceTool(structuredClone(e));
@@ -3133,6 +3265,12 @@ $('layPalAddAllBtn').addEventListener('click', () => {
   syncLaySelPanel(layoutEditor.sel);
   refreshLayoutEditor();
   toast(`Added ${layFolder.entries.length} tool${layFolder.entries.length === 1 ? '' : 's'} from the folder.`);
+});
+
+$('layPalAddTickedBtn').addEventListener('click', () => { layAddPicked(); });
+$('layPalClearPicksBtn').addEventListener('click', () => {
+  laySelected.clear();
+  refreshLayPalette();
 });
 
 $('layAddBtn').addEventListener('click', () => {
@@ -5152,7 +5290,12 @@ window.__app = {
     },
   },
   layoutExports: { stl: layoutStlExport, svg: layoutSvgExport },
-  palette: { setFolder: laySetFolder, refresh: refreshLayPalette, get folder() { return layFolder; } },
+  palette: {
+    setFolder: laySetFolder, refresh: refreshLayPalette,
+    addPicked: layAddPicked, rowKey: layRowKey,
+    get folder() { return layFolder; },
+    get picks() { return Array.from(laySelected); },
+  },
   queue: {
     add: queueAddFiles, load: queueLoad, clear: queueClear,
     render: renderQueue, next: queueNextPending,
@@ -5162,6 +5305,7 @@ window.__app = {
     // The walk: Next, Skip and Undo, kept apart from `next`, which is the
     // "which photo comes next" lookup the strip and the walk both use.
     walk: { next: queueNext, skip: queueSkip, undo: queueUndo },
+    organize: queueOrganize,
     snapshot: queueRefSnapshot, applyRef: queueApplyRef, libName: queueLibName,
     get items() { return state.queue; },
     get traced() { return queueTraced; },

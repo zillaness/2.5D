@@ -7951,6 +7951,212 @@ check('the walk row rides Steps 1 to 3 and the block hands the library and Step 
   `photo restored ${queueThree.restored.image}, handle ${queueThree.restored.handle}`);
 
 
+// "Organize what I have": Step 4 opens with this session's traced tools ticked
+// in the palette, and Add all places exactly them.
+const queueFour = await page.evaluate(async () => {
+  const app = window.__app;
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    orient: app.state.paper.orientation,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    ref: app.queue.snapshot(),
+    items: app.state.layout.items.slice(),
+    sel: app.layoutEditor.sel,
+  };
+
+  // A library that already holds last month's tools: the preselection must
+  // leave them alone.
+  localStorage.setItem('2p5d.library.v1', JSON.stringify([
+    { name: 'old chisel', kind: 'tool', thickness: 6, outer: rect(5, 5, 60, 18), holes: [], circles: [] },
+    { name: 'old rasp', kind: 'tool', thickness: 6, outer: rect(5, 5, 70, 16), holes: [], circles: [] },
+  ]));
+
+  const files = {
+    'wrench.jpg': await photoFile('wrench.jpg', 480, 360),
+    'pliers.jpg': await photoFile('pliers.jpg', 400, 300),
+  };
+  const dir = {
+    kind: 'directory', name: 'bench',
+    values: async function* () {
+      for (const n of ['pliers.jpg', 'wrench.jpg']) {
+        yield { kind: 'file', name: n, getFile: async () => files[n] };
+      }
+    },
+    queryPermission: async () => 'granted',
+    requestPermission: async () => 'granted',
+    getFileHandle: async () => ({
+      createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+    }),
+  };
+
+  // Trace two photos the way the walk does, so the traced list is the real one.
+  app.queue.clear();
+  await app.queue.ingestFolder(dir, 'bench');
+  app.traceEditor.setTrace(rect(10, 10, 55, 22), []);
+  app.queue.load(app.state.queue[0]);
+  await new Promise(r => setTimeout(r, 700));
+  await app.queue.walk.next();
+  await new Promise(r => setTimeout(r, 700));
+  await app.queue.walk.next();
+  await new Promise(r => setTimeout(r, 400));
+  const traced = app.queue.traced.map(t => t.name);
+
+  // The folder has since been re-read, so pliers is in the library only while
+  // wrench is in both lists. Each tool must still be ticked once.
+  const folderEntry = (name, path, w) => ({
+    name, kind: 'tool', thickness: 6, outer: rect(5, 5, w, 20), holes: [], circles: [],
+    arcs: [], lines: [], source: { kind: 'folder', path },
+  });
+  app.palette.setFolder({
+    entries: [folderEntry('spare', 'bench/spare.json', 40), folderEntry('wrench', 'bench/wrench.json', 50)],
+    skipped: [],
+  }, 'bench');
+
+  app.state.layout.items.length = 0;
+  const got = app.queue.organize();
+  await new Promise(r => setTimeout(r, 300));
+  const boxes = () => Array.from(document.querySelectorAll('#layPalette .pal-row'))
+    .map(r => ({ key: r.dataset.key, on: !!(r.querySelector('.pal-pick') || {}).checked }));
+  const organized = {
+    step: app.state.step,
+    picked: got.picked,
+    missing: got.missing,
+    picks: app.palette.picks.slice().sort(),
+    rowShown: !document.getElementById('layPalPickRow').hidden,
+    count: document.getElementById('layPalPickCount').textContent,
+    ticked: boxes().filter(b => b.on).map(b => b.key).sort(),
+    untouched: boxes().filter(b => !b.on).map(b => b.key).sort(),
+    addAllOn: !document.getElementById('layPalAddAllBtn').disabled,
+  };
+
+  // Add all places exactly the ticked tools.
+  document.getElementById('layPalAddAllBtn').click();
+  await new Promise(r => setTimeout(r, 250));
+  const addAll = {
+    n: app.state.layout.items.length,
+    names: app.state.layout.items.map(i => i.name),
+  };
+
+  // A tick can be changed by hand, and Add ticked follows it.
+  app.state.layout.items.length = 0;
+  const wrenchRow = document.querySelector(
+    '#layPalFolderList .pal-row[data-key="folder:bench/wrench.json|wrench"] .pal-pick');
+  wrenchRow.checked = false;
+  wrenchRow.dispatchEvent(new Event('change', { bubbles: true }));
+  document.getElementById('layPalAddTickedBtn').click();
+  await new Promise(r => setTimeout(r, 250));
+  const byHand = {
+    picks: app.palette.picks.slice(),
+    n: app.state.layout.items.length,
+    names: app.state.layout.items.map(i => i.name),
+  };
+
+  // With nothing ticked, Add all is the folder's Add all again.
+  app.state.layout.items.length = 0;
+  document.getElementById('layPalClearPicksBtn').click();
+  await new Promise(r => setTimeout(r, 150));
+  const cleared = {
+    picks: app.palette.picks.length,
+    rowHidden: document.getElementById('layPalPickRow').hidden,
+  };
+  document.getElementById('layPalAddAllBtn').click();
+  await new Promise(r => setTimeout(r, 250));
+  cleared.n = app.state.layout.items.length;
+  cleared.names = app.state.layout.items.map(i => i.name);
+
+  // Put the layout, the library, the folder, the queue and Step 1 back.
+  app.state.layout.items.length = 0;
+  app.state.layout.items.push(...before.items);
+  app.layoutEditor.sel = before.sel;
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.queue.applyRef(before.ref);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles);
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  app.state.paper.orientation = before.orient;
+  document.getElementById('paperOrient').value = before.orient;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await new Promise(r => setTimeout(r, 300));
+  app.refreshLayoutEditor();
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    lib: localStorage.getItem('2p5d.library.v1') === before.lib,
+    queue: app.state.queue.length,
+    picks: app.palette.picks.length,
+    pickRowHidden: document.getElementById('layPalPickRow').hidden,
+    items: app.state.layout.items.length === before.items.length,
+    palette: app.palette.folder.entries.length,
+  };
+
+  return { traced, organized, addAll, byHand, cleared, restored };
+});
+
+check('Organize what I have jumps to Step 4 with this session’s traced tools ticked',
+  JSON.stringify(queueFour.traced) === JSON.stringify(['pliers', 'wrench']) &&
+  queueFour.organized.step === 4 && queueFour.organized.picked === 2 &&
+  queueFour.organized.missing === 0 && queueFour.organized.rowShown &&
+  queueFour.organized.count === '2 tools ticked' && queueFour.organized.addAllOn &&
+  JSON.stringify(queueFour.organized.ticked) === JSON.stringify(
+    ['folder:bench/wrench.json|wrench', 'lib:pliers']) &&
+  JSON.stringify(queueFour.organized.untouched) === JSON.stringify(
+    ['folder:bench/spare.json|spare', 'lib:old chisel', 'lib:old rasp', 'lib:wrench']),
+  `traced ${JSON.stringify(queueFour.traced)} → ticked ${JSON.stringify(queueFour.organized.ticked)}, ` +
+  `left alone ${JSON.stringify(queueFour.organized.untouched)}, count “${queueFour.organized.count}”`);
+
+check('Add all then places exactly those tools, once each',
+  queueFour.addAll.n === 2 &&
+  JSON.stringify(queueFour.addAll.names) === JSON.stringify(['pliers', 'wrench']),
+  `${queueFour.addAll.n} placed: ${JSON.stringify(queueFour.addAll.names)}`);
+
+check('unticking a row drops it from the placement, and with none ticked Add all is the folder again',
+  JSON.stringify(queueFour.byHand.picks) === JSON.stringify(['lib:pliers']) &&
+  queueFour.byHand.n === 1 && queueFour.byHand.names.join(',') === 'pliers' &&
+  queueFour.cleared.picks === 0 && queueFour.cleared.rowHidden &&
+  queueFour.cleared.n === 2 && queueFour.cleared.names.join(',') === 'spare,wrench',
+  `by hand ${JSON.stringify(queueFour.byHand.names)}; cleared → Add all placed ${JSON.stringify(queueFour.cleared.names)}`);
+
+check('the organize block hands the layout, the library and the palette back',
+  queueFour.restored.step === 3 && queueFour.restored.image &&
+  queueFour.restored.lib && queueFour.restored.queue === 0 &&
+  queueFour.restored.picks === 0 && queueFour.restored.pickRowHidden &&
+  queueFour.restored.items && queueFour.restored.palette === 0,
+  `step ${queueFour.restored.step}, layout restored ${queueFour.restored.items}, ` +
+  `ticks ${queueFour.restored.picks}, palette ${queueFour.restored.palette}`);
+
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {
