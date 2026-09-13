@@ -89,6 +89,15 @@ const state = {
     // container outline so far: additive, optional, and 1 : 1 until measured.
     container: { type: 'rect', w: 220, h: 140, r: 6, n: 3, m: 2, name: null, outer: null, scale: { x: 1, y: 1 } },
     items: [], clearance: 0.5, floor: 3, border: 5,
+    // How the insert is made (PRD Part D). 'pocket' is the slab with a floor
+    // under every tool, which is what a router or a printer makes and what
+    // every project saved so far means. 'through' cuts each pocket clean
+    // through one sheet, which is what a laser does. 'layered' glues that
+    // sheet onto a contrast base. `sheet.top` is the sheet the laser cuts,
+    // `sheet.base` the contrast layer under it; both are ignored by 'pocket',
+    // which keeps using floor + the per-tool depths.
+    construction: 'pocket',
+    sheet: { top: 6, base: 3 },
     bed: { // laser / printer bed for tiling, and puzzle tabs on the seams
       preset: 'none', w: 300, h: 200,
       // Build-plate extras, both additive and optional: `shape` is a saved
@@ -104,6 +113,9 @@ const state = {
       enabled: false, height: 6, margin: 2, follow: false,
       process: 'laser', bitDia: 3.175, nozzle: 0.4,
       font: 'bold sans-serif', mode: 'deboss', depth: 0.6,
+      // Layered builds only: the tool label is engraved into the contrast
+      // base, inside the pocket footprint, instead of beside the pocket.
+      onBase: true,
       extra: [],   // free-floating layout labels ("TOP DRAWER", "FRONT")
     },
   },
@@ -1073,9 +1085,16 @@ function rebuildHolder() {
     const cellNote = !s.cells ? ''
       : s.cells.u ? ` (${s.cells.n}×${s.cells.m} grid, ${s.cells.u}u)`
       : ` (${s.cells.count} socket${s.cells.count === 1 ? '' : 's'})`;
+    const cutThrough = isLayout && s.construction === 'through';
+    const layered = isLayout && s.construction === 'layered';
+    // The layered stack measures top sheet plus base, since that is what ends
+    // up glued in the drawer.
     $('meshInfo').textContent =
-      `${label}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}${cellNote}\n` +
-      (['plate', 'holster'].includes(state.holder.type) ? '' : `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n`) +
+      `${label}${cutThrough ? ' (through cut)' : layered ? ' (layered)' : ''}: ${fmtDim(s.slab.w)} × ${fmtDim(s.slab.h)} × ${fmtDimL(s.slab.thickness)}${cellNote}\n` +
+      (['plate', 'holster'].includes(state.holder.type) ? ''
+        : layered ? `Top sheet ${fmtDimL(s.slab.top)} cut through, on a ${fmtDimL(s.slab.base)} contrast base (two parts)\n`
+        : cutThrough ? `Pockets cut through the full ${fmtDimL(s.slab.thickness)} sheet\n`
+        : `Pocket depth: ${fmtDimL(s.slab.pocketDepth)}${isLayout ? ' (deepest)' : ''}\n`) +
       `Triangles: ${s.triangles}`;
     const warns = s.warnings || [];
     $('meshWarn').hidden = !warns.length;
@@ -1299,6 +1318,7 @@ function buildLayoutNow() {
       labels: layLabelsForMesh(),
       clearance: L.clearance, floor: L.floor, border: L.border,
       defaultDepth: state.regions[0].thickness,
+      construction: layConstruction(), sheet: L.sheet.top, baseSheet: L.sheet.base,
     });
   } catch (err) { console.error('layout build failed', err); return null; }
 }
@@ -1356,11 +1376,21 @@ function syncLayoutFields() {
   document.querySelector('label[for="layH"]').textContent = grid ? 'Cells deep (M)' : 'Depth (mm)';
   $('layW').value = grid ? String(L.container.n || 3) : fmtDim(L.container.w);
   $('layH').value = grid ? String(L.container.m || 2) : fmtDim(L.container.h);
+  $('layConstruction').value = L.construction || 'pocket';
+  $('layConstruction').disabled = grid;  // a Gridfinity bin is printed, not cut
   $('layClearance').value = fmtDim(L.clearance);
   $('layFloor').value = fmtDim(L.floor);
   $('layBorder').value = fmtDim(layBorderEff());
-  $('layFloor').disabled = grid;   // grid bins keep the spec base instead
-  $('layBorder').disabled = grid;  // …and enforce the bin's minimum wall
+  $('laySheetTop').value = fmtDim(L.sheet.top);
+  $('laySheetBase').value = fmtDim(L.sheet.base);
+  $('laySheetRow').hidden = grid || layConstruction() === 'pocket';
+  // Only the layered build has a second sheet under the cut one.
+  $('laySheetBaseField').hidden = layConstruction() !== 'layered';
+  $('layLabelBaseRow').hidden = layConstruction() !== 'layered';
+  $('layLabelBase').checked = (L.labels || {}).onBase !== false;
+  // A cut sheet has no floor and no per-pocket depth: the sheet is the depth.
+  $('layFloor').disabled = grid || layConstruction() !== 'pocket';
+  $('layBorder').disabled = grid;  // grid bins enforce the bin's minimum wall
   $('layRectFields').hidden = L.container.type === 'outline';
   // Known width / depth belong to a traced outline: a rectangle's own width
   // and depth fields are already the measured numbers.
@@ -1425,6 +1455,12 @@ function layScaleContainer(axis, known) {
   c.scale[axis] = Math.round(c.scale[axis] * f * 1e6) / 1e6;
   return true;
 }
+// The construction actually in force. A Gridfinity container is a printed
+// bin, so it stays a pocket build whatever the select last said.
+function layConstruction() {
+  if (state.layout.container.type === 'grid') return 'pocket';
+  return state.layout.construction || 'pocket';
+}
 function refreshLayoutEditor() {
   layoutEditor.setBed(layBedView());
   layoutEditor.setLayout(layContainerLoop(), state.layout.items,
@@ -1446,10 +1482,33 @@ function updateLayoutInfo() {
   }
   $('layEmptyHint').hidden = n > 0;
   const grid = L.container.type === 'grid';
+  const constr = layConstruction();
+  const sheetT = Math.max(0.5, L.sheet.top);
+  const baseT = Math.max(0.5, L.sheet.base);
   $('layoutInfo').textContent = grid
     ? `Gridfinity ${L.container.n}×${L.container.m} (${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm) · ${n} tool${n === 1 ? '' : 's'}`
     : `Container ${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm · ${n} tool${n === 1 ? '' : 's'}` +
-      (n ? ` · insert ${fmtDimL(Math.max(0.5, L.floor) + maxD)} thick` : '');
+      (n ? constr === 'through'
+        ? ` · ${fmtDimL(sheetT)} sheet, cut through`
+        : constr === 'layered'
+        ? ` · ${fmtDimL(sheetT)} top sheet on a ${fmtDimL(baseT)} base`
+        : ` · insert ${fmtDimL(Math.max(0.5, L.floor) + maxD)} thick` : '');
+  // A laser cuts the whole sheet, so the per-tool depths stop meaning
+  // anything the moment the construction leaves 'pocket'. Say so where the
+  // depths are typed, not only on the 3D preview.
+  const cw = $('layConstructionWarn');
+  const notes = [];
+  if (constr !== 'pocket') {
+    const which = constr === 'layered' ? 'top sheet' : 'sheet';
+    notes.push(`${constr === 'layered' ? 'Layered build' : 'Through cut'}: per-tool pocket depths are ignored — every pocket is cut clean through the ${which}.`);
+    // One top sheet, no stacking (PRD Part D, open question 1): say so rather
+    // than quietly cutting a tool's silhouette too shallow for it.
+    if (n && maxD > sheetT + 1e-6) {
+      notes.push(`Deepest tool wants ${fmtDimL(maxD)} but the ${which} is ${fmtDimL(sheetT)} — it will stand proud.`);
+    }
+  }
+  cw.hidden = !notes.length;
+  cw.textContent = notes.join(' ');
   $('layoutWarn').hidden = !bad;
   $('layoutWarn').textContent = bad
     ? `${bad} tool${bad === 1 ? '' : 's'} in red — overlapping another pocket or crossing the border. Drag to fix.`
@@ -1518,20 +1577,45 @@ function updateLayoutInfo() {
 }
 // Placed label geometry for the current layout, in layout mm. Empty when
 // labelling is off, so every downstream path no-ops for an unlabelled layout.
+// Do the tool labels go on the contrast base, inside the pocket footprint?
+// Only a layered build has a base to engrave, and there it is the default
+// (PRD Part D, open question 3): reading the name through the silhouette is
+// the point of the second sheet. `onBase` is additive and optional, so a
+// project saved before it loads with base labels on.
+function layLabelsOnBase() {
+  return layConstruction() === 'layered' && (state.layout.labels || {}).onBase !== false;
+}
 function layPlacedLabels(pockets) {
   const L = state.layout;
   if (!L.labels || !L.labels.enabled) return [];
-  return layoutLabelGeometry(L.items, pockets || layoutPockets(L.items, L.clearance), L.labels);
+  return layoutLabelGeometry(L.items, pockets || layoutPockets(L.items, L.clearance),
+    { ...L.labels, inside: layLabelsOnBase() });
 }
-// Flat list of glyph loops for the exporters.
+// Which sheet a placed label belongs to. A tool label goes on the contrast
+// base when the build has one and base labels are on; a drawer-level label
+// always stays on the sheet you can see.
+function layLabelLayer(L) {
+  return layLabelsOnBase() && L.src === 'item' ? 'base' : 'top';
+}
+// Flat list of glyph loops for one sheet. The exporters have to keep the two
+// apart: on a layered build the base glyphs sit inside the pocket footprints,
+// so engraving them into the top sheet would mark the inside of a hole.
+function layLabelLoopsFor(layer, pockets) {
+  return layPlacedLabels(pockets).filter(L => layLabelLayer(L) === layer)
+    .flatMap(L => L.loops);
+}
+// Flat list of glyph loops for the exporters (the visible sheet).
 function layLabelLoops() {
-  return layPlacedLabels().flatMap(L => L.loops);
+  return layLabelLoopsFor('top');
 }
-// Labels as buildSolid wants them, for a PRINTED insert.
+// Labels as buildSolid wants them. A tool label goes on the base sheet when
+// the construction has one and base labels are on; a drawer-level label
+// ("TOP DRAWER") always stays on the sheet you can see.
 function layLabelsForMesh() {
   const cfg = state.layout.labels || {};
   return layPlacedLabels().map(L => ({
     loops: L.loops, mode: cfg.mode || 'deboss', face: 'top',
+    layer: layLabelLayer(L),
     size: Math.max(0.05, cfg.depth || 0.6),
   }));
 }
@@ -1610,6 +1694,34 @@ for (const [id, axis] of [['layKnownW', 'x'], ['layKnownD', 'y']]) {
     refreshLayoutEditor();
   });
 }
+// A sheet thickness from a project file, held to what the field below
+// accepts: a real number of at least 0.5 mm, or the default in its place.
+function laySheetMM(v, dflt) {
+  return Number.isFinite(v) && v >= 0.5 ? v : dflt;
+}
+$('laySheetTop').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm !== null && mm >= 0.5) state.layout.sheet.top = mm;
+  syncLayoutFields();
+  refreshLayoutEditor();
+});
+$('laySheetBase').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm !== null && mm >= 0.5) state.layout.sheet.base = mm;
+  syncLayoutFields();
+  refreshLayoutEditor();
+});
+$('layLabelBase').addEventListener('change', e => {
+  state.layout.labels.onBase = e.target.checked;
+  syncLayoutFields();
+  refreshLayoutEditor();
+});
+$('layConstruction').addEventListener('change', e => {
+  const v = e.target.value;
+  if (['pocket', 'through', 'layered'].includes(v)) state.layout.construction = v;
+  syncLayoutFields();
+  refreshLayoutEditor();
+});
 for (const [id, key, min] of [['layClearance', 'clearance', 0], ['layFloor', 'floor', 0.5], ['layBorder', 'border', 0.5]]) {
   $(id).addEventListener('change', e => {
     const mm = parseDim(e.target.value);
@@ -1811,6 +1923,7 @@ function updateLabelInfo() {
   const parts = [];
   if (by('tooSmall').length) parts.push(`${by('tooSmall').length} too small for ${L.process} (needs ${fmtDimL(min)})`);
   if (by('pocket').length) parts.push(`${by('pocket').length} overlapping a pocket`);
+  if (by('covered').length) parts.push(`${by('covered').length} spilling out of the pocket (the top sheet would hide it)`);
   if (by('label').length) parts.push(`${by('label').length} overlapping another label`);
   if (by('border').length) parts.push(`${by('border').length} across the border`);
   el.textContent = `${placed.length} label${placed.length === 1 ? '' : 's'}, but ${parts.join(', ')}.`;
@@ -1850,6 +1963,18 @@ function layTilePlan(res) {
   const bed = layBedDims();
   if (!bed || !res || !res.template) return null;
   return laySplitWithOffset(res.template, bed.w, bed.h, layTileOpts());
+}
+// The contrast base of a layered build, split for the same bed. It is the
+// container outline with no pockets, cut on the seams the top sheet was cut
+// on and with no puzzle tabs (PRD Part D, open question 2): the glue holds
+// the sandwich together, and matching seams let the two sheets line up.
+// Null unless the build is layered and the top sheet actually tiled.
+function layBaseTilePlan(res, plan) {
+  const bed = layBedDims();
+  if (!bed || !plan || !res || !res.template) return null;
+  if (res.template.construction !== 'layered') return null;
+  return splitTiles({ ...res.template, pockets: [] }, bed.w, bed.h,
+    { labels: layLabelLoopsFor('base'), seams: { x: plan.seamsX, y: plan.seamsY } });
 }
 $('layTabs').addEventListener('change', e => {
   state.layout.bed.tabs.enabled = e.target.checked;
@@ -2341,6 +2466,19 @@ function layoutStlExport() {
   if (bed && res.stats && res.stats.slab && (res.stats.slab.w > bed.w + 1e-6 || res.stats.slab.h > bed.h + 1e-6)) {
     toast(`Heads up: this is ${fmtDim(res.stats.slab.w)} × ${fmtDim(res.stats.slab.h)}, larger than the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed. The STL exports whole — STL tiling isn't available yet; the cut template splits into tiles.`, 7000);
   }
+  // A layered build is two cut parts, so it writes one file per part: the
+  // through-cut top sheet and the plain contrast base, each watertight on its
+  // own. Every other construction is one part and keeps its old filename.
+  const parts = res.parts && res.parts.length > 1 ? res.parts : null;
+  if (parts) {
+    toast(`Exported ${parts.length} files (${parts.map(p => `${p.name}`).join(', ')}) — cut both, then glue the top sheet onto the base.`, 6500);
+    return {
+      files: parts.map(p => ({
+        blob: toBinarySTL(p.positions, p.indices, `${state.fileName} drawer ${p.name}`),
+        filename: `${state.fileName}-${p.name}-2p5d.stl`,
+      })),
+    };
+  }
   return {
     blob: toBinarySTL(res.positions, res.indices, `${state.fileName} ${grid ? 'gridfinity' : 'drawer'}`),
     name: `${state.fileName}-${grid ? 'bin' : 'drawer'}-2p5d.stl`,
@@ -2353,12 +2491,17 @@ function layoutSvgExport(mode = 'auto') {
   const res = buildLayoutNow();
   if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return null; }
   if (!res.template) { toast('Template SVG is for flat drawer inserts (foam cutting) — export the bin as STL.'); return null; }
+  const T = res.template;
+  const layered = T.construction === 'layered';
   const plan = layTilePlan(res);
   if (plan) {
     const bed = layBedDims();
-    toast(`Exported ${plan.tiles.length} tiles for the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed — cut one per bed load (labels A1, A2… mark the drawer position).`, 6500);
+    const basePlan = layBaseTilePlan(res, plan);
+    const both = basePlan
+      ? ` The second grid below is the contrast base: same tiles, no pockets, no tabs.` : '';
+    toast(`Exported ${plan.tiles.length} tiles for the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed — cut one per bed load (labels A1, A2… mark the drawer position).${both}`, 6500);
     return {
-      blob: toTiledSVG(plan.tiles, { name: state.fileName }),
+      blob: toTiledSVG(plan.tiles, { name: state.fileName, base: basePlan && basePlan.tiles }),
       name: `${state.fileName}-drawer-tiles-${plan.nx}x${plan.ny}.svg`,
     };
   }
@@ -2366,15 +2509,24 @@ function layoutSvgExport(mode = 'auto') {
     toast('This layout already fits the bed in one piece — use Template SVG.');
     return null;
   }
-  const T = res.template;
   const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
   const holes = T.pockets.flatMap(p => [shift(p.pocket), ...p.pillars.map(shift)]);
+  // A layered build is two sheets in one drawing: the through-cut top and,
+  // beside it, the plain base carrying the labels that read through the holes.
+  const base = layered
+    ? { outline: shift(T.slab), engrave: layLabelLoopsFor('base').map(shift) } : null;
   const blob = toSVG(shift(T.slab), holes, T.w, T.h,
-    { engrave: layLabelLoops().map(shift) });
+    { engrave: layLabelLoops().map(shift), base });
+  if (layered) toast('Two sheets in one file: the cut layer is the top sheet, the "base" layer is the contrast base.', 6000);
   return { blob, name: `${state.fileName}-drawer-template.svg` };
 }
+// A layered STL is two files; every other construction is one. Both shapes go
+// out through the same recovery-link path, so a view that blocks programmatic
+// saves still hands over every part.
 function deliverLayoutExport(out) {
-  if (out) deliverExport(out.blob, out.name);
+  if (!out) return;
+  if (out.files) { deliverExports(out.files); return; }
+  deliverExport(out.blob, out.name);
 }
 $('layExportBtn').addEventListener('click', () => deliverLayoutExport(layoutStlExport()));
 $('layExportSvgBtn').addEventListener('click', () => deliverLayoutExport(layoutSvgExport('auto')));
@@ -3396,20 +3548,41 @@ bindSlider('arcSlider', 'arcVal', v => v.toFixed(0) + ' seg', v => {
   });
 })();
 
-// Trigger the download and keep a live fallback link the user can click
+// Trigger the downloads and keep live fallback links the user can click
 // directly — a plain user-gesture click on a real anchor is the most widely
 // permitted download path, and if even that does nothing the surrounding
 // message explains the environment is blocking downloads.
-let fallbackURL = null;
-function deliverExport(blob, filename) {
-  downloadBlob(blob, filename);
-  if (fallbackURL) URL.revokeObjectURL(fallbackURL);
-  fallbackURL = URL.createObjectURL(blob);
-  const link = $('exportFallbackLink');
-  link.href = fallbackURL;
-  link.download = filename;
-  $('exportFallbackName').textContent = filename;
+// One export can be several files: a layered build is a through-cut top sheet
+// and a contrast base, and both have to stay clickable. Each file keeps its
+// own live URL until the next export replaces the whole group, so no file of
+// a multi-part export is dropped from the recovery path.
+let fallbackURLs = [];
+function deliverExports(files) {
+  for (const url of fallbackURLs) URL.revokeObjectURL(url);
+  fallbackURLs = [];
+  const extra = $('exportFallbackExtra');
+  extra.textContent = '';
+  files.forEach(({ blob, filename }, i) => {
+    downloadBlob(blob, filename);
+    const url = URL.createObjectURL(blob);
+    fallbackURLs.push(url);
+    if (i === 0) {
+      const link = $('exportFallbackLink');
+      link.href = url;
+      link.download = filename;
+      $('exportFallbackName').textContent = filename;
+    } else {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.textContent = filename;
+      extra.append(' Also save ', a, '.');
+    }
+  });
   $('exportFallback').hidden = false;
+}
+function deliverExport(blob, filename) {
+  deliverExports([{ blob, filename }]);
 }
 
 $('exportStlBtn').addEventListener('click', () => {
@@ -3598,6 +3771,19 @@ function loadProject(p) {
       clearance: p.layout.clearance ?? state.layout.clearance,
       floor: p.layout.floor ?? state.layout.floor,
       border: p.layout.border ?? state.layout.border,
+      // Additive and optional: a project saved before laser constructions
+      // existed has no `construction` key and must load as a pocket insert.
+      construction: ['pocket', 'through', 'layered'].includes(p.layout.construction)
+        ? p.layout.construction : 'pocket',
+      // Sheet thicknesses are numbers a hand-edited or pasted file can get
+      // wrong. A value the sheet field itself would refuse is not trusted:
+      // the builder and the panel clamp differently below 0.5 mm, so a bad
+      // one would leave the panel describing a sheet the build never cut.
+      sheet: {
+        ...state.layout.sheet,
+        top: laySheetMM(p.layout.sheet && p.layout.sheet.top, state.layout.sheet.top),
+        base: laySheetMM(p.layout.sheet && p.layout.sheet.base, state.layout.sheet.base),
+      },
       bed: {
         ...state.layout.bed, ...(p.layout.bed || {}),
         tabs: { ...state.layout.bed.tabs, ...((p.layout.bed && p.layout.bed.tabs) || {}) },

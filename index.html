@@ -788,7 +788,7 @@
       </div>
       <p id="exportFallback" class="hint" hidden>
         Exported <b id="exportFallbackName"></b> — check your downloads folder.
-        Nothing appeared? <a id="exportFallbackLink" href="#">Click here to save it directly</a>.
+        Nothing appeared? <a id="exportFallbackLink" href="#">Click here to save it directly</a>.<span id="exportFallbackExtra"></span>
         Some embedded views (like the Claude artifact) block downloads entirely —
         if the direct link does nothing either, use the offline
         <code>dist/2.5d-local.html</code> or a GitHub Pages copy.
@@ -896,6 +896,15 @@
           <button id="layRemoveBtn" class="btn small">Remove tool</button>
         </div>
         <h3 style="margin:6px 0 0">Insert</h3>
+        <div class="field">
+          <label for="layConstruction">Construction</label>
+          <select id="layConstruction" title="How the insert is made. Pocket keeps a floor under every tool (routed or 3D printed). Through cuts every pocket clean through one sheet, the way a laser does. Layered glues that sheet onto a contrasting base, so a missing tool reads as a bright silhouette.">
+            <option value="pocket">Pocket — floor under each tool (routed / printed)</option>
+            <option value="through">Through cut — one laser-cut sheet</option>
+            <option value="layered">Layered — top sheet + contrast base</option>
+          </select>
+        </div>
+        <p id="layConstructionWarn" class="warn" hidden></p>
         <div class="field-row">
           <div class="field">
             <label for="layClearance">Clearance (mm)</label>
@@ -905,6 +914,19 @@
             <label for="layFloor">Floor (mm)</label>
             <input type="text" inputmode="decimal" id="layFloor" value="3">
           </div>
+        </div>
+        <div class="field-row" id="laySheetRow" hidden>
+          <div class="field">
+            <label for="laySheetTop">Top sheet (mm)</label>
+            <input type="text" inputmode="decimal" id="laySheetTop" value="6">
+          </div>
+          <div class="field" id="laySheetBaseField" hidden>
+            <label for="laySheetBase">Base sheet (mm)</label>
+            <input type="text" inputmode="decimal" id="laySheetBase" value="3">
+          </div>
+        </div>
+        <div class="field" id="layLabelBaseRow" hidden>
+          <label><input type="checkbox" id="layLabelBase" checked title="Engrave each tool's label into the contrast base, inside the pocket outline, so it is read through the silhouette. Off puts the labels beside the pockets on the top sheet, as a pocket insert does."> Labels on the base, inside the pocket</label>
         </div>
         <div class="field">
           <label for="layBorder">Border (mm)</label>

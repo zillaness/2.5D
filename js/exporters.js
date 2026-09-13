@@ -86,8 +86,14 @@ function svgCirclePath(c) {
 // SVG of the trace (outline + holes) in real millimetres — handy for laser
 // cutting or importing the profile into CAD. opts: { outerArcs, holeArcs,
 // circles } enables true arc/circle output (see above).
+//
+// opts.base = { outline, engrave, gap } adds the second sheet of a layered
+// laser build (PRD Part D): the plain contrast base that the through-cut top
+// sheet is glued onto. It is drawn beside the top sheet at true scale, in its
+// own `base` layer group, carrying the container outline and whatever label
+// artwork sits on the base. Absent, the file is exactly what it always was.
 export function toSVG(outline, holes, paperW, paperH, opts = {}) {
-  const { outerArcs = null, holeArcs = null, circles = [], engrave = [] } = opts;
+  const { outerArcs = null, holeArcs = null, circles = [], engrave = [], base = null } = opts;
   const parts = [svgLoopPath(outline, outerArcs)];
   holes.forEach((h, i) => parts.push(svgLoopPath(h, holeArcs && holeArcs[i])));
   for (const c of circles) parts.push(svgCirclePath(c));
@@ -96,25 +102,42 @@ export function toSVG(outline, holes, paperW, paperH, opts = {}) {
   // can mark it and skip it independently of the cut. Absent entirely when
   // there is nothing to engrave, so unlabelled exports are unchanged.
   const eng = engrave.length ? engraveLayer(engrave) : '';
+  const gap = base && Number.isFinite(base.gap) ? base.gap : 10;
+  const shift = pts => pts.map(p => ({ x: p.x + paperW + gap, y: p.y }));
+  const baseCut = base && base.outline && base.outline.length > 1
+    ? `  <g id="base" inkscape:groupmode="layer" inkscape:label="base">\n` +
+      `    <path d="${svgLoopPath(shift(base.outline), null)}" fill="#eef1e6" fill-rule="evenodd" stroke="#111" stroke-width="0.2"/>\n` +
+      `  </g>\n`
+    : '';
+  const baseEng = base && (base.engrave || []).length
+    ? engraveLayer((base.engrave || []).map(shift), '  ', 'base-engrave') : '';
+  const ink = eng || baseCut || baseEng;
+  const docW = baseCut || baseEng ? +(paperW * 2 + gap).toFixed(3) : paperW;
+  const note = [
+    eng ? ' — layer "engrave" = label artwork, mark it or ignore it' : '',
+    baseCut ? ' — layer "base" = the contrast base sheet, cut it from the second colour and glue the top sheet on' : '',
+  ].join('');
   return new Blob([
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<!-- 2.5D v${APP_VERSION}${eng ? ' — layer "engrave" = label artwork, mark it or ignore it' : ''} -->\n` +
-    `<svg xmlns="http://www.w3.org/2000/svg"${eng ? ' xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"' : ''} ` +
-    `width="${paperW}mm" height="${paperH}mm" ` +
-    `viewBox="0 0 ${paperW} ${paperH}">\n` +
+    `<!-- 2.5D v${APP_VERSION}${note} -->\n` +
+    `<svg xmlns="http://www.w3.org/2000/svg"${ink ? ' xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"' : ''} ` +
+    `width="${docW}mm" height="${paperH}mm" ` +
+    `viewBox="0 0 ${docW} ${paperH}">\n` +
     `  <path d="${d}" fill="#dfe6ee" fill-rule="evenodd" stroke="#111" stroke-width="0.2"/>\n` +
     eng +
+    baseCut +
+    baseEng +
     `</svg>\n`,
   ], { type: 'image/svg+xml' });
 }
 
 // Label glyphs as filled outlines, never <text>: the machine then needs no
 // font installed, and what you saw in the app is what gets marked.
-function engraveLayer(loops, indent = '  ') {
+function engraveLayer(loops, indent = '  ', id = 'engrave') {
   const d = loops.filter(l => l && l.length > 1).map(l =>
     'M ' + l.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' L ') + ' Z').join(' ');
   if (!d) return '';
-  return `${indent}<g id="engrave" inkscape:groupmode="layer" inkscape:label="engrave">\n` +
+  return `${indent}<g id="${id}" inkscape:groupmode="layer" inkscape:label="${id}">\n` +
     `${indent}  <path d="${d}" fill="#1a7f4b" fill-rule="evenodd" stroke="none"/>\n` +
     `${indent}</g>\n`;
 }
@@ -184,8 +207,51 @@ export function downloadBlob(blob, filename) {
 // column number) and marked with its seam edges, so it reads as a map of
 // the drawer. Cut one tile per bed load by selecting it in the laser app.
 // Tiles are true scale; the label/seam marks sit on their own layer group.
+//
+// opts.base = a second tile set (the contrast base of a layered build). It is
+// drawn under the top grid in its own `base`, `base-marks` and `base-engrave`
+// layer groups. The base is split on the top sheet's seams and carries no
+// puzzle tabs (PRD Part D, open question 2), so tile A1 of the base is the
+// same rectangle as tile A1 of the top and the two glue up square.
 export function toTiledSVG(tiles, opts = {}) {
-  const { gap = 10, name = 'layout' } = opts;
+  const { gap = 10, name = 'layout', base = null } = opts;
+  const top = tileGrid(tiles, gap);
+  const cut = [], marks = [], engrave = [];
+  emitTiles(tiles, top, 0, 0, { cut, marks, engrave }, '');
+  const baseCut = [], baseMarks = [], baseEngrave = [];
+  let totalW = top.totalW, totalH = top.totalH;
+  if (base && base.length) {
+    const bg = tileGrid(base, gap);
+    const dy = top.totalH + gap * 3;
+    emitTiles(base, bg, 0, dy, { cut: baseCut, marks: baseMarks, engrave: baseEngrave },
+      ' base', '#eef1e6');
+    totalW = Math.max(totalW, bg.totalW);
+    totalH = dy + bg.totalH;
+  }
+  const layer = (id, body) => body.length
+    ? `<g id="${id}" inkscape:groupmode="layer" inkscape:label="${id}">\n${body.join('\n')}\n</g>\n` : '';
+  return new Blob([
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+    `<!-- 2.5D v${APP_VERSION} — ${name}: ${tiles.length} tiles (${top.cols} × ${top.rows}), true scale mm. ` +
+    `Layer "cut" = outlines; layer "marks" = tile IDs + seam edges (reference only); ` +
+    `layer "engrave" = label artwork as outlines, no font needed.` +
+    (baseCut.length ? ` Layers "base"/"base-marks"/"base-engrave" = the contrast base sheet, same seams, no tabs.` : '') +
+    ` -->\n` +
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" ` +
+    `width="${totalW.toFixed(3)}mm" height="${totalH.toFixed(3)}mm" viewBox="0 0 ${totalW.toFixed(3)} ${totalH.toFixed(3)}">\n` +
+    `<g id="cut" inkscape:groupmode="layer" inkscape:label="cut">\n${cut.join('\n')}\n</g>\n` +
+    `<g id="marks" inkscape:groupmode="layer" inkscape:label="marks">\n${marks.join('\n')}\n</g>\n` +
+    layer('engrave', engrave) +
+    layer('base', baseCut) +
+    layer('base-marks', baseMarks) +
+    layer('base-engrave', baseEngrave) +
+    `</svg>\n`,
+  ], { type: 'image/svg+xml' });
+}
+
+// Where each tile of one grid sits on the sheet: column widths and row
+// heights from the widest / tallest tile in each, with a gap between.
+function tileGrid(tiles, gap) {
   const cols = Math.max(...tiles.map(t => t.col)) + 1;
   const rows = Math.max(...tiles.map(t => t.row)) + 1;
   const colW = new Array(cols).fill(0), rowH = new Array(rows).fill(0);
@@ -200,26 +266,31 @@ export function toTiledSVG(tiles, opts = {}) {
   acc = 0;
   for (let r = 0; r < rows; r++) { rowY[r] = acc; acc += rowH[r] + gap; }
   const totalH = acc - gap;
+  return { cols, rows, colX, rowY, totalW, totalH };
+}
 
+// One grid of tiles into the cut / marks / engrave sinks, offset by dx, dy.
+// `suffix` distinguishes the base tiles in their printed ID.
+function emitTiles(tiles, grid, dx, dy, sink, suffix, fill = '#dfe6ee') {
+  const { cols, rows, colX, rowY } = grid;
   const loopD = pts => pts.length < 2 ? '' :
     'M ' + pts.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' L ') + ' Z';
-  const cut = [], marks = [], engrave = [];
   for (const t of tiles) {
-    const ox = colX[t.col], oy = rowY[t.row];
+    const ox = dx + colX[t.col], oy = dy + rowY[t.row];
     for (const l of (t.marks || [])) {
       if (!l || l.length < 2) continue;
-      engrave.push(`  <path transform="translate(${ox.toFixed(3)},${oy.toFixed(3)})" ` +
+      sink.engrave.push(`  <path transform="translate(${ox.toFixed(3)},${oy.toFixed(3)})" ` +
         `d="M ${l.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' L ')} Z" ` +
         `fill="#1a7f4b" fill-rule="evenodd" stroke="none"/>`);
     }
     const d = [...t.slabs, ...t.holes].map(loopD).join(' ');
-    cut.push(`  <path transform="translate(${ox.toFixed(3)},${oy.toFixed(3)})" d="${d}" ` +
-      `fill="#dfe6ee" fill-rule="evenodd" stroke="#111" stroke-width="0.2"/>`);
-    const label = `${String.fromCharCode(65 + t.row)}${t.col + 1}`;
-    marks.push(`  <text x="${(ox + 4).toFixed(3)}" y="${(oy + 8).toFixed(3)}" ` +
+    sink.cut.push(`  <path transform="translate(${ox.toFixed(3)},${oy.toFixed(3)})" d="${d}" ` +
+      `fill="${fill}" fill-rule="evenodd" stroke="#111" stroke-width="0.2"/>`);
+    const label = `${String.fromCharCode(65 + t.row)}${t.col + 1}${suffix}`;
+    sink.marks.push(`  <text x="${(ox + 4).toFixed(3)}" y="${(oy + 8).toFixed(3)}" ` +
       `font-family="system-ui, sans-serif" font-size="6" fill="#c33">${label} — ${t.w.toFixed(0)}×${t.h.toFixed(0)} mm</text>`);
     // Dashed seam edges: which sides of this tile butt against a neighbour.
-    const seam = (x1, y1, x2, y2) => marks.push(
+    const seam = (x1, y1, x2, y2) => sink.marks.push(
       `  <line x1="${(ox + x1).toFixed(3)}" y1="${(oy + y1).toFixed(3)}" x2="${(ox + x2).toFixed(3)}" y2="${(oy + y2).toFixed(3)}" ` +
       `stroke="#c33" stroke-width="0.3" stroke-dasharray="2 2"/>`);
     if (t.col > 0) seam(0, 0, 0, t.h);
@@ -227,18 +298,4 @@ export function toTiledSVG(tiles, opts = {}) {
     if (t.row > 0) seam(0, 0, t.w, 0);
     if (t.row < rows - 1) seam(0, t.h, t.w, t.h);
   }
-  return new Blob([
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<!-- 2.5D v${APP_VERSION} — ${name}: ${tiles.length} tiles (${cols} × ${rows}), true scale mm. ` +
-    `Layer "cut" = outlines; layer "marks" = tile IDs + seam edges (reference only); ` +
-    `layer "engrave" = label artwork as outlines, no font needed. -->\n` +
-    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" ` +
-    `width="${totalW.toFixed(3)}mm" height="${totalH.toFixed(3)}mm" viewBox="0 0 ${totalW.toFixed(3)} ${totalH.toFixed(3)}">\n` +
-    `<g id="cut" inkscape:groupmode="layer" inkscape:label="cut">\n${cut.join('\n')}\n</g>\n` +
-    `<g id="marks" inkscape:groupmode="layer" inkscape:label="marks">\n${marks.join('\n')}\n</g>\n` +
-    (engrave.length
-      ? `<g id="engrave" inkscape:groupmode="layer" inkscape:label="engrave">\n${engrave.join('\n')}\n</g>\n`
-      : '') +
-    `</svg>\n`,
-  ], { type: 'image/svg+xml' });
 }

@@ -186,6 +186,24 @@ const bboxOf = pts => {
   return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
 };
 
+// Area centroid of a closed loop — where a label sits when it goes INSIDE the
+// pocket silhouette. The bbox centre is the fallback for a degenerate loop:
+// a sliver still gets a label rather than a NaN.
+const centroidOf = pts => {
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i], q = pts[(i + 1) % pts.length];
+    const f = p.x * q.y - q.x * p.y;
+    a += f; cx += (p.x + q.x) * f; cy += (p.y + q.y) * f;
+  }
+  if (Math.abs(a) < 1e-9) {
+    const bb = bboxOf(pts);
+    return { x: (bb.minX + bb.maxX) / 2, y: (bb.minY + bb.maxY) / 2 };
+  }
+  a *= 0.5;
+  return { x: cx / (6 * a), y: cy / (6 * a) };
+};
+
 // ---------- multi-tool layout (drawer / toolbox inserts) ----------
 
 // The text engraved or embossed for a placed item. `label` overrides the
@@ -266,6 +284,12 @@ export const LABEL_DEFAULTS = {
 // items + their pockets (from layoutPockets) -> placed label geometry in
 // layout mm. opts.extra carries free-floating layout labels. Returns [] when
 // labelling is off, so an unlabelled layout costs nothing downstream.
+//
+// opts.inside puts each tool's label INSIDE its own pocket footprint, centred
+// on the pocket's centroid. That is illegal on a pocket insert (two recesses
+// on one face cannot nest) and is the whole point of a layered build, where
+// the label is cut into the flat base and read through the silhouette (PRD
+// Part D). Either way an explicit drag (item.labelAt) still wins.
 export function layoutLabelGeometry(items, pockets, opts = {}) {
   const o = { ...LABEL_DEFAULTS, ...opts };
   const out = [];
@@ -276,16 +300,20 @@ export function layoutLabelGeometry(items, pockets, opts = {}) {
     if (!text || !pocket) return;
     const h = Math.max(0.5, item.labelHeight || o.height);
     const rot = o.follow ? (item.rot || 0) : 0;
-    // Auto-placement: centred under the pocket, clear of it by the margin.
+    // Auto-placement: on the pocket's centroid when the label goes inside it,
+    // otherwise centred under the pocket and clear of it by the margin.
     // Recomputed from the live pocket, so it tracks the tool as it moves and
     // rotates until the user drags it, which stores an explicit offset.
     const bb = bboxOf(pocket);
     const at = item.labelAt
       ? { x: item.x + item.labelAt.dx, y: item.y + item.labelAt.dy }
+      : o.inside
+      ? centroidOf(pocket)
       : { x: (bb.minX + bb.maxX) / 2, y: bb.maxY + o.margin + h / 2 };
     const loops = labelLoops(text, at.x, at.y, h, { rot, font: o.font, mirror: o.mirror });
     if (!loops.length) return;
-    out.push({ src: 'item', i, text, loops, bounds: labelBounds(loops), at, rot, height: h, auto: !item.labelAt });
+    out.push({ src: 'item', i, text, loops, bounds: labelBounds(loops), at, rot, height: h,
+      auto: !item.labelAt, inside: !!o.inside });
   });
   (o.extra || []).forEach((L, j) => {
     const text = String((L && L.text) || '').trim();
@@ -294,8 +322,10 @@ export function layoutLabelGeometry(items, pockets, opts = {}) {
     const loops = labelLoops(text, L.x, L.y, h,
       { rot: L.rot || 0, font: L.font || o.font, mirror: !!L.mirror });
     if (!loops.length) return;
+    // Free-floating layout labels ("TOP DRAWER") name the drawer, not a tool,
+    // so they stay on the sheet you can see whatever the tool labels do.
     out.push({ src: 'layout', i: j, text, loops, bounds: labelBounds(loops),
-      at: { x: L.x, y: L.y }, rot: L.rot || 0, height: h, auto: false });
+      at: { x: L.x, y: L.y }, rot: L.rot || 0, height: h, auto: false, inside: false });
   });
   return out;
 }
@@ -337,7 +367,9 @@ function clipArea(subject, clip, type) {
 // Why a label cannot be cut as placed. Returns [] when every label is fine.
 // Never throws and never mutates: a label that fails is reported and left
 // where the user put it, flagged, rather than being auto-shrunk or truncated
-// (labelling PRD, Q5). Each issue is { at, src, i, kind, detail }.
+// (labelling PRD, Q5). Each issue is { at, src, i, kind, detail }. Kinds:
+// 'tooSmall', 'border', 'pocket', 'label', and — for a label placed inside
+// its own pocket on a layered base — 'covered'.
 export function layoutLabelConflicts(containerOuter, pockets, placed, opts = {}) {
   const o = { ...LABEL_DEFAULTS, ...opts };
   const issues = [];
@@ -360,9 +392,21 @@ export function layoutLabelConflicts(containerOuter, pockets, placed, opts = {})
     for (let j = 0; j < pockets.length; j++) {
       const p = pockets[j] && pockets[j].pocket;
       if (!p) continue;
+      // A base-layer label sits inside its OWN pocket on purpose — that is
+      // the shadow-board label. Any OTHER pocket is still a clash.
+      if (L.inside && L.src === 'item' && j === L.i) continue;
       if (clipArea(boxes[k], p, CL().ClipType.ctIntersection) > 0.05) {
         issues.push({ ...id, kind: 'pocket', detail: `overlaps pocket ${j + 1}` });
         break;
+      }
+    }
+    // What spoils an inside label instead is spilling out of the silhouette:
+    // the top sheet covers whatever is not in the hole.
+    if (L.inside && L.src === 'item') {
+      const own = pockets[L.i] && pockets[L.i].pocket;
+      if (own && clipArea(boxLoop(L.bounds), own, CL().ClipType.ctDifference) > 0.05) {
+        issues.push({ ...id, kind: 'covered',
+          detail: `sticks out of pocket ${L.i + 1} — the top sheet hides it` });
       }
     }
     for (let j = k + 1; j < placed.length; j++) {
@@ -412,19 +456,51 @@ export function layoutConflicts(containerOuter, pockets, border) {
   return { collisions, escaped };
 }
 
+// A sheet thickness in mm: any real number is clamped to the thinnest sheet
+// worth cutting, and only a missing one falls back to the default. `|| dflt`
+// would read 0 and NaN as "not given" while the layout panel reads them as
+// the clamp, and then the panel would describe a sheet the build never used.
+const sheetMM = (v, dflt) => Math.max(0.5, Number.isFinite(v) ? v : dflt);
+
 // Drawer / toolbox insert: the container outline extruded as a slab with one
 // pocket recess per placed tool, each at its own depth.
 //
 // container: { outer } in layout mm; items: [{ outer, holes, circles, x, y,
-// rot, depth }]; opts: { clearance, floor, border, defaultDepth }.
-// Returns { positions, indices, stats, template } or null. The layout must
-// be conflict-free (run layoutConflicts first) — conflicts return null with
-// a reason in `reason`.
+// rot, depth }]; opts: { clearance, floor, border, defaultDepth,
+// construction, sheet, baseSheet }.
+//
+// `construction` picks how the insert is made (PRD Part D):
+//   'pocket'  (default) — the routed / printed slab: a floor under every
+//                         tool, each pocket recessed to its own depth.
+//   'through'           — the laser-cut sheet: every pocket is a hole clean
+//                         through it, so the thickness IS `sheet` and the
+//                         per-tool depths have nothing to control.
+//   'layered'           — that same cut sheet glued onto a plain slab of a
+//                         contrasting colour, `baseSheet` thick. Two parts,
+//                         so a missing tool reads as a bright silhouette.
+// All three are watertight shells out of buildSolid; the cut constructions
+// pass the pockets as traced holes instead of as recesses, which is the same
+// route the single-tool foam insert already takes at floor 0. The layered
+// build is two separate shells stacked in z, never a boolean. No CSG.
+//
+// Returns { positions, indices, stats, parts, template } or null. `parts` is
+// always present: one entry for a single-piece build, two ('top' then 'base')
+// for 'layered', each its own watertight mesh, and positions/indices at the
+// top level are every part merged for the preview and for callers that still
+// want one mesh. The layout must be conflict-free (run layoutConflicts
+// first) — conflicts return null with a reason in `reason`.
 export function buildLayoutInsert(container, items, opts = {}) {
   const { clearance = 0.5, floor = 3, border = 5, defaultDepth = 5, labels = [] } = opts;
   if (!container || !container.outer || container.outer.length < 3) return null;
   if (!items || !items.length) return { reason: 'empty' };
   const warnings = [];
+  const through = opts.construction === 'through';
+  const layered = opts.construction === 'layered';
+  // Both laser constructions cut the pockets clean through the top sheet;
+  // 'layered' just puts a second, plain sheet under it.
+  const cutThrough = through || layered;
+  const sheet = sheetMM(opts.sheet, 6);
+  const baseSheet = sheetMM(opts.baseSheet, 3);
 
   const pockets = layoutPockets(items, clearance);
   const { collisions, escaped } = layoutConflicts(container.outer, pockets, border);
@@ -434,14 +510,38 @@ export function buildLayoutInsert(container, items, opts = {}) {
 
   const depths = items.map(it => Math.max(0.3, it.depth || it.thickness || defaultDepth));
   const maxDepth = Math.max(...depths);
-  const thickness = Math.max(0.5, floor) + maxDepth; // layouts always keep a floor
-  if (floor < 1) warnings.push(`Thin insert floor (${Math.max(0.5, floor).toFixed(1)} mm).`);
+  // A pocket insert keeps a floor; a cut sheet has none, and its thickness is
+  // whatever sheet went on the laser bed.
+  const topT = cutThrough ? sheet : Math.max(0.5, floor) + maxDepth;
+  // Assembled height: the base carries the top sheet, so the stack is as
+  // thick as both together and the top sheet starts at the base's top face.
+  const thickness = layered ? topT + baseSheet : topT;
+  if (cutThrough) {
+    const what = layered ? 'Layered build' : 'Through cut';
+    const which = layered ? 'top sheet' : 'sheet';
+    warnings.push(`${what}: per-tool pocket depths are ignored — every pocket is cut clean through the ${sheet.toFixed(1)} mm ${which}.`);
+    // Open question 1 takes its recommendation: one top sheet, no stacking.
+    // A tool deeper than it still builds, and Sam gets told it will stand proud.
+    if (maxDepth > sheet + 1e-6) {
+      warnings.push(`The deepest tool wants ${maxDepth.toFixed(1)} mm but the ${which} is ${sheet.toFixed(1)} mm — it will stand proud. Use a thicker sheet, or stack a second one by hand.`);
+    }
+    if (pockets.some(p => p.pillars && p.pillars.length)) {
+      warnings.push(`${what}: support pillars would float free and were dropped.`);
+    }
+  } else if (floor < 1) {
+    warnings.push(`Thin insert floor (${Math.max(0.5, floor).toFixed(1)} mm).`);
+  }
 
   const none = { mode: 'none', size: 0 };
-  const recesses = pockets.map((p, i) => ({
+  const recesses = cutThrough ? [] : pockets.map((p, i) => ({
     islands: [{ outer: p.pocket, holes: p.pillars }],
     depth: depths[i], face: 'top',
   }));
+  // Labels marked `layer: 'base'` are engraved into the contrast sheet's top
+  // face, which is flat and has nothing else cut into it — so a label may sit
+  // inside a pocket footprint there and be read through the silhouette. Only
+  // a layered build has that sheet; anywhere else the label stays on top.
+  const baseRecesses = [];
   // A debossed label IS a recess: glyph islands cut into the slab's top face,
   // the same machinery the pockets already use, so no new mesh capability and
   // the watertight-by-construction guarantee carries over unchanged. This is
@@ -454,22 +554,65 @@ export function buildLayoutInsert(container, items, opts = {}) {
     }
     const islands = glyphIslands(L.loops);
     if (!islands.length) { warnings.push('A label produced no geometry and was skipped.'); continue; }
-    const d = Math.min(Math.max(0.05, L.size || 0.6), Math.max(0.5, floor) * 0.8);
-    recesses.push({ islands, depth: d, face: L.face === 'bottom' ? 'bottom' : 'top' });
+    const onBase = layered && L.layer === 'base';
+    // An engraved label may not eat the part it is cut into: a pocket insert
+    // has only its floor to spare, a cut sheet half its thickness.
+    const cap = onBase ? baseSheet * 0.5
+      : cutThrough ? sheet * 0.5
+      : Math.max(0.5, floor) * 0.8;
+    const d = Math.min(Math.max(0.05, L.size || 0.6), cap);
+    const face = L.face === 'bottom' ? 'bottom' : 'top';
+    (onBase ? baseRecesses : recesses).push({ islands, depth: d, face });
   }
 
-  const mesh = buildSolid(container.outer, [], [], {
-    thickness, zBase: 0, top: none, bottom: none, recesses,
+  // The pockets are holes in a cut sheet and recesses in a pocket insert.
+  const top = buildSolid(container.outer, cutThrough ? pockets.map(p => p.pocket) : [], [], {
+    thickness: topT, zBase: layered ? baseSheet : 0, top: none, bottom: none, recesses,
   });
-  if (!mesh) return null;
+  if (!top) return null;
+  const named = (name, m) => ({ name, positions: m.positions, indices: m.indices, stats: m.stats });
+  const parts = [named(layered ? 'top' : 'insert', top)];
+  let mesh = top;
+  if (layered) {
+    // The contrast base: the container outline as a plain slab, no pockets.
+    // Its own shell, stacked under the top sheet rather than fused to it, so
+    // each part exports as its own cuttable / printable file.
+    const base = buildSolid(container.outer, [], [], {
+      thickness: baseSheet, zBase: 0, top: none, bottom: none, recesses: baseRecesses,
+    });
+    if (!base) return null;
+    parts.push(named('base', base));
+    // Merged for the preview and for callers that still want one mesh. Each
+    // part keeps its own closed shell; they simply meet face to face at the
+    // glue line, which is what the two cut sheets do in the drawer.
+    const merged = mergeParts([top, base]);
+    mesh = {
+      ...merged,
+      stats: {
+        ...top.stats,
+        triangles: top.stats.triangles + base.stats.triangles,
+        islands: top.stats.islands + base.stats.islands,
+        sizeZ: thickness, zBase: 0, zTop: thickness,
+        warnings: [...(top.stats.warnings || []), ...(base.stats.warnings || [])],
+      },
+    };
+  }
   mesh.stats.warnings = [...warnings, ...(mesh.stats.warnings || [])];
+  mesh.stats.construction = layered ? 'layered' : through ? 'through' : 'pocket';
   const bb = bboxOf(container.outer);
-  mesh.stats.slab = { w: bb.w, h: bb.h, thickness, pocketDepth: maxDepth };
+  mesh.stats.slab = {
+    w: bb.w, h: bb.h, thickness,
+    pocketDepth: cutThrough ? topT : maxDepth,
+    top: topT, base: layered ? baseSheet : 0,
+  };
+  mesh.stats.baseLabels = baseRecesses.length;
   return {
     ...mesh,
+    parts,
     template: {
+      construction: mesh.stats.construction,
       slab: container.outer,
-      pockets: pockets.map(p => ({ pocket: p.pocket, pillars: p.pillars })),
+      pockets: pockets.map(p => ({ pocket: p.pocket, pillars: cutThrough ? [] : p.pillars })),
       origin: { x: bb.minX, y: bb.minY }, w: bb.w, h: bb.h,
     },
   };
@@ -1185,6 +1328,9 @@ function planSeams(L, B, spans, lastB = B, minCell = 1) {
 // Returns { tiles: [{ col, row, x0, y0, w, h, slabs, holes }], nx, ny,
 // seamsX, seamsY, crossings } with tile loops in TILE-LOCAL mm (origin at
 // the tile's top-left), or null when the layout already fits the bed.
+// opts.seams = { x: [...], y: [...] } reuses an existing seam plan instead of
+// planning a fresh one, which is how the contrast base of a layered build is
+// split on exactly the seams the top sheet was split on.
 export function splitTiles(template, bedW, bedH, opts = {}) {
   if (!template || !(bedW > 10) || !(bedH > 10)) return null;
   const { origin, w, h } = template;
@@ -1216,8 +1362,12 @@ export function splitTiles(template, bedW, bedH, opts = {}) {
     for (const p of loop) { lo = Math.min(lo, p[axis]); hi = Math.max(hi, p[axis]); }
     return [lo, hi];
   };
-  const px = planSeams(w, giverW, pockets.map(p => spanOf(p.pocket, 'x')), bedW, minCell);
-  const py = planSeams(h, giverH, pockets.map(p => spanOf(p.pocket, 'y')), bedH, minCell);
+  const given = opts.seams;
+  const reuse = axis => ({ n: given[axis].length + 1, seams: given[axis].slice() });
+  const px = given ? reuse('x')
+    : planSeams(w, giverW, pockets.map(p => spanOf(p.pocket, 'x')), bedW, minCell);
+  const py = given ? reuse('y')
+    : planSeams(h, giverH, pockets.map(p => spanOf(p.pocket, 'y')), bedH, minCell);
   const xs = [0, ...px.seams, w], ys = [0, ...py.seams, h];
 
   const tiles = [];

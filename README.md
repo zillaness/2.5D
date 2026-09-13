@@ -546,6 +546,50 @@ Accuracy on synthetic test images is ~0.1 mm; on real photos it's limited by
 camera distortion, shadowing and how flat the paper is — expect a few tenths
 of a millimetre with a careful photo.
 
+### Laser-cut foam constructions
+
+A router cuts a pocket into foam. A laser cuts through it. Step 4's **Insert**
+options let you say which machine you are feeding, with a **Construction**
+select:
+
+- **Pocket** (the default, and what every older project loads as). A slab with
+  the tools recessed into the top face, each to its own depth. This is the one
+  to use for a CNC router or a 3D printer.
+- **Through cut.** One sheet, every pocket a hole straight through it. The tool
+  sits on whatever the drawer is lined with. **Top sheet (mm)** is the whole
+  thickness.
+- **Layered.** A through-cut top sheet glued onto a plain base sheet in a
+  contrasting colour, which is the shadow-board look: a missing tool shows up
+  as a bright silhouette. **Base sheet (mm)** sets the second sheet.
+
+A laser cuts the whole depth of the sheet, so per-tool depths mean nothing
+here. Both cut constructions ignore them and say so in the panel, and if a tool
+is deeper than the top sheet the warning tells you it will stand proud. 2.5D
+does not stack sheets for you; pick a thicker sheet or glue up a second one by
+hand.
+
+**Labels on the base.** With two layers, the base has no pockets, so a label
+recess can go anywhere on it, including inside the pocket footprint. That is
+the classic shadow-board label, and in a layered build it is the default: tool
+labels centre themselves in their own silhouette and read through the hole.
+Untick **Labels on the base, inside the pocket** to put them back beside the
+pockets on the top sheet. Free-floating drawer labels stay on the top sheet
+either way, since a label on the base under solid foam would never be seen. If
+a label is too big for the silhouette it sits in, the label readout says the
+top sheet would hide it rather than letting it disappear quietly.
+
+**Exports.** A layered build is two cut parts, so **Export STL** writes two
+files, `<name>-top-2p5d.stl` and `<name>-base-2p5d.stl`, each watertight on its
+own; load them together and you see the glued stack. **Export cut template
+(SVG)** puts both sheets in one drawing at true scale: the top sheet as usual,
+the base beside it in a `base` layer group, with any base engraving in
+`base-engrave`. Cut the first from your foam, the second from the contrast
+colour, then glue. When a laser bed is set and the drawer is bigger than it,
+the tiled template adds a second grid of tiles below the first for the base.
+Those base tiles are split on exactly the same seams as the top and carry no
+puzzle tabs, so tile A1 of the base is the same rectangle as tile A1 of the
+top and the glue holds the sandwich together.
+
 ## How it works
 
 - `js/homography.js` — 4-point DLT homography; inverse-mapped bilinear
