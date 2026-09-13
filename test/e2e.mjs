@@ -4538,6 +4538,44 @@ const nestFix = await page.evaluate(async () => {
     { x: 60, y: 60 }, { x: 60, y: 200 }, { x: 0, y: 200 }];
   const lRes = nestLayout(lLoop, [mk('big slab', rect(150, 150))], uOpts);
 
+  // 11. A container loop that does not reach its own bounding box corner.
+  //     Every candidate anchor after the first is derived from an
+  //     already-placed pocket, so the one seeded position has to be foam
+  //     rather than thin air or nothing is ever placed at all. It is thin air
+  //     for a tray traced a degree or two off the paper's axis, for a tray
+  //     with large corner radii, for an oval tote, and for an L whose bite is
+  //     at the top left. Seeded from the bounding box corner alone the FIRST
+  //     tool fails there in every allowed rotation, no second anchor is ever
+  //     derived, and a completely empty drawer comes back with every tool
+  //     marked 'noRoom', which the module's own probes have just disproved.
+  //     Each container here is empty and roomy, so each must take all three.
+  const turn = (loop, deg, cx, cy) => {
+    const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    return loop.map(p => ({ x: cx + (p.x - cx) * c - (p.y - cy) * s,
+      y: cy + (p.x - cx) * s + (p.y - cy) * c }));
+  };
+  const ovalLoop = (cx, cy, w, h, n) => {
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      const t = 2 * Math.PI * k / n;
+      out.push({ x: cx + w / 2 * Math.cos(t), y: cy + h / 2 * Math.sin(t) });
+    }
+    return out;
+  };
+  const offItems = [mk('a', rect(60, 30)), mk('b', rect(50, 25)), mk('c', rect(40, 40))];
+  const offOpts = { minWeb: 4, border: 5, clearance: 0.5, rotationStep: 15, notchClear: 0 };
+  const off = [
+    ['traced 2 deg off axis', turn(roundedRect(275, 190, 550, 380, 6), 2, 275, 190)],
+    ['90 mm corner radii', roundedRect(275, 190, 550, 380, 90)],
+    ['oval tote', ovalLoop(150, 100, 300, 200, 128)],
+    ['L with the bite at the top left', [{ x: 60, y: 0 }, { x: 200, y: 0 },
+      { x: 200, y: 200 }, { x: 0, y: 200 }, { x: 0, y: 60 }, { x: 60, y: 60 }]],
+  ].map(([label, loop]) => {
+    const r = nestLayout(loop, offItems, offOpts);
+    const cf = clash(loop, offItems, r, offOpts.border);
+    return { label, n: r.placements.length, clash: cf[0] + cf[1] };
+  });
+
   return {
     stack: { n: stack.placements.length, gap: stackGap, clash: clash(stackC, stackItems, stack) },
     tuck: {
@@ -4573,7 +4611,11 @@ const nestFix = await page.evaluate(async () => {
       flipLeft: uFlipRes.unplaced.length,
       clash: clash(uLoop, uItems, uRes),
       control: lRes.unplaced.map(u => u.reason).join(','),
+      legs: uRes.placements.filter(p => p.x < 70).length +
+        ',' + uRes.placements.filter(p => p.x > 130).length,
     },
+    off: off.map(r => `${r.label} ${r.n}/${offItems.length} placed, ${r.clash} conflicts`),
+    offOk: off.every(r => r.n === offItems.length && r.clash === 0),
   };
 });
 
@@ -4617,11 +4659,19 @@ check('bounded restarts shuffle the equal-area group and still reproduce',
   nestFix.eq.passes > 1 && nestFix.eq.n === 4 && nestFix.eq.same,
   `${nestFix.eq.passes} distinct passes, identical ${nestFix.eq.same}`);
 check('a tool that fits one leg of a U-shaped tote is noRoom, never tooLarge',
-  nestFix.tote.solo === '1,1,1,1' && nestFix.tote.left === 3 &&
-  nestFix.tote.reasons === 'noRoom,noRoom,noRoom' &&
-  nestFix.tote.flipLeft === 3 && nestFix.tote.flip === 'noRoom,noRoom,noRoom' &&
+  nestFix.tote.solo === '1,1,1,1' && nestFix.tote.left === 2 &&
+  nestFix.tote.reasons === 'noRoom,noRoom' &&
+  nestFix.tote.flipLeft === 2 && nestFix.tote.flip === 'noRoom,noRoom' &&
   nestFix.tote.clash[0] === 0 && nestFix.tote.clash[1] === 0,
   `${nestFix.tote.left} left as [${nestFix.tote.reasons}], flipped [${nestFix.tote.flip}], each fits alone ${nestFix.tote.solo}`);
+// And it fills BOTH legs, which is the placement half of the same story: the
+// right leg is only reachable from an anchor the container loop supplies, so
+// while the seed was the bounding box corner alone one leg of this tote was
+// unreachable and the tool that belonged in it was reported as 'noRoom'.
+check('and the tote is packed leg and leg, not one leg and a pile of noRoom',
+  nestFix.tote.legs === '1,1', `left leg / right leg placements ${nestFix.tote.legs}`);
+check('a container that never reaches its own bounding box corner still nests',
+  nestFix.offOk, nestFix.off.join('; '));
 check('and a slab that fits neither leg of an L-shaped tray is still tooLarge',
   nestFix.tote.control === 'tooLarge', nestFix.tote.control);
 
@@ -5035,6 +5085,24 @@ const nestRef = await page.evaluate(async () => {
   const nestCf = layoutConflicts(drawer, nestGeo, opts.border);
   const nb = unionBB(nestGeo.map(g => g.pocket));
 
+  // Criterion 2 on the same drawer and the same twelve tools, with the
+  // container traced rather than typed in: a tray photographed on a sheet of
+  // paper comes back a degree or two off axis, and that is the drawer the
+  // library hands the nester. Nothing about the foam has changed, so nothing
+  // about the answer may either. Two degrees of skew used to take this
+  // fixture from 12 placed to none at all, every tool reported 'noRoom' in a
+  // completely empty drawer, because the only seeded anchor was the inner
+  // bounding box corner and a skewed tray does not reach it.
+  const skewDeg = 2, sa = skewDeg * Math.PI / 180;
+  const skewC = drawer.map(p => ({
+    x: DW / 2 + (p.x - DW / 2) * Math.cos(sa) - (p.y - DH / 2) * Math.sin(sa),
+    y: DH / 2 + (p.x - DW / 2) * Math.sin(sa) + (p.y - DH / 2) * Math.cos(sa),
+  }));
+  const skewRes = nestLayout(skewC, items, opts);
+  const skewMoved = applyNest(items, skewRes);
+  const skewCf = layoutConflicts(skewC,
+    layoutPockets(skewRes.placements.map(p => skewMoved[p.i]), opts.clearance), opts.border);
+
   // Success criterion 6, kept deliberately loose. The PRD's budget is 2 s for
   // 30 items on a mid-range laptop; a headless browser in a container is not
   // that, so this only has to catch the difference between a nester that runs
@@ -5087,6 +5155,11 @@ const nestRef = await page.evaluate(async () => {
       area: (nb.maxX - nb.minX) * (nb.maxY - nb.minY),
       names: res.unplaced.map(u => u.name).join(','),
       rots: Array.from(new Set(res.placements.map(p => p.rot))).sort((a, b) => a - b).join(',') },
+    skew: { placed: skewRes.placements.length, left: skewRes.unplaced.length,
+      clash: skewCf.collisions.size + skewCf.escaped.size,
+      names: skewRes.unplaced.map(u => u.name).join(','),
+      reasons: Array.from(new Set(skewRes.unplaced.map(u => u.reason))).join(','),
+      deg: skewDeg },
     bulk: { placed: bulk.placements.length, ms: Math.round(bulkMs),
       passes: bulk.stats.passes },
     twin: { placed: twin.placements.length, left: twin.unplaced.length,
@@ -5107,6 +5180,9 @@ check('the nester fits all 12 reference tools in the 550 x 380 drawer, conflict-
 check('and uses no more bounding area than the careful hand arrangement',
   nestRef.nest.area <= HAND_AREA + 1e-6,
   `${Math.round(nestRef.nest.area)} mm2 nested (${nestRef.nest.w.toFixed(1)} x ${nestRef.nest.h.toFixed(1)}) vs ${HAND_AREA} by hand, ${(100 - 100 * nestRef.nest.area / HAND_AREA).toFixed(1)}% less`);
+check('the same 12 tools still all place when the drawer is traced 2 degrees off axis',
+  nestRef.skew.placed === 12 && nestRef.skew.left === 0 && nestRef.skew.clash === 0,
+  `${nestRef.skew.placed} placed at ${nestRef.skew.deg} deg of skew, ${nestRef.skew.left} left over (${nestRef.skew.names || 'none'}${nestRef.skew.reasons ? ': ' + nestRef.skew.reasons : ''})`);
 check('30 tools nest without the run running away (criterion 6, generous ceiling)',
   nestRef.bulk.placed === 30 && nestRef.bulk.ms < 8000,
   `${nestRef.bulk.placed} placed in ${nestRef.bulk.ms} ms`);

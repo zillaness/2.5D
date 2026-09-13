@@ -622,6 +622,57 @@ export function nestLayout(containerOuter, items, opts = {}) {
     (Math.abs(p.x - limitBB.minX) < NEST_EPS || Math.abs(p.x - limitBB.maxX) < NEST_EPS) &&
     (Math.abs(p.y - limitBB.minY) < NEST_EPS || Math.abs(p.y - limitBB.maxY) < NEST_EPS));
 
+  // pack_poly seeds its candidate anchors with the sheet's top-left corner,
+  // which is sound for a rectangular sheet and wrong for a container LOOP.
+  // A traced tray sitting a degree off axis on the paper, a tray with large
+  // corner radii, an oval tote, an L whose bite is at the top left: none of
+  // them reach their own bounding box corner, so that one seeded position is
+  // outside the foam. The FIRST item then fails there in every allowed
+  // rotation, and because every other anchor is derived from an
+  // already-placed pocket, no second position is ever generated: nothing is
+  // placed in a completely empty drawer, and every tool comes back 'noRoom'
+  // from probes that have just proved it fits. So seed from the limit LOOP
+  // as well as from its bounding box. A loop's own vertices are positions
+  // that exist whatever shape it is, and settle() slides whatever starts
+  // there back toward the top left, so the pack stays the same one the bbox
+  // corner would have produced wherever that corner is real. A rectangle IS
+  // its bounding box, so the common case keeps exactly one seed and costs
+  // nothing; a traced outline can carry hundreds of vertices, so the seed is
+  // deduplicated and capped, evenly around the loop, at a count that keeps
+  // the candidate list the same order of size as the rotation set.
+  const SEED_CAP = 128;  // vertices sampled off a traced loop
+  const SEED_GRID = 8;   // interior sample columns and rows
+  const seedAnchors = (() => {
+    const out = [], seen = new Set();
+    const add = (x, y) => {
+      const k = `${Math.round(x * 100)},${Math.round(y * 100)}`;
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push([x, y]);
+    };
+    add(limitBB.minX, limitBB.minY);
+    if (!limitIsRect) {
+      const step = Math.max(1, Math.ceil(limit.length / SEED_CAP));
+      for (let k = 0; k < limit.length; k += step) add(limit[k].x, limit[k].y);
+      // A vertex is a point ON the boundary, so it only works where the foam
+      // opens down and to the right of it. It does not on the top edge of a
+      // tray that sits a degree off axis, which is the commonest traced
+      // container there is. So sample the inside as well, coarsely: one
+      // position per cell of a fixed grid over the limit's bounding box.
+      // Cell centres, so this never re-proposes the bbox corner, and coarse
+      // on purpose, because settle() slides a candidate that starts here
+      // back to the top left anyway. Positions that land in a hole or
+      // outside the loop cost one cheap rejection each.
+      for (let gy = 0; gy < SEED_GRID; gy++) {
+        for (let gx = 0; gx < SEED_GRID; gx++) {
+          add(limitBB.minX + (gx + 0.5) * limitBB.w / SEED_GRID,
+            limitBB.minY + (gy + 0.5) * limitBB.h / SEED_GRID);
+        }
+      }
+    }
+    return out;
+  })();
+
   const cache = list.map(() => new Map());
   const variantOf = (i, angle) => {
     const key = String(Math.round(nestNorm(angle) * 1e6));
@@ -756,7 +807,7 @@ export function nestLayout(containerOuter, items, opts = {}) {
       // butting two of them up against each other leaves exactly minWeb of
       // foam. Adding another h on top would overshoot every slot by a web and
       // strand the fourth item of a 2 x 2 pack with nowhere legal to start.
-      const anchors = [[limitBB.minX, limitBB.minY]];
+      const anchors = seedAnchors.slice();
       for (const p of placed) {
         anchors.push([p.bb.maxX, p.bb.minY]);
         anchors.push([p.bb.minX, p.bb.maxY]);
