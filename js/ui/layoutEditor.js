@@ -6,6 +6,44 @@
 import { pointInPolygon } from '../contour.js';
 import { placeLoop, layoutPockets, layoutConflicts, worldToItemLocal } from '../holders.js';
 
+// The build plate as a loop in layout mm. `bed` is { w, h, offset, shape }:
+// `offset` is where the layout's bounding box sits on the plate, so zero puts
+// the layout's top-left corner on the plate's own, and a shape (a saved
+// container outline, for a round or cut-cornered plate) is dropped into that
+// same corner. Exported because the step-4 panel needs the same rectangle
+// for its fit readout, and two copies of this arithmetic would drift.
+export function bedLoop(container, bed) {
+  if (!container || !container.length || !bed || !(bed.w > 0) || !(bed.h > 0)) return null;
+  let minX = Infinity, minY = Infinity;
+  for (const p of container) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); }
+  const off = bed.offset || { x: 0, y: 0 };
+  const x0 = minX - (off.x || 0), y0 = minY - (off.y || 0);
+  const sh = bed.shape && bed.shape.outer;
+  if (sh && sh.length >= 3) {
+    let sx = Infinity, sy = Infinity;
+    for (const p of sh) { sx = Math.min(sx, p.x); sy = Math.min(sy, p.y); }
+    return sh.map(p => ({ x: p.x - sx + x0, y: p.y - sy + y0 }));
+  }
+  return [
+    { x: x0, y: y0 }, { x: x0 + bed.w, y: y0 },
+    { x: x0 + bed.w, y: y0 + bed.h }, { x: x0, y: y0 + bed.h },
+  ];
+}
+
+// Distance from a point to a closed loop's nearest edge, in the loop's units.
+function distToLoop(p, loop) {
+  let best = Infinity;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i], b = loop[(i + 1) % loop.length];
+    const vx = b.x - a.x, vy = b.y - a.y;
+    const len = vx * vx + vy * vy;
+    let t = len > 0 ? ((p.x - a.x) * vx + (p.y - a.y) * vy) / len : 0;
+    t = Math.max(0, Math.min(1, t));
+    best = Math.min(best, Math.hypot(p.x - (a.x + t * vx), p.y - (a.y + t * vy)));
+  }
+  return best;
+}
+
 export class LayoutEditor {
   constructor(canvas, callbacks = {}) {
     this.canvas = canvas;
@@ -18,6 +56,15 @@ export class LayoutEditor {
     this.sel = -1;
     this.view = { scale: 2, ox: 0, oy: 0 };
     this.conflicts = { collisions: new Set(), escaped: new Set() };
+    // Photos inside traces: each item may carry a thumb cropped from the
+    // photo it was traced from. Decoded images are cached by data URL, so a
+    // redraw never re-decodes and a folder of a hundred tools decodes once.
+    this.showPhotos = true;
+    this._thumbs = new Map();
+    // The build plate: { w, h, offset, shape } or null for "no limit". The
+    // offset object is shared with the layout state, so a drag writes through.
+    this.bed = null;
+    this.bedSel = false;
     this._drag = null;
     canvas.addEventListener('pointerdown', e => this._down(e));
     canvas.addEventListener('pointermove', e => this._move(e));
@@ -36,10 +83,33 @@ export class LayoutEditor {
     this.draw();
   }
 
+  // The plate the layout is cut or printed on. Pass null for "no limit".
+  setBed(bed) {
+    this.bed = bed && bed.w > 0 && bed.h > 0 ? bed : null;
+    if (!this.bed) this.bedSel = false;
+  }
+
+  bedLoop() { return this.bed ? bedLoop(this.container, this.bed) : null; }
+
+  // Move the plate itself by (dx, dy) mm. The stored offset is the layout's
+  // position ON the plate, so moving the plate right moves the layout left
+  // across it: the two run opposite by definition.
+  nudgeBed(dx, dy) {
+    if (!this.bed) return false;
+    const off = this.bed.offset || (this.bed.offset = { x: 0, y: 0 });
+    off.x = (off.x || 0) - dx;
+    off.y = (off.y || 0) - dy;
+    this.draw();
+    return true;
+  }
+
   fit() {
     if (!this.container) return;
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of this.container) {
+    // The plate is part of the picture when there is one, so a layout parked
+    // in one corner of a big bed still shows the whole bed.
+    const bl = this.bedLoop();
+    for (const p of bl ? this.container.concat(bl) : this.container) {
       minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
       minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
     }
@@ -67,6 +137,60 @@ export class LayoutEditor {
     const pockets = layoutPockets(this.items, this.clearance);
     this.conflicts = layoutConflicts(this.container, pockets, this.border);
     this._pockets = pockets;
+  }
+
+  // The decoded thumbnail for an item, or null while it is still decoding
+  // (the load handler redraws once) or if it will never decode.
+  _thumbImage(thumb) {
+    if (!thumb || !thumb.dataUrl || typeof Image === 'undefined') return null;
+    const key = thumb.dataUrl;
+    if (this._thumbs.has(key)) {
+      const cached = this._thumbs.get(key);
+      return cached && cached.naturalWidth ? cached : null;
+    }
+    const im = new Image();
+    this._thumbs.set(key, im);
+    im.onload = () => this.draw();
+    im.onerror = () => this._thumbs.set(key, null);
+    im.src = key;
+    return im.naturalWidth ? im : null;
+  }
+
+  // The item's own outline centre: what placeLoop rotates about.
+  _itemCentre(item) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of item.outer) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  }
+
+  // The photo, clipped to the outline and carried through the item's own
+  // rotation and position, drawn at reduced alpha under everything else so
+  // the pocket stroke and the conflict tint stay legible on top of it.
+  _drawPhoto(item) {
+    const im = this._thumbImage(item.thumb);
+    if (!im) return;
+    const c = this._itemCentre(item);
+    const s = this.view.scale;
+    const { ctx } = this;
+    ctx.save();
+    ctx.translate(item.x * s + this.view.ox, item.y * s + this.view.oy);
+    ctx.rotate(((item.rot || 0) * Math.PI) / 180);
+    ctx.scale(s, s);
+    ctx.beginPath();
+    item.outer.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x - c.x, p.y - c.y); else ctx.lineTo(p.x - c.x, p.y - c.y);
+    });
+    ctx.closePath();
+    ctx.clip();
+    const o = (item.thumb.origin && Number.isFinite(item.thumb.origin.x))
+      ? item.thumb.origin : { x: 0, y: 0 };
+    const mpp = item.thumb.mmPerPx;
+    ctx.globalAlpha = 0.85;
+    ctx.drawImage(im, o.x - c.x, o.y - c.y, im.naturalWidth * mpp, im.naturalHeight * mpp);
+    ctx.restore();
   }
 
   _centroid(item) {
@@ -110,19 +234,37 @@ export class LayoutEditor {
         return;
       }
     }
-    // Topmost item under the pointer.
+    // Topmost item under the pointer, found before the plate is offered the
+    // press. Once a layout has to be tiled the plate's edge necessarily runs
+    // through the drawer, and a tool sitting on a seam has to stay selectable
+    // and draggable; the plate keeps every other point of its edge.
+    let hit = -1;
     for (let i = this.items.length - 1; i >= 0; i--) {
-      const placed = placeLoop(this.items[i].outer, this.items[i]);
-      if (pointInPolygon(mm, placed)) {
-        this.sel = i;
-        this._drag = { kind: 'move', idx: i, dx: this.items[i].x - mm.x, dy: this.items[i].y - mm.y };
-        this.canvas.setPointerCapture(e.pointerId);
-        if (this.cb.onSelect) this.cb.onSelect(i);
-        this.draw();
-        return;
-      }
+      if (pointInPolygon(mm, placeLoop(this.items[i].outer, this.items[i]))) { hit = i; break; }
+    }
+    // The plate outline, grabbed anywhere along its edge that is not a tool.
+    const bl = hit < 0 ? this.bedLoop() : null;
+    if (bl && distToLoop(mm, bl) < Math.max(tolPx, 8 / this.view.scale)) {
+      const off = this.bed.offset || (this.bed.offset = { x: 0, y: 0 });
+      this._drag = { kind: 'bed', x0: mm.x, y0: mm.y, ox: off.x || 0, oy: off.y || 0 };
+      this.bedSel = true;
+      this.sel = -1;
+      this.canvas.setPointerCapture(e.pointerId);
+      if (this.cb.onSelect) this.cb.onSelect(-1);
+      this.draw();
+      return;
+    }
+    if (hit >= 0) {
+      this.sel = hit;
+      this.bedSel = false;
+      this._drag = { kind: 'move', idx: hit, dx: this.items[hit].x - mm.x, dy: this.items[hit].y - mm.y };
+      this.canvas.setPointerCapture(e.pointerId);
+      if (this.cb.onSelect) this.cb.onSelect(hit);
+      this.draw();
+      return;
     }
     this.sel = -1;
+    this.bedSel = false;
     if (this.cb.onSelect) this.cb.onSelect(-1);
     this.draw();
   }
@@ -130,6 +272,14 @@ export class LayoutEditor {
   _move(e) {
     if (!this._drag) return;
     const mm = this.screenToMm(e);
+    if (this._drag.kind === 'bed') {
+      // The plate follows the pointer; the offset runs the other way.
+      this.bed.offset.x = this._drag.ox - (mm.x - this._drag.x0);
+      this.bed.offset.y = this._drag.oy - (mm.y - this._drag.y0);
+      this.draw();
+      if (this.cb.onChange) this.cb.onChange(false);
+      return;
+    }
     const it = this.items[this._drag.idx];
     if (!it) return;
     if (this._drag.kind === 'move') {
@@ -172,6 +322,21 @@ export class LayoutEditor {
       ctx.closePath();
     };
 
+    // The build plate, dashed and under the container, so the drawer is seen
+    // sitting on the sheet it will be cut from.
+    const bl = this.bedLoop();
+    if (bl) {
+      loopPath(bl);
+      ctx.fillStyle = 'rgba(245,158,11,0.05)';
+      ctx.fill();
+      ctx.save();
+      ctx.setLineDash([8, 5]);
+      ctx.strokeStyle = this.bedSel ? '#f59e0b' : 'rgba(245,158,11,0.55)';
+      ctx.lineWidth = this.bedSel ? 2.5 : 1.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Container + border inset hint.
     loopPath(this.container);
     ctx.fillStyle = 'rgba(127,127,127,0.08)';
@@ -184,6 +349,8 @@ export class LayoutEditor {
     this.items.forEach((item, i) => {
       const conflicted = this.conflicts.collisions.has(i) || this.conflicts.escaped.has(i);
       const selected = i === this.sel;
+      // Photo first, so everything below draws over it.
+      if (this.showPhotos && item.thumb) this._drawPhoto(item);
       // Pocket (clearance) outline.
       const p = pockets[i] && pockets[i].pocket;
       if (p) {

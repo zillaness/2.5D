@@ -25,7 +25,7 @@ import {
   layoutPockets, layoutLabelGeometry, layoutLabelConflicts, labelMinHeight,
 } from './holders.js';
 import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
-import { LayoutEditor } from './ui/layoutEditor.js';
+import { LayoutEditor, bedLoop } from './ui/layoutEditor.js';
 import { APP_VERSION } from './version.js';
 
 // Export quality presets: chord tolerance (mm) for round features and the
@@ -40,6 +40,11 @@ import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
 import { Viewer3D } from './viewer3d.js';
 import { importCad } from './import/cadImport.js';
+import { tracesFromFiles, thumbFromImage } from './import/traceFolder.js';
+import {
+  hasDirectoryPicker, pickFolder, walkFolder, ensurePermission,
+  rememberFolder, recallFolder, writeProjectFile,
+} from './import/folderAccess.js';
 
 const $ = id => document.getElementById(id);
 
@@ -80,10 +85,16 @@ const state = {
   // from the library or the live trace at add time) so projects stay
   // self-contained. Container: a rectangle, or a saved container outline.
   layout: {
-    container: { type: 'rect', w: 220, h: 140, r: 6, n: 3, m: 2, name: null, outer: null },
+    // `scale` is what Known width / Known depth have done to a traced
+    // container outline so far: additive, optional, and 1 : 1 until measured.
+    container: { type: 'rect', w: 220, h: 140, r: 6, n: 3, m: 2, name: null, outer: null, scale: { x: 1, y: 1 } },
     items: [], clearance: 0.5, floor: 3, border: 5,
     bed: { // laser / printer bed for tiling, and puzzle tabs on the seams
       preset: 'none', w: 300, h: 200,
+      // Build-plate extras, both additive and optional: `shape` is a saved
+      // container outline for a round or cut-cornered plate, and `offset` is
+      // where the layout's bounding box sits on the plate.
+      shape: null, offset: { x: 0, y: 0 },
       tabs: { enabled: false, head: 12, neck: 7, depth: 12, spacing: 80, fit: 0 },
     },
     // Tool labels. Off by default: an unlabelled layout must export exactly
@@ -230,18 +241,38 @@ function guessOrientation(corners) {
 
 // ---------- step navigation ----------
 
+// A failed 3D preview (e.g. WebGL unavailable) must never block mesh
+// building or export, so every caller tolerates a null viewer.
+function ensureViewer() {
+  if (viewer) return;
+  try {
+    viewer = new Viewer3D($('stage3'));
+  } catch (err) {
+    console.error('3D preview unavailable', err);
+    toast('3D preview unavailable in this browser — the STL export still works.');
+  }
+}
+
 function goStep(n) {
-  if (n >= 2 && !state.image && !state.rect) return; // rect alone = restored project
+  // Step 4 organises a drawer from the library or a folder, so it is the one
+  // step past the first that needs no photo and no trace.
+  if (n >= 2 && n !== 4 && !state.image && !state.rect) return; // rect alone = restored project
   if (n === 2 && state.rectDirty && state.image) {
     if (!doRectify()) return;
     retrace();
   }
   state.step = n;
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= 4; i++) {
     $('stage' + i).hidden = i !== n;
     $('panel' + i).hidden = i !== n;
     $('stepBtn' + i).classList.toggle('active', i === n);
   }
+  // Step 4 puts the layout editor and the 3D preview side by side, so stage3
+  // stays mounted and shares the stage with stage4.
+  const split = n === 4;
+  $('stage3').hidden = !(n === 3 || split);
+  $('stage3').style.left = split ? '50%' : '';
+  $('stage4').style.right = split ? '50%' : '';
   positionHoleTag();
   if (n === 2) {
     $('lensRow').hidden = state.reference !== 'rect';
@@ -249,24 +280,17 @@ function goStep(n) {
     updateTraceInfo(); // also refreshes the optional underside entry point
     traceEditor.draw();
   }
-  if (n === 3) {
-    // A failed 3D preview (e.g. WebGL unavailable) must never block mesh
-    // building or export.
-    if (!viewer) {
-      try {
-        viewer = new Viewer3D($('stage3'));
-      } catch (err) {
-        console.error('3D preview unavailable', err);
-        toast('3D preview unavailable in this browser — the STL export still works.');
-      }
-    }
+  if (n === 3 || split) {
+    ensureViewer();
     if (viewer) viewer.resize();
-    rebuildMesh(true);
   }
+  if (n === 3) rebuildMesh(true);
+  if (split) openLayoutPanel(); else $('layoutModal').hidden = true;
   updateStepButtons();
 }
 
 function updateStepButtons() {
+  // stepBtn4 is never disabled: organising needs no photo and no trace.
   $('stepBtn2').disabled = !state.image && !state.rect;
   $('stepBtn3').disabled = !(traceEditor.outer && traceEditor.outer.length >= 3);
   $('toTraceBtn').disabled = !state.image && !state.rect;
@@ -1102,7 +1126,7 @@ $('holderType').addEventListener('change', e => {
   $('plateParams').hidden = state.holder.type !== 'plate';
   $('holsterParams').hidden = state.holder.type !== 'holster';
   if (state.holder.type === 'none') { state.holderMesh = null; rebuildMesh(true); }
-  else if (state.holder.type === 'layout') { openLayoutModal(); rebuildHolder(); }
+  else if (state.holder.type === 'layout') { goStep(4); rebuildHolder(); }
   else rebuildHolder();
 });
 for (const [id, key, min] of [
@@ -1308,6 +1332,22 @@ function refreshLaySelects() {
     if (o.name === keep) opt.selected = true;
     contSel.appendChild(opt);
   });
+  // The same container outlines double as build-plate shapes. Every name here
+  // is written as text and never as markup: an outline name arrives from a
+  // project file or a folder of traces, so it is not ours to trust.
+  const shapeSel = $('layBedShape');
+  const shape = state.layout.bed.shape;
+  shapeSel.innerHTML = '<option value="rect">Rectangular plate</option>';
+  syncBedShapeOption();
+  list.forEach((o, i) => {
+    if (o.kind !== 'container') return;
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = `⬚ ${o.name}`;
+    shapeSel.appendChild(opt);
+  });
+  shapeSel.value = shape ? '__shape' : 'rect';
+  refreshLayPalette();
 }
 function syncLayoutFields() {
   const L = state.layout;
@@ -1322,8 +1362,71 @@ function syncLayoutFields() {
   $('layFloor').disabled = grid;   // grid bins keep the spec base instead
   $('layBorder').disabled = grid;  // …and enforce the bin's minimum wall
   $('layRectFields').hidden = L.container.type === 'outline';
+  // Known width / depth belong to a traced outline: a rectangle's own width
+  // and depth fields are already the measured numbers.
+  const outline = L.container.type === 'outline';
+  $('layKnownFields').hidden = !outline;
+  if (outline) {
+    const box = layBox(layContainerLoop());
+    $('layKnownW').value = fmtDim(box.w);
+    $('layKnownD').value = fmtDim(box.h);
+  }
+  syncScaleInfo();
+}
+// What the measured numbers have done to the traced outline, and the warning
+// when the two axes disagree by more than 2 percent — which is usually a
+// mis-traced edge rather than the warp the per-axis scale is there to absorb.
+const SCALE_DIVERGENCE = 0.02;
+// A scale pair as it comes out of a project file. Anything that is not a
+// positive finite number is not a measurement, so it reads as 1 : 1 the way
+// `layBedOffset` reads the plate offset, rather than reaching the readout and
+// throwing Step 4 open half-built.
+function laySafeScale(s) {
+  const n = v => (Number.isFinite(v) && v > 0 ? v : 1);
+  return { x: n(s && s.x), y: n(s && s.y) };
+}
+function syncScaleInfo() {
+  const el = $('layScaleInfo');
+  const c = state.layout.container;
+  const sc = c.scale;
+  if (c.type !== 'outline' || !sc || (sc.x === 1 && sc.y === 1)) {
+    el.textContent = ''; el.className = 'hint'; return;
+  }
+  // Only a container measured on BOTH axes has two factors to compare. With
+  // one field filled the other axis was never measured, and its 1 : 1 is an
+  // absence rather than a disagreement.
+  const both = sc.x !== 1 && sc.y !== 1;
+  const d = Math.abs(sc.x - sc.y) / Math.max(sc.x, sc.y);
+  const off = both && d > SCALE_DIVERGENCE;
+  el.textContent = `Traced outline scaled ×${sc.x.toFixed(3)} across and ×${sc.y.toFixed(3)} down.` +
+    (off
+      ? ` The two axes differ by ${(d * 100).toFixed(1)} percent — that is more than warp usually` +
+        ' explains, so check the traced edges before you cut. The original outline is still in the library.'
+      : ' The original outline is still in the library.');
+  el.className = off ? 'warn' : 'hint';
+}
+// Force a traced container to a measured dimension. The axis scales about the
+// bounding-box centre, so the container stays where it is and the other axis
+// is left alone; filling both absorbs the residual warp of a shot that was
+// not quite square.
+function layScaleContainer(axis, known) {
+  const c = state.layout.container;
+  if (c.type !== 'outline' || !c.outer || c.outer.length < 3) return false;
+  const box = layBox(c.outer);
+  const cur = axis === 'x' ? box.w : box.h;
+  if (!(cur > 0) || !(known > 1)) return false;
+  const f = known / cur;
+  if (!Number.isFinite(f) || Math.abs(f - 1) < 1e-9) return false;
+  const mid = axis === 'x' ? (box.minX + box.maxX) / 2 : (box.minY + box.maxY) / 2;
+  c.outer = c.outer.map(p => (axis === 'x'
+    ? { x: mid + (p.x - mid) * f, y: p.y }
+    : { x: p.x, y: mid + (p.y - mid) * f }));
+  if (!c.scale) c.scale = { x: 1, y: 1 };
+  c.scale[axis] = Math.round(c.scale[axis] * f * 1e6) / 1e6;
+  return true;
 }
 function refreshLayoutEditor() {
+  layoutEditor.setBed(layBedView());
   layoutEditor.setLayout(layContainerLoop(), state.layout.items,
     state.layout.clearance, layBorderEff());
   updateLayoutInfo();
@@ -1341,6 +1444,7 @@ function updateLayoutInfo() {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
+  $('layEmptyHint').hidden = n > 0;
   const grid = L.container.type === 'grid';
   $('layoutInfo').textContent = grid
     ? `Gridfinity ${L.container.n}×${L.container.m} (${fmtDim(maxX - minX)} × ${fmtDim(maxY - minY)} mm) · ${n} tool${n === 1 ? '' : 's'}`
@@ -1354,27 +1458,61 @@ function updateLayoutInfo() {
   const bed = layBedDims();
   const bw = maxX - minX, bh = maxY - minY;
   const bedEl = $('layBedInfo');
+  const off = layBedOffset();
+  const negOff = off.x < -1e-6 || off.y < -1e-6;
+  let tiled = false; // drives the explicit tiled-SVG button in the export row
   if (!bed) {
     bedEl.textContent = '';
+    // Whether the cut template has to be tiled is a question about the size of
+    // the layout, not about where the plate was dragged. A layout that fits
+    // the bed but hangs off the plate edge is mis-placed, not too big, and
+    // `layBedEscapes` below is what says so.
   } else if (bw <= bed.w + 1e-6 && bh <= bed.h + 1e-6) {
-    bedEl.textContent = `Fits the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed in one piece.`;
-    bedEl.className = 'hint';
+    // One plate load. A shaped plate is the only case where fitting the
+    // bounding rectangle is not the whole story, so it is checked here.
+    const escaped = layBedEscapes();
+    const shape = state.layout.bed.shape;
+    if (escaped && shape) {
+      bedEl.textContent = `${escaped} point${escaped === 1 ? '' : 's'} of the layout sit outside the ` +
+        `${shape.name} plate — auto-centre it, nudge the plate, or shrink the container.`;
+      bedEl.className = 'warn';
+    } else if (escaped) {
+      bedEl.textContent = `Fits the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed, but the offset pushes it ` +
+        'off the plate — auto-centre it or nudge the plate back.';
+      bedEl.className = 'warn';
+    } else {
+      bedEl.textContent = `Fits the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed in one piece.` +
+        (shape ? ` Shaped plate: ${shape.name}.` : '');
+      bedEl.className = 'hint';
+    }
   } else {
-    const plan = splitTiles({
+    const plan = laySplitWithOffset({
       slab: loop, pockets: layoutPocketsForPlan(), origin: { x: minX, y: minY }, w: bw, h: bh,
     }, bed.w, bed.h, layTileOpts());
     const tiles = plan ? plan.tiles.length : 0;
+    tiled = !!plan;
     bedEl.textContent = plan
       ? `Larger than the bed — the cut template exports as ${tiles} tiles (${plan.nx} × ${plan.ny})` +
         (plan.crossings ? `, ${plan.crossings} seam${plan.crossings === 1 ? '' : 's'} through a pocket (no clear line available)` : ', seams clear of every pocket') +
         (plan.tabs ? `, ${plan.tabCount} puzzle tab${plan.tabCount === 1 ? '' : 's'}` +
           (plan.tabless ? ` (${plan.tabless} seam segment${plan.tabless === 1 ? '' : 's'} too crowded for one)` : '') : '') +
-        (grid ? '. STL tiling isn\'t available yet — the bin exports whole.' : '.')
+        (grid ? '. STL tiling isn\'t available yet — the bin exports whole.' : '.') +
+        (state.layout.bed.shape
+          ? ` The ${state.layout.bed.shape.name} plate shape is ignored while tiling — the tiles plan against its bounding rectangle.`
+          : '') +
+        // The window can only start at or before the layout, so a negative
+        // offset is dropped by `laySplitWithOffset`. Say so, the way the
+        // fits-on-one-bed branch says the offset pushed the layout off.
+        (negOff
+          ? ' The plate offset is negative, which would leave a strip of the layout on no tile at all, so the seams ignore it. Auto-centre the plate or nudge it back.'
+          : '')
       : (state.layout.bed.tabs.enabled
           ? 'Larger than the bed, but the puzzle tabs\' reach leaves no room to tile it — shrink the reach or pick a bigger bed.'
           : '');
-    bedEl.className = 'hint';
+    bedEl.className = plan && negOff ? 'warn' : 'hint';
   }
+  $('layExportTilesBtn').disabled = !tiled;
+  syncBedOffsetInfo();
   updateLabelInfo();
   if (state.holder.type === 'layout') rebuildHolder();
 }
@@ -1416,7 +1554,10 @@ function syncLaySelPanel(i) {
   $('laySelNotch').checked = !!it.notch;
   $('laySelNotchDia').value = fmtDim(it.notch ? it.notch.dia : 25);
 }
-function openLayoutModal() {
+// Sync every control in the Step 4 panel and redraw the layout editor.
+// `#layoutModal` is the panel's controls container: its hidden flag now means
+// "the layout editor is not the active step", which is what goStep drives.
+function openLayoutPanel() {
   refreshLaySelects();
   syncLayoutFields();
   syncBedFields();
@@ -1425,13 +1566,11 @@ function openLayoutModal() {
   $('layoutModal').hidden = false;
   refreshLayoutEditor();
 }
-
-$('layoutCloseBtn').addEventListener('click', () => { $('layoutModal').hidden = true; });
-$('layoutModal').addEventListener('pointerdown', e => {
-  if (e.target === $('layoutModal')) $('layoutModal').hidden = true;
-});
 $('layContainerSel').addEventListener('change', e => {
   const v = e.target.value;
+  // A fresh pick is a fresh outline: whatever the last one was measured to
+  // does not carry over.
+  state.layout.container.scale = { x: 1, y: 1 };
   if (v === 'rect') {
     state.layout.container.type = 'rect';
     state.layout.container.name = null;
@@ -1443,7 +1582,7 @@ $('layContainerSel').addEventListener('change', e => {
     if (o) {
       state.layout.container = {
         ...state.layout.container, type: 'outline', name: o.name,
-        outer: structuredClone(o.outer),
+        outer: structuredClone(o.outer), scale: { x: 1, y: 1 },
       };
     }
   }
@@ -1459,6 +1598,14 @@ for (const [id, key, cells] of [['layW', 'w', 'n'], ['layH', 'h', 'm']]) {
       const mm = parseDim(e.target.value);
       if (mm > 10) state.layout.container[key] = mm;
     }
+    syncLayoutFields();
+    refreshLayoutEditor();
+  });
+}
+for (const [id, axis] of [['layKnownW', 'x'], ['layKnownD', 'y']]) {
+  $(id).addEventListener('change', e => {
+    const mm = parseDim(e.target.value);
+    if (mm !== null && mm > 1) layScaleContainer(axis, mm);
     syncLayoutFields();
     refreshLayoutEditor();
   });
@@ -1479,12 +1626,144 @@ function layBedDims() {
   const m = /^(\d+)x(\d+)$/.exec(b.preset);
   return m ? { w: +m[1], h: +m[2] } : null;
 }
+// The bounding box of a loop in layout mm.
+function layBox(loop) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of loop) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+}
+// Where the layout sits on the plate, as a plain pair of numbers.
+function layBedOffset() {
+  const o = (state.layout.bed && state.layout.bed.offset) || {};
+  return { x: Number.isFinite(o.x) ? o.x : 0, y: Number.isFinite(o.y) ? o.y : 0 };
+}
+// The bed as the layout editor and the plate arithmetic want it, sharing the
+// offset object so a drag on the outline writes straight back into the state.
+function layBedView() {
+  const bed = layBedDims();
+  if (!bed) return null;
+  if (!state.layout.bed.offset) state.layout.bed.offset = { x: 0, y: 0 };
+  return { w: bed.w, h: bed.h, shape: state.layout.bed.shape, offset: state.layout.bed.offset };
+}
+// Centre the layout on the plate. A 200 x 100 layout on a 300 x 200 plate
+// lands at 50, 50.
+function layBedCentre() {
+  const bed = layBedDims();
+  if (!bed) return false;
+  const box = layBox(layContainerLoop());
+  // Never negative. The tiling window can only start at or before the layout,
+  // so an axis where the layout is larger than the plate centres at zero: a
+  // negative offset there is dropped by `laySplitWithOffset` and would leave
+  // the readout warning about the button the user just pressed.
+  state.layout.bed.offset = {
+    x: Math.max(0, Math.round((bed.w - box.w) / 2 * 1000) / 1000),
+    y: Math.max(0, Math.round((bed.h - box.h) / 2 * 1000) / 1000),
+  };
+  return true;
+}
+// How much of the layout is off the plate. A rectangular plate is compared
+// box to box; a shaped one is tested point by point, which is what catches a
+// square drawer overhanging a round plate at the corners.
+function layBedEscapes() {
+  const view = layBedView();
+  if (!view) return 0;
+  const loop = layContainerLoop();
+  const plate = bedLoop(loop, view);
+  if (view.shape && view.shape.outer && view.shape.outer.length >= 3) {
+    let n = 0;
+    for (const p of loop) if (!pointInPolygon(p, plate)) n++;
+    return n;
+  }
+  const box = layBox(loop), pb = layBox(plate);
+  return (box.minX < pb.minX - 1e-6 || box.minY < pb.minY - 1e-6 ||
+    box.maxX > pb.maxX + 1e-6 || box.maxY > pb.maxY + 1e-6) ? 1 : 0;
+}
+// The tiling window. By default the grid of bed-sized cells starts at the
+// layout's top-left corner; a plate offset slides the layout into the first
+// cell, so every seam moves with it. `splitTiles` plans from zero, so the
+// shift goes onto the template it is handed and comes back off the tiles.
+function laySplitWithOffset(template, bedW, bedH, opts) {
+  const off = layBedOffset();
+  const ox = Math.max(0, off.x), oy = Math.max(0, off.y);
+  // The window only moves a layout that has to be tiled at all. Padding a
+  // template that already fits one bed load would split it because of where
+  // the plate was dragged, and the seam would fall in the empty pad rather
+  // than anywhere in the drawer.
+  const fits = template.w <= bedW + 1e-6 && template.h <= bedH + 1e-6;
+  if (fits || (!(ox > 0) && !(oy > 0))) return layCompactPlan(splitTiles(template, bedW, bedH, opts));
+  const plan = splitTiles({
+    ...template,
+    origin: { x: template.origin.x - ox, y: template.origin.y - oy },
+    w: template.w + ox, h: template.h + oy,
+  }, bedW, bedH, opts);
+  if (!plan) return null;
+  for (const t of plan.tiles) { t.x0 -= ox; t.y0 -= oy; }
+  plan.seamsX = plan.seamsX.map(v => v - ox);
+  plan.seamsY = plan.seamsY.map(v => v - oy);
+  return layCompactPlan(plan);
+}
+// The grid a plan reports has to be the grid of tiles it carries. The pad the
+// window adds is empty material as far as `planSeams` is concerned, so a seam
+// can land inside it; the cell in front of that seam holds no drawer at all,
+// `splitTiles` drops it, and `nx`/`ny` are left counting a row or column no
+// tile occupies. That is what made a four-tile plan report itself as 2 × 3,
+// name its file `-tiles-2x3.svg`, and letter its pieces from B. Renumber the
+// grid onto the cells that actually carry a tile, and keep only the seams
+// that separate two of them.
+function layCompactPlan(plan) {
+  if (!plan || !plan.tiles.length) return plan;
+  const cols = [...new Set(plan.tiles.map(t => t.col))].sort((a, b) => a - b);
+  const rows = [...new Set(plan.tiles.map(t => t.row))].sort((a, b) => a - b);
+  if (cols.length === plan.nx && rows.length === plan.ny) return plan;
+  const cAt = new Map(cols.map((c, i) => [c, i]));
+  const rAt = new Map(rows.map((r, i) => [r, i]));
+  plan.seamsX = plan.seamsX.filter((_, k) => cAt.has(k) && cAt.has(k + 1));
+  plan.seamsY = plan.seamsY.filter((_, k) => rAt.has(k) && rAt.has(k + 1));
+  for (const t of plan.tiles) { t.col = cAt.get(t.col); t.row = rAt.get(t.row); }
+  plan.nx = cols.length;
+  plan.ny = rows.length;
+  return plan;
+}
+// Where the layout sits on the plate, and how to move it. Refreshed on every
+// layout change, because dragging the plate outline never touches the fields.
+function syncBedOffsetInfo() {
+  const b = state.layout.bed;
+  const plate = layBedDims();
+  $('layBedCentreBtn').disabled = !plate;
+  const off = layBedOffset();
+  $('layBedOffsetInfo').textContent = !plate ? ''
+    : `Layout sits ${fmtDimL(off.x)} across and ${fmtDimL(off.y)} down the plate` +
+      `${b.shape ? ` (${b.shape.name})` : ''}. Drag the dashed outline, or select it and ` +
+      'nudge with the arrow keys (Shift for 10 mm).';
+}
+// The '__shape' option stands for the plate shape in use. The rest of the list
+// is built when the panel opens, so picking a shape has to add the option, and
+// clearing one has to drop it, or the select is asked to show a value it does
+// not carry and renders blank.
+function syncBedShapeOption() {
+  const sel = $('layBedShape');
+  const shape = state.layout.bed.shape;
+  let opt = sel.querySelector('option[value="__shape"]');
+  if (!shape) { if (opt) opt.remove(); return; }
+  if (!opt) {
+    opt = document.createElement('option');
+    opt.value = '__shape';
+    sel.insertBefore(opt, sel.firstChild ? sel.firstChild.nextSibling : null);
+  }
+  opt.textContent = `⬚ ${shape.name}`;
+}
 function syncBedFields() {
   const b = state.layout.bed;
   $('layBed').value = b.preset;
   $('layBedCustom').hidden = b.preset !== 'custom';
   $('layBedW').value = fmtDim(b.w);
   $('layBedH').value = fmtDim(b.h);
+  syncBedShapeOption();
+  $('layBedShape').value = b.shape ? '__shape' : 'rect';
+  syncBedOffsetInfo();
   const t = b.tabs;
   $('layTabs').checked = !!t.enabled;
   $('layTabFields').hidden = !t.enabled;
@@ -1570,7 +1849,7 @@ function layTileOpts() {
 function layTilePlan(res) {
   const bed = layBedDims();
   if (!bed || !res || !res.template) return null;
-  return splitTiles(res.template, bed.w, bed.h, layTileOpts());
+  return laySplitWithOffset(res.template, bed.w, bed.h, layTileOpts());
 }
 $('layTabs').addEventListener('change', e => {
   state.layout.bed.tabs.enabled = e.target.checked;
@@ -1596,16 +1875,352 @@ for (const [id, key, min] of [
 $('layBed').addEventListener('change', e => {
   state.layout.bed.preset = e.target.value;
   syncBedFields();
-  updateLayoutInfo();
+  refreshLayoutEditor();
+});
+// A plate shape: a saved container outline standing in for a round or
+// cut-cornered build plate. Choosing one sizes the bed to the shape, since a
+// plate and its bounding rectangle must agree about how much room there is.
+// The rectangle the bed had before a shape sized it to that shape's bounding
+// box, so going back to Rectangular plate gives the user's own bed back rather
+// than leaving the shape's square behind.
+let layBedRect = null;
+$('layBedShape').addEventListener('change', e => {
+  const b = state.layout.bed;
+  const o = e.target.value === 'rect' ? null : libLoad()[+e.target.value];
+  if (!o || !o.outer || o.outer.length < 3) {
+    const box = b.shape && b.shape.outer && b.shape.outer.length >= 3 ? layBox(b.shape.outer) : null;
+    // Only restore a bed the shape itself sized: a bed the user retyped while
+    // the shape was on is theirs, and stays.
+    const untouched = box &&
+      Math.abs(b.w - Math.round(box.w * 1000) / 1000) < 1e-6 &&
+      Math.abs(b.h - Math.round(box.h * 1000) / 1000) < 1e-6;
+    if (layBedRect && untouched) {
+      b.preset = layBedRect.preset; b.w = layBedRect.w; b.h = layBedRect.h;
+    }
+    layBedRect = null;
+    b.shape = null;
+  } else {
+    if (!b.shape) layBedRect = { preset: b.preset, w: b.w, h: b.h };
+    b.shape = { name: o.name, outer: structuredClone(o.outer) };
+    const box = layBox(b.shape.outer);
+    b.preset = 'custom';
+    b.w = Math.round(box.w * 1000) / 1000;
+    b.h = Math.round(box.h * 1000) / 1000;
+  }
+  syncBedFields();
+  refreshLayoutEditor();
+});
+$('layBedCentreBtn').addEventListener('click', () => {
+  if (!layBedCentre()) return;
+  syncBedFields();
+  refreshLayoutEditor();
+});
+// Arrow keys nudge the plate once its outline is selected: 1 mm, or 10 mm
+// with Shift. Nothing else on Step 4 uses the arrow keys.
+document.addEventListener('keydown', e => {
+  if (state.step !== 4 || !layoutEditor.bedSel) return;
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
+  const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (!d) return;
+  e.preventDefault();
+  const mm = e.shiftKey ? 10 : 1;
+  layoutEditor.nudgeBed(d[0] * mm, d[1] * mm);
+  syncBedFields();
+  refreshLayoutEditor();
 });
 for (const [id, key] of [['layBedW', 'w'], ['layBedH', 'h']]) {
   $(id).addEventListener('change', e => {
     const mm = parseDim(e.target.value);
     if (mm > 10) state.layout.bed[key] = mm;
     syncBedFields();
-    updateLayoutInfo();
+    refreshLayoutEditor();
   });
 }
+// Place one palette entry into the layout. Both the quick-add select and the
+// palette rows go through here, so a tool lands in the same seeded grid slot
+// however it was picked: offset by the item's index, never by chance.
+// `source` is provenance only — a placed item is a self-contained copy.
+function layPlaceTool(src) {
+  const loop = layContainerLoop();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of loop) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const n = state.layout.items.length;
+  const it = {
+    name: src.name, outer: src.outer, holes: src.holes || [], circles: src.circles || [],
+    thickness: src.thickness || state.regions[0].thickness, depth: null, rot: 0,
+    x: (minX + maxX) / 2 + (n % 3) * 12 - 12,
+    y: (minY + maxY) / 2 + Math.floor(n / 3) * 12,
+  };
+  if (src.source) it.source = structuredClone(src.source);
+  // The photo rides along with the copy, so a saved project shows the tools
+  // even on a machine that has never seen the folder they came from.
+  if (src.thumb) it.thumb = structuredClone(src.thumb);
+  state.layout.items.push(it);
+  return state.layout.items.length - 1;
+}
+
+// ---------- the Step 4 palette: Library and Folder ----------
+
+// What the last opened folder read. Replaced wholesale by the folder
+// backends; empty until one of them runs.
+let layFolder = { entries: [], skipped: [], label: '' };
+
+const SKIP_WORDS = {
+  'not-json': 'not a .json file',
+  'parse-error': 'not readable JSON',
+  'not-a-trace': 'JSON, but no trace in it',
+  container: 'a container outline, not a tool',
+};
+
+function layPaletteRow(name, hint, buttons) {
+  const row = document.createElement('div');
+  row.className = 'pal-row';
+  row.style.cssText = 'display:flex; align-items:center; gap:6px; padding:2px 0';
+  const label = document.createElement('span');
+  label.style.cssText = 'flex:1; min-width:0; display:flex; gap:6px; align-items:baseline';
+  const nm = document.createElement('span');
+  nm.className = 'pal-name';
+  nm.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap';
+  nm.textContent = name;
+  label.appendChild(nm);
+  if (hint) {
+    const h = document.createElement('span');
+    h.className = 'hint';
+    h.style.cssText = 'margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.7';
+    h.textContent = hint;
+    label.appendChild(h);
+    row.title = hint;
+  }
+  row.appendChild(label);
+  for (const [text, title, fn] of buttons) {
+    const b = document.createElement('button');
+    b.className = 'btn small';
+    b.textContent = text;
+    if (title) b.title = title;
+    b.addEventListener('click', fn);
+    row.appendChild(b);
+  }
+  return row;
+}
+
+// A folder entry saved into the library keeps its geometry and drops its
+// provenance: the library is this browser's own copy, not a pointer at a file.
+function layPaletteSaveToLibrary(entry) {
+  const { source, ...rest } = entry;
+  const o = structuredClone(rest);
+  o.kind = 'tool';
+  if (!o.thickness) o.thickness = state.regions[0].thickness;
+  o.measurements = o.measurements || [];
+  o.constraints = o.constraints || [];
+  o.arcs = o.arcs || [];
+  o.lines = o.lines || [];
+  const list = libLoad();
+  const at = list.findIndex(e => e.name === o.name);
+  if (at >= 0) list[at] = o; else list.push(o);
+  libSaveFitted(list, o.name);
+}
+
+function refreshLayPalette() {
+  const lib = libLoad().filter(o => o.kind !== 'container');
+  const libList = $('layPalLibList');
+  libList.innerHTML = '';
+  $('layPalLibCount').textContent = lib.length ? `${lib.length}` : '';
+  if (!lib.length) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.style.margin = '2px 0';
+    p.textContent = 'Nothing saved yet.';
+    libList.appendChild(p);
+  }
+  for (const o of lib) {
+    libList.appendChild(layPaletteRow(o.name, '', [
+      ['\uff0b Add', 'Place this tool in the drawer', () => {
+        const i = layPlaceTool(structuredClone(o));
+        layoutEditor.sel = i;
+        syncLaySelPanel(i);
+        refreshLayoutEditor();
+      }],
+    ]));
+  }
+
+  const group = $('layPalFolderGroup');
+  // A folder that reads as nothing is not the same as no folder at all. The
+  // pick has to leave evidence either way, and "Save here" lives inside this
+  // group, so hiding it would put the folder write-back out of reach for
+  // exactly the fresh, empty folder a new drawer project belongs in. An empty
+  // label is how `setFolder` says the folder was closed.
+  const has = layFolder.entries.length > 0 || layFolder.skipped.length > 0 || !!layFolder.label;
+  group.hidden = !has;
+  $('layPalFolderName').textContent = layFolder.label || '';
+  $('layPalAddAllBtn').disabled = layFolder.entries.length === 0;
+  const skip = $('layPalSkipped');
+  skip.hidden = layFolder.skipped.length === 0;
+  skip.textContent = layFolder.skipped.length
+    ? `${layFolder.skipped.length} file${layFolder.skipped.length === 1 ? '' : 's'} skipped`
+    : '';
+  skip.title = layFolder.skipped
+    .map(s => `${s.name ? `${s.path} \u203a ${s.name}` : s.path}: ${SKIP_WORDS[s.reason] || s.reason}`)
+    .join('\n');
+  const folderList = $('layPalFolderList');
+  folderList.innerHTML = '';
+  if (!layFolder.entries.length && layFolder.label) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.style.margin = '2px 0';
+    p.textContent = layFolder.skipped.length
+      ? 'No readable traces in this folder.'
+      : 'This folder is empty. Save a project into it, or open one with traces in it.';
+    folderList.appendChild(p);
+  }
+  // Two traces can share a name, so the path is what tells them apart.
+  for (const e of layFolder.entries) {
+    folderList.appendChild(layPaletteRow(e.name, e.source ? e.source.path : '', [
+      ['\uff0b Add', 'Place this tool in the drawer', () => {
+        const i = layPlaceTool(structuredClone(e));
+        layoutEditor.sel = i;
+        syncLaySelPanel(i);
+        refreshLayoutEditor();
+      }],
+      ['\u2606 Library', 'Save this trace to the outline library', () => layPaletteSaveToLibrary(e)],
+    ]));
+  }
+}
+
+// Called by the folder backends once a folder has been read.
+function laySetFolder(read, label) {
+  layFolder = {
+    entries: (read && read.entries) || [],
+    skipped: (read && read.skipped) || [],
+    label: label || '',
+  };
+  refreshLayPalette();
+}
+
+// ---------- the two folder backends ----------
+
+// The File System Access handle for the open folder, when the browser has
+// that API. Null on the directory-input path, which reads once and cannot
+// write, so "Save here" stays hidden there.
+let layFolderHandle = null;
+// What the Reopen button offers: the folder picked this session, or the one
+// IndexedDB remembers from a previous load. { label, handle }.
+let layRemembered = null;
+
+// A folder of hundreds of files is read one at a time, so the header counts
+// up instead of sitting blank. laySetFolder overwrites this when it lands.
+function layFolderProgress(done, total) {
+  $('layPalFolderGroup').hidden = false;
+  $('layPalFolderName').textContent = `reading ${done}/${total}\u2026`;
+}
+
+function syncFolderButtons() {
+  const re = $('layReopenFolderBtn');
+  const label = layRemembered && layRemembered.label;
+  re.hidden = !label;
+  re.textContent = label ? `\u21BB ${label}` : '';
+  re.title = label ? `Re-read \u201c${label}\u201d from disk` : '';
+  // Writing back needs a handle. The directory input has none.
+  $('layPalSaveFolderBtn').hidden = !layFolderHandle;
+}
+
+// Walk a directory handle into the same { path, file } pairs the directory
+// input hands over, read them, and show the result.
+async function layUseHandle(handle, label) {
+  if (!await ensurePermission(handle, 'read')) {
+    toast('That folder was not shared with this page.');
+    return false;
+  }
+  const name = label || handle.name || 'folder';
+  layFolderHandle = handle;
+  layRemembered = { label: name, handle };
+  syncFolderButtons();
+  const pairs = await walkFolder(handle);
+  laySetFolder(await tracesFromFiles(pairs, { onProgress: layFolderProgress }), name);
+  syncFolderButtons();
+  await rememberFolder(handle, name);
+  return true;
+}
+
+$('layOpenFolderBtn').addEventListener('click', async () => {
+  if (hasDirectoryPicker()) {
+    let handle = null;
+    try {
+      handle = await pickFolder();
+    } catch {
+      // The API is there but unusable here (an iframe, a policy). Fall back.
+      $('layFolderInput').click();
+      return;
+    }
+    if (!handle) return; // cancelled: do not pop the input open behind it
+    await layUseHandle(handle);
+    return;
+  }
+  $('layFolderInput').click();
+});
+
+$('layReopenFolderBtn').addEventListener('click', async () => {
+  let handle = layRemembered && layRemembered.handle;
+  let label = layRemembered && layRemembered.label;
+  if (!handle) {
+    const got = await recallFolder();
+    if (got) { handle = got.handle; label = got.label; }
+  }
+  if (!handle) { toast('That folder is gone \u2014 open it again.'); return; }
+  await layUseHandle(handle, label);
+});
+
+// The baseline backend: one shot, every file already read, no handle to keep.
+$('layFolderInput').addEventListener('change', async e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  layFolderHandle = null;
+  const label = (files[0].webkitRelativePath || '').split('/')[0] || 'folder';
+  syncFolderButtons();
+  laySetFolder(await tracesFromFiles(files, { onProgress: layFolderProgress }), label);
+});
+
+// Project JSON is the only thing written into the folder; exports keep going
+// through the browser's own download, which needs no collision policy.
+$('layPalSaveFolderBtn').addEventListener('click', async () => {
+  if (!layFolderHandle) { toast('Open a folder with the picker first.'); return; }
+  if (!await ensurePermission(layFolderHandle, 'readwrite')) {
+    toast('The folder is open for reading only.');
+    return;
+  }
+  try {
+    const written = await writeProjectFile(
+      layFolderHandle, state.fileName || 'drawer', serializeProject(false));
+    toast(`Saved \u201c${written}\u201d into the folder.`);
+  } catch {
+    toast('Could not write into the folder.');
+  }
+});
+
+// A remembered handle survives the reload; the permission does not, so the
+// button only offers the folder and the click re-requests it.
+if (hasDirectoryPicker()) {
+  recallFolder().then(got => {
+    if (!got || layRemembered) return;
+    layRemembered = { label: got.label, handle: got.handle };
+    syncFolderButtons();
+  });
+}
+
+$('layPalAddAllBtn').addEventListener('click', () => {
+  if (!layFolder.entries.length) { toast('Open a folder of traces first.'); return; }
+  // One redraw at the end, not one per tool.
+  for (const e of layFolder.entries) layPlaceTool(structuredClone(e));
+  layoutEditor.sel = state.layout.items.length - 1;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+  toast(`Added ${layFolder.entries.length} tool${layFolder.entries.length === 1 ? '' : 's'} from the folder.`);
+});
+
 $('layAddBtn').addEventListener('click', () => {
   const v = $('layToolSel').value;
   let src = null;
@@ -1628,23 +2243,19 @@ $('layAddBtn').addEventListener('click', () => {
     src = structuredClone(o);
     if (!src.thickness) src.thickness = state.regions[0].thickness;
   }
-  const loop = layContainerLoop();
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of loop) {
-    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-  }
-  const n = state.layout.items.length;
-  state.layout.items.push({
-    name: src.name, outer: src.outer, holes: src.holes || [], circles: src.circles || [],
-    thickness: src.thickness, depth: null, rot: 0,
-    x: (minX + maxX) / 2 + (n % 3) * 12 - 12,
-    y: (minY + maxY) / 2 + Math.floor(n / 3) * 12,
-  });
-  layoutEditor.sel = state.layout.items.length - 1;
-  syncLaySelPanel(layoutEditor.sel);
+  const i = layPlaceTool(src);
+  layoutEditor.sel = i;
+  syncLaySelPanel(i);
   refreshLayoutEditor();
 });
+// Photos inside traces. On by default: the point of the thumbnails is that
+// the drawer reads as the tools rather than as silhouettes.
+layoutEditor.showPhotos = $('layShowPhotos').checked;
+$('layShowPhotos').addEventListener('change', e => {
+  layoutEditor.showPhotos = e.target.checked;
+  layoutEditor.draw();
+});
+
 $('layRemoveBtn').addEventListener('click', () => {
   if (layoutEditor.sel < 0) return;
   state.layout.items.splice(layoutEditor.sel, 1);
@@ -1715,39 +2326,59 @@ $('layPreviewBtn').addEventListener('click', () => {
   state.holder.type = 'layout';
   $('holderType').value = 'layout';
   $('foamParams').hidden = true;
-  $('layoutModal').hidden = true;
   goStep(3);
   rebuildHolder();
 });
-$('layExportBtn').addEventListener('click', () => {
+// ---------- layout export, shared by every row that offers it ----------
+// These are the bodies the layout export buttons used to carry inline. They
+// build and name the file but do not deliver it, so any row can offer the
+// same export and every row produces the same bytes.
+function layoutStlExport() {
   const res = buildLayoutNow();
-  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the insert.'); return; }
+  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the insert.'); return null; }
   const grid = state.layout.container.type === 'grid';
   const bed = layBedDims();
   if (bed && res.stats && res.stats.slab && (res.stats.slab.w > bed.w + 1e-6 || res.stats.slab.h > bed.h + 1e-6)) {
     toast(`Heads up: this is ${fmtDim(res.stats.slab.w)} × ${fmtDim(res.stats.slab.h)}, larger than the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed. The STL exports whole — STL tiling isn't available yet; the cut template splits into tiles.`, 7000);
   }
-  const blob = toBinarySTL(res.positions, res.indices, `${state.fileName} ${grid ? 'gridfinity' : 'drawer'}`);
-  deliverExport(blob, `${state.fileName}-${grid ? 'bin' : 'drawer'}-2p5d.stl`);
-});
-$('layExportSvgBtn').addEventListener('click', () => {
+  return {
+    blob: toBinarySTL(res.positions, res.indices, `${state.fileName} ${grid ? 'gridfinity' : 'drawer'}`),
+    name: `${state.fileName}-${grid ? 'bin' : 'drawer'}-2p5d.stl`,
+  };
+}
+// mode 'auto' tiles only when the layout is larger than the bed, which is what
+// the single Template SVG button has always done. mode 'tiles' is the explicit
+// tiled button and declines when there is nothing to tile.
+function layoutSvgExport(mode = 'auto') {
   const res = buildLayoutNow();
-  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return; }
-  if (!res.template) { toast('Template SVG is for flat drawer inserts (foam cutting) — export the bin as STL.'); return; }
+  if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return null; }
+  if (!res.template) { toast('Template SVG is for flat drawer inserts (foam cutting) — export the bin as STL.'); return null; }
   const plan = layTilePlan(res);
   if (plan) {
-    deliverExport(toTiledSVG(plan.tiles, { name: state.fileName }),
-      `${state.fileName}-drawer-tiles-${plan.nx}x${plan.ny}.svg`);
-    toast(`Exported ${plan.tiles.length} tiles for the ${fmtDim(layBedDims().w)} × ${fmtDim(layBedDims().h)} bed — cut one per bed load (labels A1, A2… mark the drawer position).`, 6500);
-    return;
+    const bed = layBedDims();
+    toast(`Exported ${plan.tiles.length} tiles for the ${fmtDim(bed.w)} × ${fmtDim(bed.h)} bed — cut one per bed load (labels A1, A2… mark the drawer position).`, 6500);
+    return {
+      blob: toTiledSVG(plan.tiles, { name: state.fileName }),
+      name: `${state.fileName}-drawer-tiles-${plan.nx}x${plan.ny}.svg`,
+    };
+  }
+  if (mode === 'tiles') {
+    toast('This layout already fits the bed in one piece — use Template SVG.');
+    return null;
   }
   const T = res.template;
   const shift = pts => pts.map(p => ({ x: p.x - T.origin.x, y: p.y - T.origin.y }));
   const holes = T.pockets.flatMap(p => [shift(p.pocket), ...p.pillars.map(shift)]);
   const blob = toSVG(shift(T.slab), holes, T.w, T.h,
     { engrave: layLabelLoops().map(shift) });
-  deliverExport(blob, `${state.fileName}-drawer-template.svg`);
-});
+  return { blob, name: `${state.fileName}-drawer-template.svg` };
+}
+function deliverLayoutExport(out) {
+  if (out) deliverExport(out.blob, out.name);
+}
+$('layExportBtn').addEventListener('click', () => deliverLayoutExport(layoutStlExport()));
+$('layExportSvgBtn').addEventListener('click', () => deliverLayoutExport(layoutSvgExport('auto')));
+$('layExportTilesBtn').addEventListener('click', () => deliverLayoutExport(layoutSvgExport('tiles')));
 
 // ---------- wiring: step 1 ----------
 
@@ -2955,7 +3586,14 @@ function loadProject(p) {
   }
   if (p.layout && Array.isArray(p.layout.items)) {
     state.layout = {
-      container: { ...state.layout.container, ...(p.layout.container || {}) },
+      container: {
+        ...state.layout.container, ...(p.layout.container || {}),
+        // Defaulted, not inherited: a project saved before Known width existed
+        // must land on 1 : 1 rather than on whatever was last measured here,
+        // and a hand-edited factor that is not a number is not a measurement
+        // either, so it lands there too instead of throwing at the readout.
+        scale: laySafeScale(p.layout.container && p.layout.container.scale),
+      },
       items: structuredClone(p.layout.items),
       clearance: p.layout.clearance ?? state.layout.clearance,
       floor: p.layout.floor ?? state.layout.floor,
@@ -2963,6 +3601,12 @@ function loadProject(p) {
       bed: {
         ...state.layout.bed, ...(p.layout.bed || {}),
         tabs: { ...state.layout.bed.tabs, ...((p.layout.bed && p.layout.bed.tabs) || {}) },
+        // Defaulted, not inherited: a project saved before the build plate
+        // existed carries neither key, and must land on no plate shape and on
+        // offset zero rather than on whatever plate the drawer before it left
+        // on screen, which would retile it and change what it exports.
+        shape: (p.layout.bed && p.layout.bed.shape) || null,
+        offset: { x: 0, y: 0, ...((p.layout.bed && p.layout.bed.offset) || {}) },
       },
       // Merged onto the defaults, not taken from the file: a project saved
       // before labels existed has no `labels` key, and rebuilding state.layout
@@ -2972,6 +3616,10 @@ function loadProject(p) {
         extra: structuredClone((p.layout.labels && p.layout.labels.extra) || []),
       },
     };
+    // The bed remembered behind a plate shape belongs to the drawer that was
+    // on screen, not to this one: clearing the loaded project's shape has to
+    // give that project its own bed back, never the last drawer's.
+    layBedRect = null;
   }
   syncHolderPanel();
   // Back (underside) photo: restore the rectified copy + alignment; the
@@ -3124,6 +3772,55 @@ function libLoad() {
 function libSave(list) {
   try { localStorage.setItem(LIB_KEY, JSON.stringify(list)); return true; } catch { return false; }
 }
+// localStorage holds roughly 5 MB. A 256 px thumbnail is 10 to 25 KB, so a
+// hundred tools stay under 3 MB, but a library closing on the ceiling would
+// fail its next write outright. Past 4 MB the photos come out: the outlines
+// are what the library is for, and a library without photos is exactly what
+// existed before they did.
+const LIB_WARN_BYTES = 4 * 1024 * 1024;
+// Writing the library back, with the 4 MB warning the photos need. The trim
+// is not the entry being saved: `libFitThumbs` takes the photo off EVERY row
+// that has one, and for a row saved from a live trace the library was the
+// only copy. So the warning comes before the write and the choice is the
+// user's, which is what "offers to save without thumbnails" asks for.
+// Declining keeps every photo and writes the library as it stands.
+function libSaveFitted(list, name) {
+  const fitted = libFitThumbs(list);
+  const saved = () => { refreshLibList(); };
+  if (!fitted.dropped) {
+    if (libSave(list)) { toast(`Saved “${name}” to the outline library.`); saved(); }
+    else toast('Could not save — storage is unavailable here.');
+    return;
+  }
+  const drop = confirm(
+    `The outline library is close to the browser's 5 MB limit, and saving it whole may not fit.\n\n` +
+    `OK: save it without photos. That takes the photo off all ${fitted.dropped} ` +
+    `entr${fitted.dropped === 1 ? 'y' : 'ies'} that have one, not just “${name}”, and cannot be undone. ` +
+    `The outlines are kept.\n\n` +
+    'Cancel: keep every photo and save anyway.');
+  if (drop) {
+    if (libSave(fitted.list)) {
+      toast(`Saved “${name}”. The library was near the browser's 5 MB limit, so all ${fitted.dropped} photos in it came out.`, 6000);
+      saved();
+    } else toast('Could not save — storage is unavailable here.');
+    return;
+  }
+  if (libSave(list)) {
+    toast(`Saved “${name}” with its photo. The library is near the browser's 5 MB limit, so the next save may not fit.`, 6000);
+    saved();
+  } else toast('Could not save with the photos kept — the library is past what this browser will store. Save again and let the photos come out.', 7000);
+}
+function libFitThumbs(list) {
+  if (JSON.stringify(list).length <= LIB_WARN_BYTES) return { list, dropped: 0 };
+  let dropped = 0;
+  const trimmed = list.map(o => {
+    if (!o || !o.thumb) return o;
+    dropped++;
+    const { thumb, ...rest } = o;
+    return rest;
+  });
+  return { list: trimmed, dropped };
+}
 function refreshLibList() {
   const sel = $('libList');
   const cur = sel.value;
@@ -3165,11 +3862,21 @@ $('libSaveBtn').addEventListener('click', () => {
     arcs: structuredClone(traceEditor.arcs),
     lines: structuredClone(traceEditor.lines),
   };
+  // The rectified photo, cropped to this outline, so the layout editor can
+  // draw the tool rather than its silhouette.
+  if (state.rect) {
+    const t = thumbFromImage(state.rect.canvas, state.rect.pxPerMm, outer);
+    if (t) {
+      entry.thumb = {
+        dataUrl: t.dataUrl, mmPerPx: t.mmPerPx,
+        origin: { x: t.origin.x - minX + M, y: t.origin.y - minY + M },
+      };
+    }
+  }
   const list = libLoad();
   const existing = list.findIndex(o => o.name === name);
   if (existing >= 0) list[existing] = entry; else list.push(entry);
-  if (libSave(list)) { toast(`Saved “${name}” to the outline library.`); refreshLibList(); }
-  else toast('Could not save — storage is unavailable here.');
+  libSaveFitted(list, name);
 });
 
 $('libDeleteBtn').addEventListener('click', () => {
@@ -3428,6 +4135,29 @@ window.__app = {
   backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,
+  scaleContainer: layScaleContainer,
+  bed: {
+    centre: layBedCentre, offset: layBedOffset, escapes: layBedEscapes,
+    loop: () => { const v = layBedView(); return v ? bedLoop(layContainerLoop(), v) : null; },
+    plan: () => {
+      const b = layBedDims();
+      if (!b) return null;
+      const loop = layContainerLoop(), box = layBox(loop);
+      return laySplitWithOffset({
+        slab: loop, pockets: layoutPocketsForPlan(),
+        origin: { x: box.minX, y: box.minY }, w: box.w, h: box.h,
+      }, b.w, b.h, layTileOpts());
+    },
+  },
+  layoutExports: { stl: layoutStlExport, svg: layoutSvgExport },
+  palette: { setFolder: laySetFolder, refresh: refreshLayPalette, get folder() { return layFolder; } },
+  libFitThumbs,
+  folderBackend: {
+    use: layUseHandle, sync: syncFolderButtons,
+    get handle() { return layFolderHandle; },
+    get remembered() { return layRemembered; },
+    forget() { layFolderHandle = null; layRemembered = null; syncFolderButtons(); },
+  },
   serializeProject, loadProject,
   get viewer() { return viewer; },
 };

@@ -18,9 +18,9 @@ part, a bracket, a gasket, a game piece, a knob backplate…
 Everything runs in the browser. No server, no build step, no uploads — your
 photo never leaves your machine.
 
-| 1 — Photo & paper | 2 — Trace & holes | 3 — Model & export |
-| --- | --- | --- |
-| ![corners](docs/step1-corners.png) | ![trace](docs/step2-trace.png) | ![model](docs/step3-model.png) |
+| 1 — Photo & paper | 2 — Trace & holes | 3 — Model & export | 4 — Organize |
+| --- | --- | --- | --- |
+| ![corners](docs/step1-corners.png) | ![trace](docs/step2-trace.png) | ![model](docs/step3-model.png) | ![organize](docs/step4-organize.png) |
 
 ## Running it
 
@@ -568,6 +568,78 @@ of a millimetre with a careful photo.
 - `js/exporters.js` — binary STL and true-scale SVG.
 - Rendering: three.js; polygon clipping: clipper-lib; triangulation: earcut —
   all vendored in `vendor/` (MIT / ISC / Boost licences, see the files).
+
+### Step 4: organize a drawer or toolbox
+
+Laying out a drawer is a different job from tracing one tool, so it gets its own
+step. Step 4, **Organize**, is enabled unconditionally: it opens on a fresh page
+load with no photo and no trace, because the tools going into the drawer were
+traced days ago and only need to be arranged. The layout editor that used to be
+a modal over Step 3 is now the step itself, so the 2D layout, the 3D preview and
+the export row (insert STL, template SVG, tiled SVG) are on screen together.
+Step 3 keeps its **Multi-tool drawer insert** holder type, which now simply
+brings you here, so older projects open exactly as they did.
+
+![Step 4, organize](docs/step4-organize.png)
+
+**Open a folder of traces.** A tool collection lives in a folder of `.json`
+project files, not in one browser's storage, so **📁 Open folder…** reads one.
+There are two backends behind that single button and both feed the same reader:
+
+| | File System Access | Directory input |
+|---|---|---|
+| Where | Chrome and Edge over https (the hosted copy) | every desktop browser, `file://` included |
+| Across reloads | the folder is remembered; a **↻** button labelled with its name re-reads it after one permission prompt | nothing is kept; open the folder again |
+| Write back | **💾 Save here** writes the project's JSON into the folder, so the drawer file sits next to its traces | read only |
+
+The reader accepts 2.5D project files and outline-library exports, walking
+sub-folders as it goes. Anything else is skipped and counted rather than raised
+as an error: hover the *“n files skipped”* line for a per-file reason
+(`not-json`, `parse-error`, `not-a-trace`, or `container` for a saved drawer
+outline, which is reported so it is not silently lost). Every readable trace
+lands in the **Folder** group of the palette, alongside the **Library** group,
+with its path shown so two tools of the same name stay apart. Each row places
+one tool; **Add all** places the whole folder in a deterministic grid; the star
+button copies a folder trace into the outline library. Placed tools are copies
+that record where they came from, so a saved project reopens on a machine that
+has never seen the folder.
+
+![The folder palette](docs/step4-folder.png)
+
+**Photos inside the traces.** A project file carries its rectified photo, so
+each palette entry brings a thumbnail with it: the photo cropped to the outline,
+downscaled to 256 px on the long side. The layout editor draws it clipped to the
+tool's outline and turned with the tool, under the pocket stroke and at reduced
+alpha, so conflict tints and labels stay legible and the drawer reads as *the
+tools* rather than as a set of silhouettes. **Show photos** turns them off.
+Library entries saved from a photographed trace keep a thumbnail too; since
+browser storage stops at roughly 5 MB, a library closing on that ceiling is
+saved without photos and says so.
+
+**The bed as a build plate.** Set a bed and its outline is drawn dashed under
+the container, showing where the drawer sits on the plate rather than only
+whether it fits. **⊹ Auto-centre** centres the layout on it. To place it by
+hand, drag the dashed outline, or click it and nudge with the arrow keys, 1 mm a
+press and 10 mm with Shift. The plate can also be non-rectangular: pick a saved
+container outline (a traced round or cut-cornered printer plate) and the readout
+warns when any part of the layout leaves the shape. When the layout is bigger
+than one bed, that same offset is the tiling window, so moving the plate moves
+the seams, which is manual control over where a seam falls without touching how
+seams are scored. A shaped plate is honoured on a single plate only; tiling
+plans against its bounding rectangle and says so.
+
+![The build plate](docs/step4-plate.png)
+
+**Known width and depth.** A drawer traced from a photo is only as square as the
+shot was, and the tape measure across the real drawer is the better number. Trace the drawer bottom, save it as a
+container outline, then type its measured inside width or depth into **Known
+width** / **Known depth** on the container panel. Each field scales its own axis
+about the outline's bounding-box centre, so the container does not move and the
+untouched axis is left alone; filling both absorbs the residual warp of a shot
+that was not quite square. The readout gives the implied scale factors, and
+warns when two measured axes disagree by more than 2 percent, which usually
+means a mis-traced edge rather than warp. The original outline stays in the
+library; only the layout's copy is scaled.
 
 ## Tests
 

@@ -4585,6 +4585,1869 @@ check('scale bar sets scale from two points (300 px = 75 mm -> 4 px/mm) and trac
 check('the bar is captioned with its length in the picture', /75/.test(barFlow.label), barFlow.label);
 
 
+// ---------- Step 4: Organize (shell) ----------
+
+console.log('\nStep 4: Organize');
+
+// A cold load: no photo, no trace, and Step 4 must still open. Uses its own
+// page so "fresh" means fresh; console errors there count like any other.
+const cold = await (async () => {
+  const fresh = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+  fresh.on('console', m => { if (m.type() === 'error') consoleErrors.push('[step4 cold load] ' + m.text()); });
+  fresh.on('pageerror', e => consoleErrors.push('[step4 cold load] ' + String(e)));
+  await fresh.goto(`http://127.0.0.1:${port}/`);
+  await fresh.waitForFunction(() => window.__app && window.ClipperLib);
+  const out = await fresh.evaluate(async () => {
+    const app = window.__app;
+    const before = document.getElementById('stepBtn4').disabled;
+    app.goStep(4);
+    await new Promise(r => setTimeout(r, 250));
+    const LAY_IDS = [
+      'layoutCanvas', 'layoutInfo', 'layoutWarn', 'layContainerSel', 'layRectFields', 'layW', 'layH',
+      'layToolSel', 'layAddBtn', 'laySelPanel', 'laySelName', 'laySelLabel', 'laySelLabelReset',
+      'laySelDepth', 'laySelRot', 'laySelNotch', 'laySelNotchDia', 'layRemoveBtn', 'layClearance',
+      'layFloor', 'layBorder', 'layBed', 'layBedCustom', 'layBedW', 'layBedH', 'layTabs',
+      'layTabFields', 'layTabHead', 'layTabNeck', 'layTabDepth', 'layTabSpacing', 'layTabFit',
+      'layBedInfo', 'layLabels', 'layLabelFields', 'layLabelProcess', 'layLabelHeight',
+      'layLabelBitRow', 'layLabelBit', 'layLabelMargin', 'layLabelDepth', 'layLabelFollow',
+      'layLabelInfo', 'layPreviewBtn', 'layExportBtn', 'layExportSvgBtn', 'layoutModal',
+    ];
+    return {
+      wasDisabled: before,
+      hasImage: !!app.state.image,
+      hasRect: !!app.state.rect,
+      step: app.state.step,
+      panelShown: !document.getElementById('panel4').hidden,
+      stageShown: !document.getElementById('stage4').hidden,
+      preview3d: !document.getElementById('stage3').hidden,
+      tabActive: document.getElementById('stepBtn4').classList.contains('active'),
+      others: [1, 2, 3].filter(i => !document.getElementById('panel' + i).hidden),
+      controlsShown: !document.getElementById('layoutModal').hidden,
+      inPanel4: !!document.querySelector('#panel4 #layoutModal #layAddBtn'),
+      inStage4: !!document.querySelector('#stage4 #layoutCanvas'),
+      missing: LAY_IDS.filter(id => !document.getElementById(id)),
+      overlays: document.querySelectorAll('.modal-overlay').length,
+      overlayGone: !document.querySelector('#layoutModal.modal-overlay') && !document.getElementById('layoutCloseBtn'),
+      hint: document.getElementById('layEmptyHint').textContent.trim(),
+      hintShown: !document.getElementById('layEmptyHint').hidden,
+      holderOptions: [...document.getElementById('holderType').options].map(o => o.value),
+      addedFromLibrary: (() => {
+        // The palette still adds: place a synthetic tool with no trace behind it.
+        app.state.layout.items.push({
+          name: 'cold tool', outer: [{ x: 5, y: 5 }, { x: 55, y: 5 }, { x: 55, y: 35 }, { x: 5, y: 35 }],
+          holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 30, y: 30,
+        });
+        app.refreshLayoutEditor();
+        return { n: app.state.layout.items.length, info: document.getElementById('layoutInfo').textContent };
+      })(),
+    };
+  });
+  await fresh.close();
+  return out;
+})();
+check('Step 4 is enabled unconditionally and opens with no photo and no trace',
+  cold.wasDisabled === false && !cold.hasImage && !cold.hasRect && cold.step === 4 &&
+  cold.panelShown && cold.stageShown && cold.tabActive && cold.others.length === 0,
+  `disabled ${cold.wasDisabled}, step ${cold.step}, panel ${cold.panelShown}, stage ${cold.stageShown}`);
+check('the layout editor and the 3D preview share the stage on Step 4',
+  cold.stageShown && cold.preview3d && cold.controlsShown && cold.inStage4,
+  `layout ${cold.stageShown}, 3D ${cold.preview3d}`);
+check('every layout control id survives the move out of the modal',
+  cold.missing.length === 0 && cold.inPanel4 && cold.inStage4,
+  cold.missing.length ? `missing ${cold.missing.join(', ')}` : 'all layout ids resolve');
+check('the layout modal overlay and its close button are gone',
+  cold.overlayGone && cold.overlays === 2,
+  `${cold.overlays} overlays left (project + CAD), close button ${cold.overlayGone}`);
+check('an empty Step 4 prompts for the library or a folder of traces',
+  cold.hintShown && /Add tools from your library, or open a folder of traces\./.test(cold.hint),
+  cold.hint);
+check('the Step 3 holder select still offers the layout option for old projects',
+  cold.holderOptions.includes('layout'), cold.holderOptions.join('/'));
+check('a drawer can be laid out on Step 4 with nothing traced',
+  cold.addedFromLibrary.n === 1 && /1 tool/.test(cold.addedFromLibrary.info),
+  cold.addedFromLibrary.info);
+
+// Step 3's "Drawer insert" holder type is now a shortcut to Step 4.
+await page.evaluate(() => window.__app.goStep(3));
+const jump = await page.evaluate(async () => {
+  const sel = document.getElementById('holderType');
+  sel.value = 'layout';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 250));
+  return {
+    step: window.__app.state.step,
+    type: window.__app.state.holder.type,
+    panel3Hidden: document.getElementById('panel3').hidden,
+    panel4Shown: !document.getElementById('panel4').hidden,
+    controlsShown: !document.getElementById('layoutModal').hidden,
+  };
+});
+check('the drawer-insert holder type on Step 3 jumps to Step 4 instead of opening a modal',
+  jump.step === 4 && jump.type === 'layout' && jump.panel3Hidden && jump.panel4Shown && jump.controlsShown,
+  `step ${jump.step}, holder ${jump.type}`);
+
+// The Step 4 export row: the same shared functions, whichever row calls them.
+await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 220, h: 140, name: null };
+  app.state.layout.items.length = 0;
+  const outline = [{ x: 5, y: 5 }, { x: 65, y: 5 }, { x: 65, y: 35 }, { x: 5, y: 35 }];
+  app.state.layout.items.push(
+    { name: 'spanner', outer: outline, holes: [], circles: [], x: 60, y: 40, rot: 0, depth: 4, thickness: 5 },
+    { name: 'pliers', outer: outline, holes: [], circles: [], x: 60, y: 100, rot: 0, depth: 4, thickness: 5 });
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 300));
+});
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#layExportBtn'),
+  ]);
+  check('Step 4 exports the insert STL from its own row',
+    !!dl && /-drawer-2p5d\.stl$/.test(dl.suggestedFilename()),
+    dl ? dl.suggestedFilename() : 'no download event');
+}
+const tilesGate = await page.evaluate(() => ({
+  noBed: document.getElementById('layExportTilesBtn').disabled,
+}));
+let step4Svg = '';
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#layExportSvgBtn'),
+  ]);
+  const fp = dl ? await dl.path().catch(() => null) : null;
+  step4Svg = fp ? fs.readFileSync(fp, 'utf8') : '';
+  // One cut path, evenodd: the container slab plus a subpath per pocket.
+  const subpaths = (step4Svg.match(/M /g) || []).length;
+  check('Step 4 exports the cut template SVG from its own row',
+    !!dl && /-drawer-template\.svg$/.test(dl.suggestedFilename()) &&
+    /width="220mm" height="140mm"/.test(step4Svg) && subpaths === 3,
+    dl ? `${dl.suggestedFilename()}, ${subpaths} subpaths` : 'no download event');
+}
+// The same state, exported through the shared function from Step 3, has to
+// come out byte for byte the same — one code path, two rows.
+const step3Svg = await page.evaluate(async () => {
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 200));
+  const out = window.__app.layoutExports.svg('auto');
+  return out ? await out.blob.text() : '';
+});
+check('an SVG exported from Step 4 is byte-identical to the one Step 3 produces',
+  step4Svg.length > 0 && step4Svg === step3Svg,
+  step4Svg === step3Svg ? `${step4Svg.length} bytes both ways`
+    : `${step4Svg.length} vs ${step3Svg.length} bytes`);
+
+// Tiled SVG: off with no bed, on once the layout outgrows one.
+const tilesUI = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 550, h: 380, name: null };
+  const bed = document.getElementById('layBed');
+  bed.value = '300x200';
+  bed.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 250));
+  return { enabled: !document.getElementById('layExportTilesBtn').disabled };
+});
+{
+  const [dl] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.click('#layExportTilesBtn'),
+  ]);
+  check('the tiled SVG button is dead without a bed and live once the layout outgrows one',
+    tilesGate.noBed && tilesUI.enabled && !!dl && /-drawer-tiles-2x2\.svg$/.test(dl.suggestedFilename()),
+    `no bed disabled ${tilesGate.noBed}, over bed enabled ${tilesUI.enabled}, ${dl ? dl.suggestedFilename() : 'no download'}`);
+}
+
+// Leave the page as the blocks after this one expect it: no holder, no items,
+// no bed, back on Step 3.
+await page.evaluate(async () => {
+  window.__app.state.layout.items.length = 0;
+  const bed = document.getElementById('layBed');
+  bed.value = 'none';
+  bed.dispatchEvent(new Event('change'));
+  const sel = document.getElementById('holderType');
+  sel.value = 'none';
+  sel.dispatchEvent(new Event('change'));
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
+// --- the folder reader: js/import/traceFolder.js ---
+
+const folder = await page.evaluate(async () => {
+  const { tracesFromFiles } = await import('/js/import/traceFolder.js');
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const mk = (path, body) => ({
+    path,
+    file: new File([typeof body === 'string' ? body : JSON.stringify(body)],
+      path.split('/').pop(), { type: 'application/json' }),
+  });
+  const project = {
+    app: '2.5D', version: 1, fileName: 'chisel',
+    regions: [{ thickness: 7.5 }],
+    trace: {
+      outer: rect(120, 240, 60, 30),
+      holes: [rect(130, 250, 10, 10)],
+      circles: [{ cx: 170, cy: 260, r: 4 }],
+    },
+    arcs: [{ i: 2, r: 6 }, { i: 3, r: 2.5 }],
+    lines: [{ a: 0, b: 1 }],
+  };
+  const library = [
+    { name: 'plane', kind: 'tool', thickness: 12, outer: rect(0, 0, 40, 20), holes: [], circles: [] },
+    { name: 'drawer', kind: 'container', outer: rect(0, 0, 400, 300), holes: [], circles: [] },
+    { name: 'square', outer: rect(50, 50, 30, 30) },
+  ];
+  const files = [
+    mk('tools/chisel.json', project),
+    mk('tools/library.json', library),
+    mk('tools/notes.txt', 'plainly not json'),
+    mk('tools/broken.json', '{ "app": "2.5D", '),
+    mk('tools/settings.json', { app: 'something-else', hello: 1 }),
+  ];
+  const progress = [];
+  const out = await tracesFromFiles(files, { onProgress: (d, t) => progress.push(d + '/' + t) });
+  // A bare File must work too; its path falls back to the file's own name.
+  const bare = await tracesFromFiles([new File([JSON.stringify(project)], 'copy.json')]);
+  const box = pts => {
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const p of pts) { a = Math.min(a, p.x); b = Math.min(b, p.y); c = Math.max(c, p.x); d = Math.max(d, p.y); }
+    return { x: a, y: b, w: c - a, h: d - b };
+  };
+  return {
+    names: out.entries.map(e => e.name),
+    kinds: out.entries.map(e => e.kind),
+    paths: out.entries.map(e => e.source.path),
+    thicknesses: out.entries.map(e => e.thickness),
+    chisel: {
+      box: box(out.entries[0].outer),
+      hole: out.entries[0].holes[0] ? box(out.entries[0].holes[0]) : null,
+      circle: out.entries[0].circles[0] || null,
+      arcs: out.entries[0].arcs,
+      lines: out.entries[0].lines,
+    },
+    squareBox: box(out.entries[2].outer),
+    skipped: out.skipped,
+    progress,
+    barePath: bare.entries.length === 1 ? bare.entries[0].source.path : null,
+  };
+});
+
+check('a folder of traces reads into one tool entry per trace, in file order',
+  folder.names.join(',') === 'chisel,plane,square' &&
+  folder.kinds.every(k => k === 'tool') &&
+  folder.paths.join(',') === 'tools/chisel.json,tools/library.json,tools/library.json',
+  `${folder.names.join(',')} / ${folder.paths.join(',')}`);
+
+check('thickness comes from regions[0] of a project and thickness of a library row, else null',
+  folder.thicknesses.length === 3 && folder.thicknesses[0] === 7.5 &&
+  folder.thicknesses[1] === 12 && folder.thicknesses[2] === null,
+  JSON.stringify(folder.thicknesses));
+
+check('outlines are origin-normalised to a 5 mm margin, with holes and circles moved with them',
+  folder.chisel.box.x === 5 && folder.chisel.box.y === 5 &&
+  folder.chisel.box.w === 60 && folder.chisel.box.h === 30 &&
+  folder.chisel.hole && folder.chisel.hole.x === 15 && folder.chisel.hole.y === 15 &&
+  folder.chisel.circle && folder.chisel.circle.cx === 55 && folder.chisel.circle.cy === 25 &&
+  folder.chisel.circle.r === 4 &&
+  folder.squareBox.x === 5 && folder.squareBox.y === 5,
+  JSON.stringify(folder.chisel.box) + ' hole ' + JSON.stringify(folder.chisel.hole) +
+  ' circle ' + JSON.stringify(folder.chisel.circle));
+
+check('arcs and lines are carried across with their indices intact',
+  JSON.stringify(folder.chisel.arcs) === JSON.stringify([{ i: 2, r: 6 }, { i: 3, r: 2.5 }]) &&
+  JSON.stringify(folder.chisel.lines) === JSON.stringify([{ a: 0, b: 1 }]),
+  JSON.stringify(folder.chisel.arcs) + ' ' + JSON.stringify(folder.chisel.lines));
+
+check('a container-kind library row is reported as skipped, not offered as a tool',
+  folder.skipped.some(s => s.reason === 'container' && s.name === 'drawer' && s.path === 'tools/library.json') &&
+  !folder.names.includes('drawer'),
+  JSON.stringify(folder.skipped));
+
+check('a .txt, a malformed .json and a JSON with no trace each get their own reason',
+  folder.skipped.length === 4 &&
+  folder.skipped.find(s => s.path === 'tools/notes.txt').reason === 'not-json' &&
+  folder.skipped.find(s => s.path === 'tools/broken.json').reason === 'parse-error' &&
+  folder.skipped.find(s => s.path === 'tools/settings.json').reason === 'not-a-trace',
+  JSON.stringify(folder.skipped));
+
+check('files are read one at a time, so a progress count can climb',
+  folder.progress.join(' ') === '1/5 2/5 3/5 4/5 5/5',
+  folder.progress.join(' '));
+
+check('a bare File is accepted as well as a { path, file } pair',
+  folder.barePath === 'copy.json', String(folder.barePath));
+
+// --- the Step 4 palette: Library and Folder groups ---
+
+const libBackup = await page.evaluate(() => localStorage.getItem('2p5d.library.v1'));
+
+const palette = await page.evaluate(async () => {
+  const app = window.__app;
+  const { tracesFromFiles } = await import('/js/import/traceFolder.js');
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const mk = (path, body) => ({
+    path,
+    file: new File([typeof body === 'string' ? body : JSON.stringify(body)],
+      path.split('/').pop(), { type: 'application/json' }),
+  });
+  const proj = (name, w, h, thickness) => ({
+    app: '2.5D', version: 1, fileName: name,
+    regions: [{ thickness }],
+    trace: { outer: rect(30, 40, w, h), holes: [], circles: [] },
+  });
+  // One library seeded by hand, so the Library group has something to list.
+  localStorage.setItem('2p5d.library.v1', JSON.stringify([
+    { name: 'seeded mallet', kind: 'tool', thickness: 9, outer: rect(5, 5, 50, 25), holes: [], circles: [] },
+    { name: 'seeded drawer', kind: 'container', outer: rect(5, 5, 400, 300), holes: [], circles: [] },
+  ]));
+  const read = await tracesFromFiles([
+    mk('bench/chisel.json', proj('chisel', 60, 20, 7)),
+    mk('bench/mallet.json', proj('mallet', 40, 40, 11)),
+    mk('bench/sub/rasp.json', proj('rasp', 80, 15, 6)),
+    mk('bench/readme.txt', 'ignore me'),
+  ]);
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  app.palette.setFolder(read, 'bench');
+  const rowsOf = id => Array.from(document.querySelectorAll(`#${id} .pal-name`))
+    .map(r => r.textContent);
+  return {
+    readCount: read.entries.length,
+    folderShown: !document.getElementById('layPalFolderGroup').hidden,
+    folderRows: rowsOf('layPalFolderList'),
+    folderHints: Array.from(document.querySelectorAll('#layPalFolderList .pal-row')).map(r => r.title),
+    libRows: rowsOf('layPalLibList'),
+    libCount: document.getElementById('layPalLibCount').textContent,
+    skipText: document.getElementById('layPalSkipped').textContent,
+    skipTitle: document.getElementById('layPalSkipped').title,
+    skipShown: !document.getElementById('layPalSkipped').hidden,
+  };
+});
+
+check('the palette lists the library and the folder side by side, containers left out',
+  palette.readCount === 3 && palette.folderShown &&
+  palette.folderRows.join(',') === 'chisel,mallet,rasp' &&
+  palette.libRows.join(',') === 'seeded mallet' && palette.libCount === '1',
+  `folder ${palette.folderRows.join(',')} / library ${palette.libRows.join(',')}`);
+
+check('a folder row carries its relative path, so two traces of one name stay apart',
+  palette.folderHints.join(',') === 'bench/chisel.json,bench/mallet.json,bench/sub/rasp.json',
+  palette.folderHints.join(','));
+
+check('the skipped count is shown, with the reasons in its tooltip',
+  palette.skipShown && palette.skipText === '1 file skipped' &&
+  palette.skipTitle === 'bench/readme.txt: not a .json file',
+  `${palette.skipText} / ${palette.skipTitle}`);
+
+const addAll = await page.evaluate(async () => {
+  const app = window.__app;
+  document.getElementById('layPalAddAllBtn').click();
+  await new Promise(r => setTimeout(r, 250));
+  const items = app.state.layout.items;
+  return {
+    n: items.length,
+    names: items.map(i => i.name),
+    sources: items.map(i => i.source && i.source.kind),
+    paths: items.map(i => i.source && i.source.path),
+    thicknesses: items.map(i => i.thickness),
+    dx: items.map(i => i.x - items[0].x),
+    sameY: items.every(i => i.y === items[0].y),
+    hasOuter: items.every(i => Array.isArray(i.outer) && i.outer.length === 4),
+  };
+});
+
+check('Add all places every folder trace, in order, on the same seeded grid',
+  addAll.n === 3 && addAll.names.join(',') === 'chisel,mallet,rasp' &&
+  addAll.dx.join(',') === '0,12,24' && addAll.sameY && addAll.hasOuter,
+  `${addAll.n} items, dx ${addAll.dx.join(',')}, same row ${addAll.sameY}`);
+
+check('a placed folder tool keeps its own thickness and records where it came from',
+  addAll.sources.every(k => k === 'folder') &&
+  addAll.paths.join(',') === 'bench/chisel.json,bench/mallet.json,bench/sub/rasp.json' &&
+  addAll.thicknesses.join(',') === '7,11,6',
+  `${addAll.sources.join(',')} / ${addAll.thicknesses.join(',')}`);
+
+const libAdd = await page.evaluate(async () => {
+  const app = window.__app;
+  const before = app.state.layout.items.length;
+  document.querySelector('#layPalLibList .pal-row button').click();
+  await new Promise(r => setTimeout(r, 200));
+  const last = app.state.layout.items[app.state.layout.items.length - 1];
+  // "Save to library" is the second button on a folder row.
+  document.querySelectorAll('#layPalFolderList .pal-row')[2].querySelectorAll('button')[1].click();
+  await new Promise(r => setTimeout(r, 200));
+  const lib = JSON.parse(localStorage.getItem('2p5d.library.v1'));
+  const saved = lib.find(o => o.name === 'rasp');
+  return {
+    grew: app.state.layout.items.length === before + 1,
+    name: last.name, noSource: !('source' in last),
+    savedKind: saved && saved.kind,
+    savedStripped: saved ? !('source' in saved) : false,
+    savedThickness: saved && saved.thickness,
+    savedOrigin: saved && saved.outer[0],
+    libNames: lib.map(o => o.name).join(','),
+  };
+});
+
+check('the Library group places a saved outline, with no folder provenance on it',
+  libAdd.grew && libAdd.name === 'seeded mallet' && libAdd.noSource,
+  `${libAdd.name} added ${libAdd.grew}, source-free ${libAdd.noSource}`);
+
+check('Save to library writes a folder trace into the library with its provenance stripped',
+  libAdd.savedKind === 'tool' && libAdd.savedStripped && libAdd.savedThickness === 6 &&
+  libAdd.savedOrigin && libAdd.savedOrigin.x === 5 && libAdd.savedOrigin.y === 5 &&
+  libAdd.libNames === 'seeded mallet,seeded drawer,rasp',
+  `${libAdd.libNames} / stripped ${libAdd.savedStripped} / ${JSON.stringify(libAdd.savedOrigin)}`);
+
+// Round-trip through the save format, on a page of its own so the load
+// cannot leave residue in the suite's main page.
+const roundTrip = await (async () => {
+  const saved = await page.evaluate(() => {
+    const p = JSON.parse(window.__app.serializeProject(false));
+    // The rectified copy stays, so this is a normal photo-less save; only the
+    // extra images go, to keep the payload small.
+    p.photo = null; p.back = null;
+    return JSON.stringify(p);
+  });
+  const fresh = await browser.newPage({ viewport: { width: 1500, height: 950 } });
+  fresh.on('console', m => { if (m.type() === 'error') consoleErrors.push('[step4 round trip] ' + m.text()); });
+  fresh.on('pageerror', e => consoleErrors.push('[step4 round trip] ' + String(e)));
+  await fresh.goto(`http://127.0.0.1:${port}/`);
+  await fresh.waitForFunction(() => window.__app && window.ClipperLib);
+  const out = await fresh.evaluate(async json => {
+    window.__app.loadProject(JSON.parse(json));
+    await new Promise(r => setTimeout(r, 500));
+    const items = window.__app.state.layout.items;
+    return {
+      n: items.length,
+      names: items.map(i => i.name).join(','),
+      paths: items.map(i => (i.source || {}).path).join(','),
+      pts: items.map(i => i.outer.length).join(','),
+    };
+  }, saved);
+  await fresh.close();
+  return out;
+})();
+
+check('a saved project reopens its folder-sourced drawer, provenance and all',
+  roundTrip.n === 4 && roundTrip.names === 'chisel,mallet,rasp,seeded mallet' &&
+  roundTrip.paths === 'bench/chisel.json,bench/mallet.json,bench/sub/rasp.json,' &&
+  roundTrip.pts === '4,4,4,4',
+  `${roundTrip.n}: ${roundTrip.names} / ${roundTrip.paths}`);
+
+// Put the page back the way the blocks after this one found it: no folder, no
+// items, the library as it was, back on Step 3.
+await page.evaluate(async backup => {
+  window.__app.palette.setFolder({ entries: [], skipped: [] }, '');
+  window.__app.state.layout.items.length = 0;
+  window.__app.layoutEditor.sel = -1;
+  window.__app.syncLaySelPanel(-1);
+  if (backup === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', backup);
+  // A trip back through Step 4 repopulates every list from the restored
+  // library, so no seeded entry is left in a select.
+  window.__app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  window.__app.refreshLayoutEditor();
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+}, libBackup);
+
+check('closing the folder empties its group again, leaving the library alone',
+  await page.evaluate(() => document.getElementById('layPalFolderGroup').hidden &&
+    window.__app.state.layout.items.length === 0),
+  'folder group hidden and the layout cleared');
+
+// --- the File System Access folder backend: js/import/folderAccess.js ---
+
+// One synthetic folder, "bench", built twice: as a handle tree for the File
+// System Access walk, and as the flat FileList a directory input hands over
+// for the same folder. Both must read into the very same palette.
+const walkVsInput = await page.evaluate(async () => {
+  const { walkFolder } = await import('/js/import/folderAccess.js');
+  const { tracesFromFiles } = await import('/js/import/traceFolder.js');
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const proj = (name, w, h, thickness) => JSON.stringify({
+    app: '2.5D', version: 1, fileName: name,
+    regions: [{ thickness }],
+    trace: { outer: rect(20, 30, w, h), holes: [], circles: [] },
+  });
+  const bodies = {
+    'bench/anvil.json': proj('anvil', 70, 25, 8),
+    'bench/notes.txt': 'not a trace',
+    'bench/sub/rasp.json': proj('rasp', 30, 30, 4),
+  };
+  // The handle tree. Deliberately out of alphabetical order, so the walk's
+  // own sort is what makes the two lists line up.
+  const fileHandle = (name, body) => ({
+    kind: 'file', name,
+    getFile: async () => new File([body], name, { type: 'application/json' }),
+  });
+  const dirHandle = (name, children) => {
+    const h = {
+      kind: 'directory', name, children,
+      values: async function* () { for (const c of h.children) yield c; },
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      written: [],
+      getFileHandle: async (n) => ({
+        createWritable: async () => ({
+          write: async text => { h.written.push({ name: n, text }); },
+          close: async () => {},
+        }),
+      }),
+    };
+    return h;
+  };
+  const root = dirHandle('bench', [
+    dirHandle('sub', [fileHandle('rasp.json', bodies['bench/sub/rasp.json'])]),
+    fileHandle('notes.txt', bodies['bench/notes.txt']),
+    fileHandle('anvil.json', bodies['bench/anvil.json']),
+  ]);
+  window.__fakeFolder = root;
+
+  // The same folder through a directory input: flat, every file already read.
+  const flat = Object.keys(bodies).map(path => {
+    const f = new File([bodies[path]], path.split('/').pop(), { type: 'application/json' });
+    Object.defineProperty(f, 'webkitRelativePath', { value: path });
+    return f;
+  });
+
+  const pairs = await walkFolder(root);
+  const fromWalk = await tracesFromFiles(pairs);
+  const fromInput = await tracesFromFiles(flat);
+  const shape = r => JSON.stringify({
+    entries: r.entries.map(e => ({ name: e.name, path: e.source.path, t: e.thickness, outer: e.outer })),
+    skipped: r.skipped,
+  });
+  return {
+    walkPaths: pairs.map(p => p.path),
+    inputPaths: flat.map(f => f.webkitRelativePath),
+    same: shape(fromWalk) === shape(fromInput),
+    names: fromWalk.entries.map(e => e.name),
+    skipped: fromWalk.skipped.map(s => s.path + ':' + s.reason),
+  };
+});
+
+check('the handle walk recurses into subfolders and yields the directory input’s own list',
+  walkVsInput.walkPaths.join(',') === 'bench/anvil.json,bench/notes.txt,bench/sub/rasp.json' &&
+  walkVsInput.walkPaths.join(',') === walkVsInput.inputPaths.join(',') && walkVsInput.same &&
+  walkVsInput.names.join(',') === 'anvil,rasp' &&
+  walkVsInput.skipped.join(',') === 'bench/notes.txt:not-json',
+  `${walkVsInput.walkPaths.join(',')} / identical ${walkVsInput.same}`);
+
+// With the API gone, one button still has to open a folder: the input.
+const noApi = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const inp = document.getElementById('layFolderInput');
+  let opened = 0;
+  const realClick = inp.click;
+  inp.click = () => { opened++; };
+  // showDirectoryPicker lives on Window.prototype, so shadow it rather than
+  // deleting it, and drop the shadow afterwards.
+  Object.defineProperty(window, 'showDirectoryPicker', { value: undefined, configurable: true });
+  document.getElementById('layOpenFolderBtn').click();
+  await new Promise(r => setTimeout(r, 150));
+  inp.click = realClick;
+  delete window.showDirectoryPicker;
+  return { opened, isDir: inp.hasAttribute('webkitdirectory'), multiple: inp.multiple };
+});
+
+check('without the File System Access API the same button falls back to the directory input',
+  noApi.opened === 1 && noApi.isDir && noApi.multiple,
+  `input opened ${noApi.opened}, webkitdirectory ${noApi.isDir}`);
+
+// With the API present, the picker feeds the very same palette.
+const picked = await page.evaluate(async () => {
+  Object.defineProperty(window, 'showDirectoryPicker', {
+    value: async () => window.__fakeFolder, configurable: true,
+  });
+  document.getElementById('layOpenFolderBtn').click();
+  await new Promise(r => setTimeout(r, 400));
+  const rows = () => Array.from(document.querySelectorAll('#layPalFolderList .pal-name'))
+    .map(r => r.textContent);
+  return {
+    rows: rows(),
+    label: document.getElementById('layPalFolderName').textContent,
+    shown: !document.getElementById('layPalFolderGroup').hidden,
+    reopen: document.getElementById('layReopenFolderBtn').textContent,
+    reopenShown: !document.getElementById('layReopenFolderBtn').hidden,
+    saveShown: !document.getElementById('layPalSaveFolderBtn').hidden,
+    handled: window.__app.folderBackend.handle === window.__fakeFolder,
+  };
+});
+
+check('the picker backend fills the folder palette and offers to reopen and write back',
+  picked.rows.join(',') === 'anvil,rasp' && picked.label === 'bench' && picked.shown &&
+  picked.handled && picked.reopenShown && picked.reopen === '↻ bench' && picked.saveShown,
+  `${picked.rows.join(',')} / ${picked.label} / reopen "${picked.reopen}" / save ${picked.saveShown}`);
+
+// Reopen re-walks the handle, so a file added since shows up without a pick.
+const reopened = await page.evaluate(async () => {
+  const root = window.__fakeFolder;
+  const body = JSON.stringify({
+    app: '2.5D', version: 1, fileName: 'zed',
+    regions: [{ thickness: 3 }],
+    trace: { outer: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }], holes: [], circles: [] },
+  });
+  root.children[0].children.push({
+    kind: 'file', name: 'zed.json',
+    getFile: async () => new File([body], 'zed.json', { type: 'application/json' }),
+  });
+  document.getElementById('layReopenFolderBtn').click();
+  await new Promise(r => setTimeout(r, 400));
+  return Array.from(document.querySelectorAll('#layPalFolderList .pal-name')).map(r => r.textContent);
+});
+
+check('Reopen re-reads the folder from disk, picking up a trace added since',
+  reopened.join(',') === 'anvil,rasp,zed', reopened.join(','));
+
+// Save project to folder writes project JSON, and nothing else, through the handle.
+const wrote = await page.evaluate(async () => {
+  const root = window.__fakeFolder;
+  root.written.length = 0;
+  window.__app.state.fileName = 'bench drawer';
+  document.getElementById('layPalSaveFolderBtn').click();
+  await new Promise(r => setTimeout(r, 400));
+  const w = root.written[0] || null;
+  let parsed = null;
+  try { parsed = JSON.parse(w.text); } catch { /* reported below */ }
+  return {
+    n: root.written.length,
+    name: w && w.name,
+    app: parsed && parsed.app,
+    hasLayout: !!(parsed && parsed.layout),
+  };
+});
+
+check('Save project to folder writes one project JSON, named for the project, into the folder',
+  wrote.n === 1 && wrote.name === 'bench drawer.json' && wrote.app === '2.5D' && wrote.hasLayout,
+  `${wrote.n} written, "${wrote.name}", app ${wrote.app}`);
+
+// The handle store: a real directory handle structured-clones into IndexedDB;
+// anything that does not is simply not remembered, and says so.
+const store = await page.evaluate(async () => {
+  const fa = await import('/js/import/folderAccess.js');
+  const okPlain = await fa.rememberFolder({ name: 'plain', kind: 'directory' }, 'plain');
+  const back = await fa.recallFolder();
+  const okUnclonable = await fa.rememberFolder({ name: 'fn', values() {} }, 'fn');
+  const still = await fa.recallFolder();
+  await fa.forgetFolder();
+  const gone = await fa.recallFolder();
+  const dbs = typeof indexedDB.databases === 'function'
+    ? (await indexedDB.databases()).map(d => d.name) : ['2p5d.folder.v1'];
+  return {
+    okPlain, okUnclonable,
+    label: back && back.label,
+    handleName: back && back.handle && back.handle.name,
+    stillThere: !!still,
+    gone: gone === null,
+    named: dbs.includes('2p5d.folder.v1'),
+  };
+});
+
+check('the folder handle is remembered in IndexedDB under 2p5d.folder.v1, and forgotten on request',
+  store.okPlain && store.label === 'plain' && store.handleName === 'plain' &&
+  store.named && store.stillThere && store.gone && store.okUnclonable === false,
+  `remembered ${store.okPlain} as "${store.label}", unclonable ${store.okUnclonable}, cleared ${store.gone}`);
+
+// Put the page back: no folder, no handle, the real picker (if any) restored.
+await page.evaluate(async () => {
+  const fa = await import('/js/import/folderAccess.js');
+  await fa.forgetFolder();
+  window.__app.folderBackend.forget();
+  window.__app.palette.setFolder({ entries: [], skipped: [] }, '');
+  window.__app.state.layout.items.length = 0;
+  window.__app.state.fileName = 'object';
+  window.__app.layoutEditor.sel = -1;
+  window.__app.syncLaySelPanel(-1);
+  delete window.showDirectoryPicker;
+  delete window.__fakeFolder;
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
+// --- photos inside traces ---
+
+const readerThumb = await page.evaluate(async () => {
+  const { tracesFromFiles } = await import('/js/import/traceFolder.js');
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  // A stand-in rectified photo: 400 x 300 px at 4 px/mm, so 100 x 75 mm.
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 300;
+  const g = c.getContext('2d');
+  g.fillStyle = '#1f3f7f'; g.fillRect(0, 0, 400, 300);
+  g.fillStyle = '#e0c060'; g.fillRect(80, 120, 240, 120);
+  g.fillStyle = '#ffffff'; g.fillRect(120, 150, 40, 40);
+  const rectified = c.toDataURL('image/jpeg', 0.85);
+  window.__photoCanvas = c;
+
+  const mk = (path, body) => ({
+    path,
+    file: new File([JSON.stringify(body)], path.split('/').pop(), { type: 'application/json' }),
+  });
+  // The outline's box is 20,30 to 80,60 mm, which is 80,120 to 320,240 px:
+  // 240 x 120, already inside the 256 px cap, so the crop is not downscaled.
+  const withPhoto = {
+    app: '2.5D', version: 1, fileName: 'photo tool',
+    regions: [{ thickness: 6 }],
+    trace: { outer: rect(20, 30, 60, 30), holes: [], circles: [] },
+    rectified, pxPerMm: 4,
+  };
+  const noPhoto = {
+    app: '2.5D', version: 1, fileName: 'bare tool',
+    regions: [{ thickness: 6 }],
+    trace: { outer: rect(20, 30, 60, 30), holes: [], circles: [] },
+  };
+  // A library row that already carries a thumb of its own, at an origin that
+  // has to move with the outline when the row is re-normalised.
+  const libRow = [{
+    name: 'saved row', kind: 'tool', thickness: 4,
+    outer: rect(100, 200, 20, 20), holes: [], circles: [],
+    thumb: { dataUrl: 'data:image/jpeg;base64,/9j/', mmPerPx: 0.5, origin: { x: 100, y: 200 } },
+  }];
+  const out = await tracesFromFiles([
+    mk('shed/photo.json', withPhoto),
+    mk('shed/bare.json', noPhoto),
+    mk('shed/rows.json', libRow),
+  ]);
+  const bare = await tracesFromFiles([mk('shed/photo.json', withPhoto)], { thumbs: false });
+  const t = out.entries[0].thumb;
+  window.__photoThumb = t;
+  return {
+    mmPerPx: t && t.mmPerPx,
+    origin: t && t.origin,
+    isJpeg: !!t && t.dataUrl.startsWith('data:image/jpeg'),
+    bytes: t ? t.dataUrl.length : -1,
+    noPhotoHasThumb: 'thumb' in out.entries[1],
+    rowThumb: out.entries[2].thumb,
+    optedOut: 'thumb' in bare.entries[0],
+  };
+});
+
+check('a project photo becomes a thumb whose mm-per-pixel and origin line up with the outline',
+  readerThumb.mmPerPx === 0.25 &&
+  readerThumb.origin.x === 5 && readerThumb.origin.y === 5 &&
+  readerThumb.isJpeg && readerThumb.bytes > 0 && readerThumb.bytes < 30 * 1024 &&
+  !readerThumb.noPhotoHasThumb && !readerThumb.optedOut,
+  `${readerThumb.mmPerPx} mm/px, origin ${JSON.stringify(readerThumb.origin)}, ${readerThumb.bytes} bytes`);
+
+check('a library row’s own thumb survives the reader, shifted with its outline',
+  readerThumb.rowThumb && readerThumb.rowThumb.mmPerPx === 0.5 &&
+  readerThumb.rowThumb.origin.x === 5 && readerThumb.rowThumb.origin.y === 5,
+  JSON.stringify(readerThumb.rowThumb && readerThumb.rowThumb.origin));
+
+// The clipped, rotated draw. One item with a photo, one without: the second
+// must not throw, and turning photos on must visibly change the canvas.
+const drawPhotos = await page.evaluate(async () => {
+  const app = window.__app;
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const items = app.state.layout.items;
+  items.length = 0;
+  items.push({
+    name: 'photo', outer: rect(5, 5, 60, 30), holes: [], circles: [],
+    thickness: 6, depth: null, rot: 20, x: 60, y: 50, thumb: window.__photoThumb,
+  });
+  items.push({
+    name: 'plain', outer: rect(5, 5, 30, 30), holes: [], circles: [],
+    thickness: 6, depth: null, rot: 0, x: 150, y: 95,
+  });
+  const ed = app.layoutEditor;
+  const canvas = document.getElementById('layoutCanvas');
+  let threw = null;
+  let off = '', on = '';
+  try {
+    ed.showPhotos = false;
+    app.refreshLayoutEditor();
+    off = canvas.toDataURL();
+    ed.showPhotos = true;
+    ed.draw();                                  // kicks off the decode
+    await new Promise(r => setTimeout(r, 500));  // the load handler redraws
+    ed.draw();
+    on = canvas.toDataURL();
+  } catch (err) { threw = String(err); }
+  return { threw, painted: off !== '' && on !== off, cached: ed._thumbs.size };
+});
+
+check('photos draw clipped into their outlines, and an item with no photo draws anyway',
+  drawPhotos.threw === null && drawPhotos.painted && drawPhotos.cached === 1,
+  `threw ${drawPhotos.threw} / changed the canvas ${drawPhotos.painted} / ${drawPhotos.cached} decoded`);
+
+const photoToggle = await page.evaluate(async () => {
+  const cb = document.getElementById('layShowPhotos');
+  const defaultOn = cb.checked && window.__app.layoutEditor.showPhotos === true;
+  cb.checked = false; cb.dispatchEvent(new Event('change'));
+  const offNow = window.__app.layoutEditor.showPhotos;
+  cb.checked = true; cb.dispatchEvent(new Event('change'));
+  const onNow = window.__app.layoutEditor.showPhotos;
+  return { defaultOn, offNow, onNow };
+});
+
+check('Show photos defaults on and drives the editor both ways',
+  photoToggle.defaultOn && photoToggle.offNow === false && photoToggle.onNow === true,
+  `default ${photoToggle.defaultOn}, off ${photoToggle.offNow}, on ${photoToggle.onNow}`);
+
+// Saving a trace to the outline library crops the photo the same way.
+const libThumb = await page.evaluate(async () => {
+  const app = window.__app;
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const libBefore = localStorage.getItem('2p5d.library.v1');
+  const rectBefore = app.state.rect;
+  const traceBefore = app.traceEditor.getTrace();
+  localStorage.setItem('2p5d.library.v1', '[]');
+  app.state.rect = { canvas: window.__photoCanvas, pxPerMm: 4 };
+  app.traceEditor.setTrace(rect(20, 30, 60, 30), []);
+  document.getElementById('libName').value = 'photo tool';
+  document.getElementById('libKind').value = 'tool';
+  document.getElementById('libSaveBtn').click();
+  const saved = JSON.parse(localStorage.getItem('2p5d.library.v1') || '[]')
+    .find(o => o.name === 'photo tool') || null;
+  // Put every borrowed piece of state back before anything else runs.
+  app.traceEditor.setTrace(traceBefore.outer, traceBefore.holes);
+  app.traceEditor.setCircles(traceBefore.circles);
+  app.state.rect = rectBefore;
+  if (libBefore === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', libBefore);
+  app.palette.refresh();
+  return {
+    had: !!saved,
+    mmPerPx: saved && saved.thumb && saved.thumb.mmPerPx,
+    origin: saved && saved.thumb && saved.thumb.origin,
+    bytes: saved && saved.thumb ? saved.thumb.dataUrl.length : -1,
+  };
+});
+
+check('saving to the outline library stores the photo cropped to the outline',
+  libThumb.had && libThumb.mmPerPx === 0.25 &&
+  libThumb.origin.x === 5 && libThumb.origin.y === 5 &&
+  libThumb.bytes > 0 && libThumb.bytes < 30 * 1024,
+  `${libThumb.mmPerPx} mm/px, origin ${JSON.stringify(libThumb.origin)}, ${libThumb.bytes} bytes`);
+
+// Near the 5 MB localStorage ceiling the photos come out rather than the save
+// failing outright; a library that is nowhere near it is left exactly alone.
+const budget = await page.evaluate(() => {
+  const app = window.__app;
+  const big = 'data:image/jpeg;base64,' + 'A'.repeat(2 * 1024 * 1024);
+  const thumb = { dataUrl: big, mmPerPx: 0.25, origin: { x: 5, y: 5 } };
+  const heavy = app.libFitThumbs([
+    { name: 'a', kind: 'tool', outer: [], thumb },
+    { name: 'b', kind: 'tool', outer: [], thumb },
+    { name: 'c', kind: 'tool', outer: [] },
+  ]);
+  const light = app.libFitThumbs([
+    { name: 'a', kind: 'tool', outer: [], thumb: { dataUrl: 'data:image/jpeg;base64,/9j/', mmPerPx: 1, origin: { x: 5, y: 5 } } },
+  ]);
+  return {
+    dropped: heavy.dropped,
+    anyLeft: heavy.list.some(o => o.thumb),
+    names: heavy.list.map(o => o.name).join(','),
+    kept: light.dropped === 0 && !!light.list[0].thumb,
+  };
+});
+
+check('past 4 MB the library is saved without photos, and a small library keeps them',
+  budget.dropped === 2 && !budget.anyLeft && budget.names === 'a,b,c' && budget.kept,
+  `${budget.dropped} photos dropped, rows ${budget.names}, small library kept ${budget.kept}`);
+
+// Leave the page as the blocks after this one expect it.
+await page.evaluate(async () => {
+  window.__app.state.layout.items.length = 0;
+  window.__app.layoutEditor.sel = -1;
+  window.__app.layoutEditor.showPhotos = true;
+  document.getElementById('layShowPhotos').checked = true;
+  window.__app.syncLaySelPanel(-1);
+  delete window.__photoThumb;
+  delete window.__photoCanvas;
+  // A trip through Step 4 repopulates every list from the restored library.
+  window.__app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  window.__app.refreshLayoutEditor();
+  window.__app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
+// --- the bed as a build plate ---
+
+// A 200 x 100 layout on a 300 x 200 plate: Auto-centre puts it 50 mm in from
+// every edge, and the dashed outline that gets drawn is that plate.
+const plateCentre = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 200, h: 100, r: 6, name: null };
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  const bed = document.getElementById('layBed');
+  bed.value = '300x200'; bed.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  const before = app.bed.loop();
+  document.getElementById('layBedCentreBtn').click();
+  await new Promise(r => setTimeout(r, 200));
+  const off = app.bed.offset();
+  const loop = app.bed.loop();
+  const box = l => ({
+    minX: Math.min(...l.map(p => p.x)), minY: Math.min(...l.map(p => p.y)),
+    maxX: Math.max(...l.map(p => p.x)), maxY: Math.max(...l.map(p => p.y)),
+  });
+  return {
+    off, n: loop.length, plate: box(loop), zero: box(before),
+    info: document.getElementById('layBedInfo').textContent,
+    drawn: !!app.layoutEditor.bedLoop(),
+  };
+});
+
+check('Auto-centre puts a 200 × 100 layout in the middle of a 300 × 200 plate',
+  plateCentre.off.x === 50 && plateCentre.off.y === 50 && plateCentre.n === 4 &&
+  plateCentre.plate.minX === -45 && plateCentre.plate.minY === -45 &&
+  plateCentre.plate.maxX === 255 && plateCentre.plate.maxY === 155 &&
+  plateCentre.zero.minX === 5 && plateCentre.zero.minY === 5 && plateCentre.drawn,
+  `offset ${JSON.stringify(plateCentre.off)}, plate ${JSON.stringify(plateCentre.plate)}`);
+
+// Dragging the dashed outline moves the plate, not the layout: the offset
+// runs the other way, and the drag selects the plate rather than a tool.
+const plateDrag = await page.evaluate(async () => {
+  const app = window.__app, ed = app.layoutEditor;
+  const cv = ed.canvas;
+  const r = cv.getBoundingClientRect();
+  const client = mm => {
+    const s = ed.mmToScreen(mm);
+    return { x: r.left + s.x * (r.width / cv.width), y: r.top + s.y * (r.height / cv.height) };
+  };
+  // Left edge of the plate, halfway down: a point on the outline and on no tool.
+  const grab = client({ x: -45, y: 55 });
+  const drop = client({ x: -45 + 20, y: 55 + 8 });
+  const cap = cv.setPointerCapture, rel = cv.releasePointerCapture;
+  cv.setPointerCapture = () => {}; cv.releasePointerCapture = () => {};
+  const ev = (type, p) => cv.dispatchEvent(new PointerEvent(type, {
+    clientX: p.x, clientY: p.y, pointerId: 1, bubbles: true,
+  }));
+  ev('pointerdown', grab);
+  const selected = ed.bedSel;
+  ev('pointermove', drop);
+  ev('pointerup', drop);
+  cv.setPointerCapture = cap; cv.releasePointerCapture = rel;
+  await new Promise(r2 => setTimeout(r2, 150));
+  return { selected, off: app.bed.offset() };
+});
+
+check('dragging the dashed plate outline moves the plate under the layout',
+  plateDrag.selected && Math.abs(plateDrag.off.x - 30) < 1.5 &&
+  Math.abs(plateDrag.off.y - 42) < 1.5,
+  `selected ${plateDrag.selected}, offset ${JSON.stringify(plateDrag.off)}`);
+
+// Arrow keys nudge the selected plate: 1 mm, 10 mm with Shift.
+const plateNudge = await page.evaluate(async () => {
+  const app = window.__app;
+  app.layoutEditor.bedSel = true;
+  app.state.layout.bed.offset = { x: 50, y: 50 };
+  app.refreshLayoutEditor();
+  const key = (k, shift) => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, shiftKey: !!shift, bubbles: true }));
+  key('ArrowRight');
+  const one = { ...app.bed.offset() };
+  key('ArrowDown', true);
+  const ten = { ...app.bed.offset() };
+  // With nothing selected the arrow keys are somebody else's to use.
+  app.layoutEditor.bedSel = false;
+  key('ArrowRight');
+  const idle = { ...app.bed.offset() };
+  return { one, ten, idle, readout: document.getElementById('layBedOffsetInfo').textContent };
+});
+
+check('arrow keys nudge the plate 1 mm, and 10 mm with Shift, only while it is selected',
+  plateNudge.one.x === 49 && plateNudge.one.y === 50 &&
+  plateNudge.ten.x === 49 && plateNudge.ten.y === 40 &&
+  plateNudge.idle.x === 49 && plateNudge.idle.y === 40 &&
+  /across and/.test(plateNudge.readout) && /nudge with the arrow keys/.test(plateNudge.readout),
+  `${JSON.stringify(plateNudge.one)} then ${JSON.stringify(plateNudge.ten)}, readout ${plateNudge.readout.slice(0, 60)}`);
+
+// A layout wider than the bed tiles, and the plate offset is the tiling
+// window: pushing the plate 10 mm takes 10 mm off the first tile and carries
+// every seam with it.
+const tileWindow = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 400, h: 140, r: 6, name: null };
+  app.state.layout.items.length = 0;
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  app.state.layout.items.push({
+    name: 'wide', outer: rect(180, 60), holes: [], circles: [],
+    x: 105, y: 75, rot: 0, depth: 4, thickness: 5,
+  });
+  app.refreshLayoutEditor();
+  await new Promise(r => setTimeout(r, 200));
+  const at = off => {
+    app.state.layout.bed.offset = { x: off, y: 0 };
+    const plan = app.bed.plan();
+    return plan ? plan.tiles.map(t => t.x0) : null;
+  };
+  const zero = at(0), ten = at(10);
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.refreshLayoutEditor();
+  return { zero, ten };
+});
+
+check('the tiling window follows the plate: a 10 mm nudge shifts every tile origin by 10 mm',
+  tileWindow.zero && tileWindow.ten && tileWindow.zero.length === 2 &&
+  tileWindow.ten.length === tileWindow.zero.length &&
+  tileWindow.ten.every((x, i) => Math.abs(x - (tileWindow.zero[i] - 10)) < 1e-6),
+  `${JSON.stringify(tileWindow.zero)} -> ${JSON.stringify(tileWindow.ten)}`);
+
+// A round plate is honoured in the single-tile case: the layout fits its
+// bounding square and still has four corners hanging off the circle.
+const roundPlate = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 200, h: 100, r: 6, name: null };
+  const disc = d => {
+    const out = [];
+    for (let i = 0; i < 64; i++) {
+      const a = (i / 64) * Math.PI * 2;
+      out.push({ x: d / 2 + (d / 2) * Math.cos(a), y: d / 2 + (d / 2) * Math.sin(a) });
+    }
+    return out;
+  };
+  const on = d => {
+    app.state.layout.bed.shape = { name: `${d} mm disc`, outer: disc(d) };
+    app.state.layout.bed.preset = 'custom';
+    app.state.layout.bed.w = d; app.state.layout.bed.h = d;
+    app.bed.centre();
+    app.refreshLayoutEditor();
+    return {
+      escapes: app.bed.escapes(),
+      info: document.getElementById('layBedInfo').textContent,
+      cls: document.getElementById('layBedInfo').className,
+    };
+  };
+  const tight = on(200);
+  const roomy = on(240);
+  return { tight, roomy };
+});
+
+check('a round plate warns when the corners of the layout leave it, and stays quiet when they do not',
+  roundPlate.tight.escapes >= 4 && roundPlate.tight.cls === 'warn' &&
+  /outside the 200 mm disc plate/.test(roundPlate.tight.info) &&
+  roundPlate.roomy.escapes === 0 && roundPlate.roomy.cls === 'hint' &&
+  /Shaped plate: 240 mm disc/.test(roundPlate.roomy.info),
+  `${roundPlate.tight.escapes} out on the small disc, ${roundPlate.roomy.escapes} on the large one`);
+
+// The plate shape and offset are additive save-format fields: they survive a
+// round trip, and a project saved before they existed still loads.
+const plateSave = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.bed.offset = { x: 12, y: 7 };
+  const saved = JSON.parse(app.serializeProject(false));
+  const legacy = JSON.parse(app.serializeProject(false));
+  delete legacy.layout.bed.offset;
+  delete legacy.layout.bed.shape;
+  await app.loadProject(saved);
+  const back = { off: app.bed.offset(), shape: app.state.layout.bed.shape && app.state.layout.bed.shape.name };
+  // loadProject merges the file's bed onto the live one, so a pre-build-plate
+  // project is only interesting against a state that has no plate either:
+  // the merge must leave a usable offset rather than an undefined one.
+  app.state.layout.bed.shape = null;
+  delete app.state.layout.bed.offset;
+  await app.loadProject(legacy);
+  const old = {
+    off: app.bed.offset(), shape: app.state.layout.bed.shape,
+    defined: !!app.state.layout.bed.offset,
+  };
+  return { back, old, hadShape: !!saved.layout.bed.shape };
+});
+
+check('the plate shape and offset round-trip through a project, and an older project still loads',
+  plateSave.hadShape && plateSave.back.off.x === 12 && plateSave.back.off.y === 7 &&
+  plateSave.back.shape === '240 mm disc' &&
+  plateSave.old.off.x === 0 && plateSave.old.off.y === 0 && !plateSave.old.shape &&
+  plateSave.old.defined,
+  `back ${JSON.stringify(plateSave.back)}, legacy ${JSON.stringify(plateSave.old)}`);
+
+// A plate-shape name is text out of a project file, so it goes into the select
+// as text. A name carrying markup must render as that markup's characters and
+// run nothing.
+const plateName = await page.evaluate(async () => {
+  const app = window.__app;
+  const square = [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 200 }, { x: 0, y: 200 }];
+  const proj = JSON.parse(app.serializeProject(false));
+  proj.layout.bed = {
+    ...proj.layout.bed, preset: 'custom', w: 200, h: 200, offset: { x: 0, y: 0 },
+    shape: { name: '</option><img src=x onerror="window.__plateInjected = 1">', outer: square },
+  };
+  await app.loadProject(proj);
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 250));
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 250));
+  const sel = document.getElementById('layBedShape');
+  const opt = sel.querySelector('option[value="__shape"]');
+  return {
+    ran: !!window.__plateInjected,
+    imgs: document.querySelectorAll('img[src="x"]').length,
+    inside: sel.querySelectorAll('*:not(option)').length,
+    text: opt ? opt.textContent : null,
+    value: sel.value,
+  };
+});
+
+check('a plate-shape name out of a project file is written as text, never as markup',
+  !plateName.ran && plateName.imgs === 0 && plateName.inside === 0 &&
+  plateName.value === '__shape' &&
+  /<img src=x onerror=/.test(plateName.text),
+  `ran ${plateName.ran}, ${plateName.imgs} injected nodes, option ${JSON.stringify(plateName.text)}`);
+
+// Picking a shape has to show in the select it was picked from, and backing
+// out of it has to give the user's own bed rectangle back.
+const plateSelect = await page.evaluate(async () => {
+  const app = window.__app;
+  const libBefore = localStorage.getItem('2p5d.library.v1');
+  const disc = [];
+  for (let i = 0; i < 32; i++) {
+    const a = (i / 32) * Math.PI * 2;
+    disc.push({ x: 90 + 90 * Math.cos(a), y: 90 + 90 * Math.sin(a) });
+  }
+  localStorage.setItem('2p5d.library.v1', JSON.stringify([
+    { name: 'round plate', kind: 'container', outer: disc, holes: [], circles: [] },
+  ]));
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 250));
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 250));
+  const sel = document.getElementById('layBedShape');
+  const listed = Array.from(sel.options).some(o => o.value === '0');
+  sel.value = '0';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 150));
+  const picked = {
+    value: sel.value, index: sel.selectedIndex,
+    label: sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].textContent : null,
+    name: app.state.layout.bed.shape && app.state.layout.bed.shape.name,
+    w: app.state.layout.bed.w, h: app.state.layout.bed.h,
+  };
+  sel.value = 'rect';
+  sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 150));
+  const cleared = {
+    value: sel.value, index: sel.selectedIndex,
+    shape: app.state.layout.bed.shape,
+    preset: app.state.layout.bed.preset,
+    w: app.state.layout.bed.w, h: app.state.layout.bed.h,
+  };
+  if (libBefore === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', libBefore);
+  return { listed, picked, cleared };
+});
+
+check('picking a plate shape shows it in the select, and a rectangle again gives the bed back',
+  plateSelect.listed &&
+  plateSelect.picked.value === '__shape' && plateSelect.picked.index === 1 &&
+  /round plate/.test(plateSelect.picked.label || '') &&
+  plateSelect.picked.name === 'round plate' &&
+  plateSelect.picked.w === 180 && plateSelect.picked.h === 180 &&
+  plateSelect.cleared.value === 'rect' && plateSelect.cleared.index === 0 &&
+  !plateSelect.cleared.shape &&
+  plateSelect.cleared.w === 300 && plateSelect.cleared.h === 200,
+  `picked ${JSON.stringify(plateSelect.picked)}, cleared ${JSON.stringify(plateSelect.cleared)}`);
+
+// A project saved before the build plate existed carries no shape and no
+// offset, and must load with neither, whatever plate the drawer before it left
+// on screen. Inheriting one retiles a drawer that fits its bed whole.
+const plateLegacy = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 280, h: 180, r: 6, name: null };
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  const legacy = JSON.parse(app.serializeProject(false));
+  delete legacy.layout.bed.shape;
+  delete legacy.layout.bed.offset;
+  // The drawer on screen before it: a plate shape picked and the plate dragged.
+  app.state.layout.bed.shape = { name: 'someone else\'s plate', outer: [{ x: 0, y: 0 }, { x: 250, y: 0 }, { x: 250, y: 250 }, { x: 0, y: 250 }] };
+  app.state.layout.bed.offset = { x: 37, y: 21 };
+  await app.loadProject(legacy);
+  app.refreshLayoutEditor();
+  return {
+    off: app.bed.offset(),
+    shape: app.state.layout.bed.shape,
+    info: document.getElementById('layBedInfo').textContent,
+    tilesBtn: document.getElementById('layExportTilesBtn').disabled,
+    plan: !!app.bed.plan(),
+  };
+});
+
+check('a project saved before the build plate loads with no plate, not the last drawer\'s',
+  plateLegacy.off.x === 0 && plateLegacy.off.y === 0 && !plateLegacy.shape &&
+  /Fits the 300 × 200 bed in one piece/.test(plateLegacy.info) &&
+  plateLegacy.tilesBtn === true,
+  `offset ${JSON.stringify(plateLegacy.off)}, shape ${JSON.stringify(plateLegacy.shape)}, info ${plateLegacy.info}`);
+
+// The tiling window can only start at or before the layout, so a plate nudged
+// the other way changes no seam. Say that, rather than exporting the same
+// tiles and letting the readout claim the plate moved.
+const plateNeg = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 400, h: 140, r: 6, name: null };
+  const at = off => {
+    app.state.layout.bed.offset = { x: off, y: 0 };
+    app.refreshLayoutEditor();
+    const plan = app.bed.plan();
+    const el = document.getElementById('layBedInfo');
+    return { x0: plan ? plan.tiles.map(t => t.x0) : null, info: el.textContent, cls: el.className };
+  };
+  const zero = at(0), back = at(-40);
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.refreshLayoutEditor();
+  return { zero, back };
+});
+
+check('a plate nudged where the seams cannot follow says so instead of tiling in silence',
+  plateNeg.zero.cls === 'hint' && !/negative/.test(plateNeg.zero.info) &&
+  plateNeg.zero.x0 && plateNeg.back.x0 &&
+  plateNeg.back.x0.length === plateNeg.zero.x0.length &&
+  plateNeg.back.x0.every((x, i) => x === plateNeg.zero.x0[i]) &&
+  plateNeg.back.cls === 'warn' && /offset is negative/.test(plateNeg.back.info),
+  `${JSON.stringify(plateNeg.zero.x0)} -> ${JSON.stringify(plateNeg.back.x0)}, ${plateNeg.back.cls}: ${plateNeg.back.info.slice(-90)}`);
+
+// A drawer that fits the plate but has been dragged off its right edge is
+// mis-placed, not too big: it says so the way the same drag the other way
+// does, and it is not cut into tiles because of where the plate sits.
+const plateOver = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 220, h: 140, r: 6, name: null };
+  const outline = [{ x: 5, y: 5 }, { x: 65, y: 5 }, { x: 65, y: 35 }, { x: 5, y: 35 }];
+  app.state.layout.items.push(
+    { name: 'spanner', outer: outline, holes: [], circles: [], x: 60, y: 40, rot: 0, depth: 4, thickness: 5 },
+    { name: 'pliers', outer: outline, holes: [], circles: [], x: 60, y: 100, rot: 0, depth: 4, thickness: 5 });
+  const at = off => {
+    app.state.layout.bed.offset = { x: off, y: 0 };
+    app.refreshLayoutEditor();
+    const el = document.getElementById('layBedInfo');
+    const out = app.layoutExports.svg('auto');
+    const tiles = app.layoutExports.svg('tiles');
+    return {
+      info: el.textContent, cls: el.className,
+      btn: document.getElementById('layExportTilesBtn').disabled,
+      plan: !!app.bed.plan(),
+      name: out ? out.name : null, tiles: tiles ? tiles.name : null,
+    };
+  };
+  const on = at(40), over = at(100), far = at(200);
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.items.length = 0;
+  app.refreshLayoutEditor();
+  return { on, over, far };
+});
+
+check('a drawer that fits the plate but hangs off its edge is warned about, not tiled',
+  plateOver.on.cls === 'hint' && /Fits the 300 × 200 bed in one piece/.test(plateOver.on.info) &&
+  !plateOver.on.plan && plateOver.on.btn === true && /-drawer-template\.svg$/.test(plateOver.on.name || '') &&
+  plateOver.over.cls === 'warn' && /pushes it off the plate/.test(plateOver.over.info) &&
+  !/Larger than the bed/.test(plateOver.over.info) &&
+  !plateOver.over.plan && plateOver.over.btn === true &&
+  /-drawer-template\.svg$/.test(plateOver.over.name || '') && plateOver.over.tiles === null &&
+  plateOver.far.cls === 'warn' && !plateOver.far.plan && plateOver.far.btn === true,
+  `on ${plateOver.on.cls}/${plateOver.on.btn}, over ${plateOver.over.cls}/${plateOver.over.btn}/${plateOver.over.name}: ${plateOver.over.info}`);
+
+// Auto-centre on a layout the plate cannot hold whole has only one honest
+// answer on the oversized axis, which is zero: the seams cannot follow a
+// negative offset, so the button must never write one and then be named as
+// the cure for it.
+const plateCentreBig = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  const centre = async (w, h) => {
+    app.state.layout.container = { ...app.state.layout.container, type: 'rect', w, h, r: 6, name: null };
+    app.refreshLayoutEditor();
+    document.getElementById('layBedCentreBtn').click();
+    await new Promise(r => setTimeout(r, 150));
+    const el = document.getElementById('layBedInfo');
+    const plan = app.bed.plan();
+    return {
+      off: app.bed.offset(), cls: el.className, info: el.textContent,
+      x0: plan ? plan.tiles.map(t => t.x0) : null,
+    };
+  };
+  const both = await centre(400, 300);
+  const oneAxis = await centre(400, 100);
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.refreshLayoutEditor();
+  return { both, oneAxis };
+});
+
+check('Auto-centre on a layout larger than the plate never writes an offset the seams ignore',
+  plateCentreBig.both.off.x === 0 && plateCentreBig.both.off.y === 0 &&
+  plateCentreBig.both.cls === 'hint' && !/offset is negative/.test(plateCentreBig.both.info) &&
+  plateCentreBig.both.x0 && plateCentreBig.both.x0.length === 4 &&
+  plateCentreBig.oneAxis.off.x === 0 && plateCentreBig.oneAxis.off.y === 50 &&
+  plateCentreBig.oneAxis.cls === 'hint' && !/offset is negative/.test(plateCentreBig.oneAxis.info),
+  `both ${JSON.stringify(plateCentreBig.both.off)} ${plateCentreBig.both.cls}, one axis ${JSON.stringify(plateCentreBig.oneAxis.off)} ${plateCentreBig.oneAxis.cls}`);
+
+// The bed remembered behind a plate shape belongs to the drawer that was on
+// screen when the shape was picked. Opening another project and backing out of
+// its shape has to give that project its own bed back.
+const plateStale = await page.evaluate(async () => {
+  const app = window.__app;
+  const libBefore = localStorage.getItem('2p5d.library.v1');
+  const sq = s => [{ x: 0, y: 0 }, { x: s, y: 0 }, { x: s, y: s }, { x: 0, y: s }];
+  localStorage.setItem('2p5d.library.v1', JSON.stringify([
+    { name: 'small plate', kind: 'container', outer: sq(200), holes: [], circles: [] },
+    { name: 'big plate', kind: 'container', outer: sq(400), holes: [], circles: [] },
+  ]));
+  // Drawer B, saved with its own 400 x 400 shaped plate.
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 350, h: 250, r: 6, name: null };
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 400; app.state.layout.bed.h = 400;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.bed.shape = { name: 'big plate', outer: sq(400) };
+  const projB = JSON.parse(app.serializeProject(false));
+  // Drawer A first: a 300 x 200 bed with a plate shape picked over it.
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = '300x200';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 250));
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 250));
+  const sel = document.getElementById('layBedShape');
+  sel.value = '0'; sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 150));
+  const a = { w: app.state.layout.bed.w, h: app.state.layout.bed.h, name: app.state.layout.bed.shape && app.state.layout.bed.shape.name };
+  // Now drawer B, and out of its shape.
+  await app.loadProject(projB);
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 250));
+  const loaded = {
+    preset: app.state.layout.bed.preset, w: app.state.layout.bed.w, h: app.state.layout.bed.h,
+    name: app.state.layout.bed.shape && app.state.layout.bed.shape.name,
+  };
+  const sel2 = document.getElementById('layBedShape');
+  sel2.value = 'rect'; sel2.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 200));
+  const cleared = {
+    preset: app.state.layout.bed.preset, w: app.state.layout.bed.w, h: app.state.layout.bed.h,
+    shape: !!app.state.layout.bed.shape,
+    info: document.getElementById('layBedInfo').textContent,
+  };
+  if (libBefore === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', libBefore);
+  return { a, loaded, cleared };
+});
+
+check('a loaded project clearing its plate shape gets its own bed back, not the last drawer\'s',
+  plateStale.a.w === 200 && plateStale.a.h === 200 && plateStale.a.name === 'small plate' &&
+  plateStale.loaded.w === 400 && plateStale.loaded.h === 400 && plateStale.loaded.name === 'big plate' &&
+  plateStale.cleared.preset === 'custom' &&
+  plateStale.cleared.w === 400 && plateStale.cleared.h === 400 && !plateStale.cleared.shape &&
+  /Fits the 400 × 400 bed in one piece/.test(plateStale.cleared.info),
+  `drawer A ${JSON.stringify(plateStale.a)}, loaded ${JSON.stringify(plateStale.loaded)}, cleared ${JSON.stringify(plateStale.cleared)}`);
+
+// Leave the plate as the blocks after this one expect it: no bed, no shape,
+// no offset, nothing placed, back on Step 3.
+await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.items.length = 0;
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 220, h: 140, r: 6, name: null };
+  app.layoutEditor.bedSel = false;
+  app.layoutEditor.sel = -1;
+  const bed = document.getElementById('layBed');
+  bed.value = 'none'; bed.dispatchEvent(new Event('change'));
+  app.syncLaySelPanel(-1);
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
+// --- Known width and Known depth on the container ---
+
+// A traced 200 x 100 drawer, measured with a tape at 210 across: the outline
+// scales about its own centre, and only across.
+const knownOne = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  app.state.layout.items.length = 0;
+  const traced = () => [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }];
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: traced(), scale: { x: 1, y: 1 },
+  };
+  // Back out and in, so the panel syncs from the container just set.
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 200));
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const shown = !document.getElementById('layKnownFields').hidden;
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    el.value = v; el.dispatchEvent(new Event('change'));
+  };
+  set('layKnownW', '210');
+  await new Promise(r => setTimeout(r, 150));
+  const box = l => ({
+    w: Math.max(...l.map(p => p.x)) - Math.min(...l.map(p => p.x)),
+    h: Math.max(...l.map(p => p.y)) - Math.min(...l.map(p => p.y)),
+    cx: (Math.max(...l.map(p => p.x)) + Math.min(...l.map(p => p.x))) / 2,
+    cy: (Math.max(...l.map(p => p.y)) + Math.min(...l.map(p => p.y))) / 2,
+  });
+  return {
+    shown, b: box(app.state.layout.container.outer),
+    scale: { ...app.state.layout.container.scale },
+    field: document.getElementById('layKnownW').value,
+    info: document.getElementById('layScaleInfo').textContent,
+    cls: document.getElementById('layScaleInfo').className,
+  };
+});
+
+check('a known width of 210 makes a traced 200 × 100 container 210 × 100 about its centre',
+  knownOne.shown && Math.abs(knownOne.b.w - 210) < 1e-6 && Math.abs(knownOne.b.h - 100) < 1e-6 &&
+  Math.abs(knownOne.b.cx - 105) < 1e-6 && Math.abs(knownOne.b.cy - 55) < 1e-6 &&
+  knownOne.scale.x === 1.05 && knownOne.scale.y === 1 &&
+  knownOne.field === '210' && knownOne.cls === 'hint' && /×1\.050 across/.test(knownOne.info),
+  `${knownOne.b.w} × ${knownOne.b.h} at ${knownOne.b.cx},${knownOne.b.cy}, scale ${JSON.stringify(knownOne.scale)}`);
+
+// Both fields: each axis is forced on its own, which is how a shot that was
+// not quite square gets its residual warp taken out.
+const knownBoth = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }],
+    scale: { x: 1, y: 1 },
+  };
+  app.refreshLayoutEditor();
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    el.value = v; el.dispatchEvent(new Event('change'));
+  };
+  set('layKnownW', '210');
+  set('layKnownD', '105');
+  await new Promise(r => setTimeout(r, 150));
+  const l = app.state.layout.container.outer;
+  return {
+    w: Math.max(...l.map(p => p.x)) - Math.min(...l.map(p => p.x)),
+    h: Math.max(...l.map(p => p.y)) - Math.min(...l.map(p => p.y)),
+    scale: { ...app.state.layout.container.scale },
+    info: document.getElementById('layScaleInfo').textContent,
+    cls: document.getElementById('layScaleInfo').className,
+  };
+});
+
+check('known width and depth together scale each axis on its own',
+  Math.abs(knownBoth.w - 210) < 1e-6 && Math.abs(knownBoth.h - 105) < 1e-6 &&
+  knownBoth.scale.x === 1.05 && knownBoth.scale.y === 1.05 &&
+  knownBoth.cls === 'hint' && /×1\.050 across and ×1\.050 down/.test(knownBoth.info),
+  `${knownBoth.w} × ${knownBoth.h}, scale ${JSON.stringify(knownBoth.scale)}`);
+
+// 210 x 120 on the same trace is 5 percent one way and 20 the other: past the
+// 2 percent the readout stops agreeing with you.
+const knownWarn = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }],
+    scale: { x: 1, y: 1 },
+  };
+  app.refreshLayoutEditor();
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    el.value = v; el.dispatchEvent(new Event('change'));
+  };
+  set('layKnownW', '210');
+  set('layKnownD', '120');
+  await new Promise(r => setTimeout(r, 150));
+  const l = app.state.layout.container.outer;
+  const warned = {
+    w: Math.max(...l.map(p => p.x)) - Math.min(...l.map(p => p.x)),
+    h: Math.max(...l.map(p => p.y)) - Math.min(...l.map(p => p.y)),
+    info: document.getElementById('layScaleInfo').textContent,
+    cls: document.getElementById('layScaleInfo').className,
+  };
+  // Both axes measured and under two percent apart is warp, not a mistake:
+  // 210 across and 107 down is x1.05 against x1.07, 1.9 percent.
+  app.state.layout.container.outer = [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }];
+  app.state.layout.container.scale = { x: 1, y: 1 };
+  set('layKnownW', '210');
+  set('layKnownD', '107');
+  await new Promise(r => setTimeout(r, 150));
+  return {
+    warned,
+    edge: document.getElementById('layScaleInfo').className,
+    edgeScale: { ...app.state.layout.container.scale },
+  };
+});
+
+check('a 5 percent by 20 percent correction is warned about, a 2 percent one is not',
+  Math.abs(knownWarn.warned.w - 210) < 1e-6 && Math.abs(knownWarn.warned.h - 120) < 1e-6 &&
+  knownWarn.warned.cls === 'warn' && /differ by 12\.5 percent/.test(knownWarn.warned.info) &&
+  knownWarn.edge === 'hint' && knownWarn.edgeScale.x === 1.05 && knownWarn.edgeScale.y === 1.07,
+  `${knownWarn.warned.cls}: ${knownWarn.warned.info.slice(0, 90)} / edge ${knownWarn.edge} at ${JSON.stringify(knownWarn.edgeScale)}`);
+
+// The measured scale is an additive save-format field, and the fields belong
+// to a traced outline: a rectangular container already is its measurements.
+const knownSave = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: [{ x: 5, y: 5 }, { x: 215, y: 5 }, { x: 215, y: 110 }, { x: 5, y: 110 }],
+    scale: { x: 1.05, y: 1.05 },
+  };
+  const saved = JSON.parse(app.serializeProject(false));
+  const legacy = JSON.parse(app.serializeProject(false));
+  delete legacy.layout.container.scale;
+  await app.loadProject(saved);
+  const back = { ...app.state.layout.container.scale };
+  await app.loadProject(legacy);
+  const old = { ...app.state.layout.container.scale };
+  // A rectangle measures itself; the two fields have nothing to add.
+  const sel = document.getElementById('layContainerSel');
+  sel.value = 'rect'; sel.dispatchEvent(new Event('change'));
+  await new Promise(r => setTimeout(r, 150));
+  return {
+    back, old, hiddenForRect: document.getElementById('layKnownFields').hidden,
+    cleared: { ...app.state.layout.container.scale },
+    info: document.getElementById('layScaleInfo').textContent,
+  };
+});
+
+check('the measured scale round-trips, defaults to 1 : 1 in an older project, and is hidden for a rectangle',
+  knownSave.back.x === 1.05 && knownSave.back.y === 1.05 &&
+  knownSave.old.x === 1 && knownSave.old.y === 1 &&
+  knownSave.hiddenForRect && knownSave.cleared.x === 1 && knownSave.info === '',
+  `back ${JSON.stringify(knownSave.back)}, legacy ${JSON.stringify(knownSave.old)}, hidden ${knownSave.hiddenForRect}`);
+
+// A hand-edited or third-party-written project can carry a scale factor that
+// is not a number. That is not a measurement, so it loads as 1 : 1 per axis
+// rather than throwing Step 4 open half-built.
+const scaleBad = await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.items.length = 0;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'outline', name: 'bench drawer',
+    outer: [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 105 }, { x: 5, y: 105 }],
+    scale: { x: 1, y: 2 },
+  };
+  const clean = JSON.parse(app.serializeProject(false));
+  const open4 = async () => {
+    let threw = null;
+    try {
+      app.goStep(3);
+      await new Promise(r => setTimeout(r, 200));
+      app.goStep(4);
+      await new Promise(r => setTimeout(r, 250));
+    } catch (e) { threw = String(e); }
+    return {
+      threw, scale: { ...app.state.layout.container.scale },
+      hidden: document.getElementById('layoutModal').hidden,
+      info: document.getElementById('layoutInfo').textContent,
+      scaleInfo: document.getElementById('layScaleInfo').textContent,
+    };
+  };
+  const load = async scale => {
+    const p = JSON.parse(JSON.stringify(clean));
+    p.layout.container.scale = scale;
+    await app.loadProject(p);
+    return open4();
+  };
+  return {
+    text: await load({ x: '2', y: 2 }),
+    nul: await load({ x: null, y: 2 }),
+    good: await load({ x: 1.05, y: 2 }),
+  };
+});
+
+check('a project whose container scale is not a number loads as 1 : 1 and still opens Step 4',
+  scaleBad.text.threw === null && scaleBad.text.scale.x === 1 && scaleBad.text.scale.y === 2 &&
+  scaleBad.text.hidden === false && /Container/.test(scaleBad.text.info) &&
+  /×1\.000 across and ×2\.000 down/.test(scaleBad.text.scaleInfo) &&
+  scaleBad.nul.threw === null && scaleBad.nul.scale.x === 1 && scaleBad.nul.scale.y === 2 &&
+  scaleBad.nul.hidden === false && /Container/.test(scaleBad.nul.info) &&
+  scaleBad.good.scale.x === 1.05 && scaleBad.good.scale.y === 2 && scaleBad.good.hidden === false,
+  `string ${JSON.stringify(scaleBad.text.scale)} threw ${scaleBad.text.threw}, null ${JSON.stringify(scaleBad.nul.scale)} threw ${scaleBad.nul.threw}, good ${JSON.stringify(scaleBad.good.scale)}`);
+
+// A nudged plate pads the tiling window, and to the seam scorer that pad is
+// ordinary material: a seam can land inside it, leaving a leading cell with no
+// drawer in it at all. splitTiles drops that tile, so the grid the plan reports
+// has to drop it too. It used to keep it, and a four-tile plan called itself
+// 2 × 3, named its file -tiles-2x3.svg and lettered its pieces from B.
+const tilePad = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const bedBefore = JSON.stringify(app.state.layout.bed);
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  const tool = (name, x, y) => ({
+    name, outer: [{ x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 35 }, { x: 5, y: 35 }],
+    holes: [], circles: [], x, y, rot: 0, depth: 4, thickness: 5,
+  });
+  const at = async (w, h, off, tools) => {
+    app.state.layout.container = { ...app.state.layout.container, type: 'rect', w, h, r: 6, name: null };
+    app.state.layout.items.length = 0;
+    for (const t of tools) app.state.layout.items.push(t);
+    app.state.layout.bed.offset = { ...off };
+    app.refreshLayoutEditor();
+    const plan = app.bed.plan();
+    const out = app.layoutExports.svg('auto');
+    const svg = out ? await out.blob.text() : '';
+    return {
+      nx: plan.nx, ny: plan.ny, tiles: plan.tiles.length,
+      cols: [...new Set(plan.tiles.map(t => t.col))].sort((a, b) => a - b).join(','),
+      rows: [...new Set(plan.tiles.map(t => t.row))].sort((a, b) => a - b).join(','),
+      seams: `${plan.seamsX.length}/${plan.seamsY.length}`,
+      info: document.getElementById('layBedInfo').textContent,
+      name: out ? out.name : null,
+      ids: (svg.match(/>[A-Z]\d+ /g) || []).map(s => s.slice(1).trim()).join(','),
+      cuts: (svg.match(/<path transform/g) || []).length,
+    };
+  };
+  const deep = [tool('rasp', 150, 60), tool('file', 150, 140)];
+  const down0 = await at(550, 380, { x: 0, y: 0 }, deep);
+  const down30 = await at(550, 380, { x: 0, y: 30 }, deep);
+  const across0 = await at(400, 100, { x: 0, y: 0 }, [tool('rule', 120, 50)]);
+  const across250 = await at(400, 100, { x: 250, y: 0 }, [tool('rule', 120, 50)]);
+  app.state.layout.bed = JSON.parse(bedBefore);
+  app.state.layout.items.length = 0;
+  app.refreshLayoutEditor();
+  return { down0, down30, across0, across250 };
+});
+
+// Every consumer of the grid — the readout, the download name and the A1/B2
+// tile ids the exporter letters from the row — has to describe the tiles the
+// file actually carries.
+const gridHolds = p => !!p && p.tiles > 0 &&
+  p.cols.split(',').length === p.nx && p.rows.split(',').length === p.ny &&
+  p.cols.split(',')[0] === '0' && p.rows.split(',')[0] === '0' &&
+  p.tiles <= p.nx * p.ny && p.seams === `${p.nx - 1}/${p.ny - 1}` &&
+  p.info.includes(`${p.tiles} tiles (${p.nx} × ${p.ny})`) &&
+  p.name.endsWith(`-drawer-tiles-${p.nx}x${p.ny}.svg`) &&
+  p.ids.split(',').length === p.tiles && p.ids.split(',').includes('A1') &&
+  p.cuts === p.tiles;
+
+check('a nudged plate never reports a tile row or column the exported file does not hold',
+  gridHolds(tilePad.down0) && gridHolds(tilePad.down30) &&
+  gridHolds(tilePad.across0) && gridHolds(tilePad.across250) &&
+  tilePad.down0.tiles === 4 && tilePad.down30.tiles === 4 && tilePad.across250.tiles === 2,
+  `y+0 ${tilePad.down0.tiles} tiles ${tilePad.down0.nx}x${tilePad.down0.ny} ids ${tilePad.down0.ids}, ` +
+  `y+30 ${tilePad.down30.tiles} tiles ${tilePad.down30.nx}x${tilePad.down30.ny} ids ${tilePad.down30.ids} ${tilePad.down30.name}, ` +
+  `x+250 ${tilePad.across250.tiles} tiles ${tilePad.across250.nx}x${tilePad.across250.ny} ids ${tilePad.across250.ids} ${tilePad.across250.name}`);
+
+// The plate outline is grabbed anywhere along its edge, but once a layout has
+// to be tiled that edge runs straight through the drawer. A tool on the seam
+// has to stay selectable and draggable: the press used to go to the plate,
+// which deselected the tool, closed its panel and wrote a plate offset the
+// tiler discards.
+const seamTool = await page.evaluate(async () => {
+  const app = window.__app, ed = app.layoutEditor;
+  const bedBefore = JSON.stringify(app.state.layout.bed);
+  app.state.layout.bed.shape = null;
+  app.state.layout.bed.preset = 'custom';
+  app.state.layout.bed.w = 300; app.state.layout.bed.h = 200;
+  app.state.layout.bed.offset = { x: 0, y: 0 };
+  app.state.layout.container = { ...app.state.layout.container, type: 'rect', w: 400, h: 300, r: 6, name: null };
+  app.state.layout.items.length = 0;
+  ed.sel = -1; ed.bedSel = false;
+  app.refreshLayoutEditor();
+  await new Promise(r => setTimeout(r, 200));
+  const plate = app.bed.loop();
+  const edgeX = Math.max(...plate.map(p => p.x));
+  // An 8 mm tool straddling the plate's right edge, which for a 400 × 300
+  // drawer on a 300 × 200 plate is a seam down the middle of the drawer.
+  app.state.layout.items.push({
+    name: 'drill bit', outer: [{ x: 0, y: 0 }, { x: 8, y: 0 }, { x: 8, y: 8 }, { x: 0, y: 8 }],
+    holes: [], circles: [], x: edgeX, y: 105, rot: 0, depth: 4, thickness: 5,
+  });
+  app.refreshLayoutEditor();
+  const cv = ed.canvas, r = cv.getBoundingClientRect();
+  const client = mm => {
+    const s = ed.mmToScreen(mm);
+    return { x: r.left + s.x * (r.width / cv.width), y: r.top + s.y * (r.height / cv.height) };
+  };
+  const cap = cv.setPointerCapture, rel = cv.releasePointerCapture;
+  cv.setPointerCapture = () => {}; cv.releasePointerCapture = () => {};
+  const ev = (type, p) => cv.dispatchEvent(new PointerEvent(type, {
+    clientX: p.x, clientY: p.y, pointerId: 1, bubbles: true,
+  }));
+  ev('pointerdown', client({ x: edgeX, y: 105 }));
+  const picked = { sel: ed.sel, bedSel: ed.bedSel, kind: ed._drag && ed._drag.kind };
+  ev('pointermove', client({ x: edgeX + 20, y: 105 }));
+  ev('pointerup', client({ x: edgeX + 20, y: 105 }));
+  await new Promise(r2 => setTimeout(r2, 150));
+  const after = {
+    x: app.state.layout.items[0].x, off: app.bed.offset(),
+    panel: !document.getElementById('laySelPanel').hidden,
+  };
+  // The same edge, clear of the tool, still belongs to the plate.
+  ev('pointerdown', client({ x: edgeX, y: 20 }));
+  const onPlate = { sel: ed.sel, bedSel: ed.bedSel, kind: ed._drag && ed._drag.kind };
+  ev('pointerup', client({ x: edgeX, y: 20 }));
+  cv.setPointerCapture = cap; cv.releasePointerCapture = rel;
+  app.state.layout.items.length = 0;
+  app.state.layout.bed = JSON.parse(bedBefore);
+  ed.sel = -1; ed.bedSel = false;
+  app.syncLaySelPanel(-1);
+  app.refreshLayoutEditor();
+  return { picked, after, onPlate, edgeX };
+});
+
+check('a tool sitting on a seam is picked and dragged, not the plate under it',
+  seamTool.picked.sel === 0 && seamTool.picked.bedSel === false && seamTool.picked.kind === 'move' &&
+  Math.abs(seamTool.after.x - (seamTool.edgeX + 20)) < 1.5 &&
+  seamTool.after.off.x === 0 && seamTool.after.off.y === 0 && seamTool.after.panel &&
+  seamTool.onPlate.bedSel === true && seamTool.onPlate.sel === -1 && seamTool.onPlate.kind === 'bed',
+  `press ${JSON.stringify(seamTool.picked)}, tool x ${seamTool.after.x} offset ${JSON.stringify(seamTool.after.off)}, plate ${JSON.stringify(seamTool.onPlate)}`);
+
+// Past 4 MB the photos come out of the WHOLE library, not just the entry being
+// saved, and for a row saved from a live trace that was the only copy. So the
+// save handler offers the trim and the user can decline: Cancel keeps every
+// photo that is already stored.
+const libConsent = await page.evaluate(async () => {
+  const app = window.__app;
+  const rect = (x, y, w, h) => [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  const libBefore = localStorage.getItem('2p5d.library.v1');
+  const rectBefore = app.state.rect;
+  const traceBefore = app.traceEditor.getTrace();
+  // A library the app itself would have written: five photographed tools, each
+  // save under the line until this one pushes the total over it.
+  const thumb = () => ({
+    dataUrl: 'data:image/jpeg;base64,' + 'A'.repeat(850 * 1024), mmPerPx: 0.25, origin: { x: 5, y: 5 },
+  });
+  const seed = () => localStorage.setItem('2p5d.library.v1', JSON.stringify(
+    ['one', 'two', 'three', 'four', 'five'].map(n => ({
+      name: n, kind: 'tool', thickness: 5, outer: rect(5, 5, 40, 20),
+      holes: [], circles: [], thumb: thumb(),
+    }))));
+  // The new outline carries no photo of its own, so every byte it costs the
+  // library is outline, and every photo it would destroy is somebody else's.
+  app.state.rect = null;
+  app.traceEditor.setTrace(rect(20, 30, 60, 30), []);
+  document.getElementById('libName').value = 'one more';
+  document.getElementById('libKind').value = 'tool';
+  const realConfirm = window.confirm;
+  const run = answer => {
+    seed();
+    let asked = 0, text = '';
+    window.confirm = msg => { asked++; text = String(msg); return answer; };
+    document.getElementById('libSaveBtn').click();
+    const list = JSON.parse(localStorage.getItem('2p5d.library.v1') || '[]');
+    return {
+      asked, text, n: list.length,
+      photos: list.filter(o => o.thumb).length,
+      saved: list.some(o => o.name === 'one more'),
+    };
+  };
+  const declined = run(false);
+  const accepted = run(true);
+  window.confirm = realConfirm;
+  app.traceEditor.setTrace(traceBefore.outer, traceBefore.holes);
+  app.traceEditor.setCircles(traceBefore.circles);
+  app.state.rect = rectBefore;
+  if (libBefore === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', libBefore);
+  app.palette.refresh();
+  return { declined, accepted };
+});
+
+check('a library past 4 MB is offered the trim, and declining keeps every photo it holds',
+  libConsent.declined.asked === 1 && libConsent.declined.photos === 5 &&
+  libConsent.declined.n === 6 && libConsent.declined.saved &&
+  /all 5 entries/.test(libConsent.declined.text) && /cannot be undone/.test(libConsent.declined.text) &&
+  libConsent.accepted.asked === 1 && libConsent.accepted.photos === 0 &&
+  libConsent.accepted.n === 6 && libConsent.accepted.saved,
+  `declined: asked ${libConsent.declined.asked}, ${libConsent.declined.photos} photos of 5 kept, ` +
+  `${libConsent.declined.n} rows; accepted: ${libConsent.accepted.photos} photos, ${libConsent.accepted.n} rows`);
+
+// A folder that reads as nothing still has to show that it opened: "Save here"
+// lives inside the folder group, so hiding the group puts the folder
+// write-back out of reach for exactly the fresh folder a new drawer belongs in.
+const emptyFolder = await page.evaluate(async () => {
+  const app = window.__app;
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  const dir = {
+    kind: 'directory', name: 'new-project', children: [],
+    values: async function* () {},
+    queryPermission: async () => 'granted',
+    requestPermission: async () => 'granted',
+    getFileHandle: async () => ({
+      createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+    }),
+  };
+  Object.defineProperty(window, 'showDirectoryPicker', { value: async () => dir, configurable: true });
+  document.getElementById('layOpenFolderBtn').click();
+  await new Promise(r => setTimeout(r, 400));
+  const group = document.getElementById('layPalFolderGroup');
+  const save = document.getElementById('layPalSaveFolderBtn');
+  const out = {
+    shown: !group.hidden,
+    label: document.getElementById('layPalFolderName').textContent,
+    says: document.getElementById('layPalFolderList').textContent,
+    saveShown: !save.hidden && save.offsetParent !== null,
+    handled: app.folderBackend.handle === dir,
+  };
+  // Closing the folder still empties the group.
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  out.closed = group.hidden;
+  app.folderBackend.forget();
+  delete window.showDirectoryPicker;
+  app.refreshLayoutEditor();
+  return out;
+});
+
+check('an opened folder with nothing readable in it says so, and keeps “Save here” reachable',
+  emptyFolder.shown && emptyFolder.label === 'new-project' && emptyFolder.handled &&
+  /empty/.test(emptyFolder.says) && emptyFolder.saveShown && emptyFolder.closed,
+  `shown ${emptyFolder.shown} as “${emptyFolder.label}”, save reachable ${emptyFolder.saveShown}, says “${emptyFolder.says}”, closed ${emptyFolder.closed}`);
+
+// Leave the container as the blocks after this one expect it.
+await page.evaluate(async () => {
+  const app = window.__app;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'rect', w: 220, h: 140, r: 6,
+    name: null, outer: null, scale: { x: 1, y: 1 },
+  };
+  app.state.layout.items.length = 0;
+  app.refreshLayoutEditor();
+  app.goStep(3);
+  await new Promise(r => setTimeout(r, 300));
+});
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {
