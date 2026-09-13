@@ -329,18 +329,26 @@ function updateStepButtons() {
 
 // ---------- step 1: image + corners ----------
 
-function loadFile(file) {
+// Returns true when the file was accepted as a photo and the decode has been
+// started. onFail runs when that decode then fails, which is the only way the
+// caller hears about it: the file name and the label are already on screen by
+// then, but state.image still holds the photo before this one.
+function loadFile(file, onFail) {
   if (!file || !file.type.startsWith('image/')) {
     toast('Please choose an image file.');
-    return;
+    return false;
   }
   state.fileName = (file.name || 'object').replace(/\.[^.]+$/, '');
   const url = URL.createObjectURL(file);
-  loadImageFromURL(url, () => URL.revokeObjectURL(url));
+  loadImageFromURL(url, () => URL.revokeObjectURL(url), () => {
+    URL.revokeObjectURL(url);
+    if (onFail) onFail();
+  });
   $('fileLabelText').textContent = file.name;
+  return true;
 }
 
-function loadImageFromURL(url, done) {
+function loadImageFromURL(url, done, fail) {
   const img = new Image();
   img.onload = () => {
     state.image = img;
@@ -363,7 +371,10 @@ function loadImageFromURL(url, done) {
     updateStepButtons();
     if (done) done();
   };
-  img.onerror = () => toast('Could not load that image.');
+  img.onerror = () => {
+    toast('Could not load that image.');
+    if (fail) fail();
+  };
   img.src = url;
 }
 
@@ -727,6 +738,22 @@ function queueLoad(item) {
   if (state.step !== 1) goStep(1);
   renderQueue();
   return true;
+}
+
+// The queue lets go of the photo on screen. "Choose photo…" and a single
+// dropped file load straight through loadFile, and the walk would otherwise
+// still be pointed at the queued photo it was on: Next would save the outline
+// of whatever is now on screen under the queued photo's name, write it as that
+// photo's sibling project over anything already there, and retire that photo
+// traced so the walk never offers it again. A photo that did not come from the
+// queue is not the queued photo, so the binding leaves with it and Next has
+// nothing to save against until a thumbnail is clicked.
+function queueDetach() {
+  if (!state.queueCurrentId) return;
+  state.queueCurrentId = null;
+  $('queueSaveName').value = '';
+  renderQueue();
+  queueSyncWalk();
 }
 
 function queueClear() {
@@ -3789,7 +3816,10 @@ function rotatePhoto(dir) {
 $('rotatePhotoLeftBtn').addEventListener('click', () => rotatePhoto('ccw'));
 $('rotatePhotoRightBtn').addEventListener('click', () => rotatePhoto('cw'));
 
-$('fileInput').addEventListener('change', e => loadFile(e.target.files[0]));
+// A photo picked here is not the queued photo: the queue lets go of the walk.
+$('fileInput').addEventListener('change', e => {
+  if (loadFile(e.target.files[0])) queueDetach();
+});
 $('detectBtn').addEventListener('click', () => autoDetect(true));
 $('resetCornersBtn').addEventListener('click', () => {
   state.corners = defaultCorners();
@@ -3818,7 +3848,7 @@ stage1.addEventListener('drop', e => {
   const files = Array.from(dt.files || []);
   const folders = entries.some(en => en && en.isDirectory);
   if (!folders && files.length <= 1) {
-    if (files[0]) loadFile(files[0]);
+    if (files[0] && loadFile(files[0])) queueDetach();
     return;
   }
   queueDrop(entries, files);

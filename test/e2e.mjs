@@ -8711,6 +8711,197 @@ check('the cross-folder write block leaves the library, the folder and Step 1 as
   `step ${queueSix.restored.step}, library restored ${queueSix.restored.lib}, ` +
   `queue ${queueSix.restored.queue}, handle ${queueSix.restored.handle}`);
 
+// ---------- the walk saves only the photo it is on ----------
+//
+// "Choose photo…" and a single dropped file load straight into Step 1 without
+// passing through the queue. The walk has to let go of the queued photo when
+// that happens: still bound, Next would save the outline of whatever is now on
+// screen under the queued photo's name, write it as that photo's sibling
+// project over anything already there, and retire that photo traced so the
+// walk and the resume rule both pass over it for good.
+const queueSeven = await page.evaluate(async () => {
+  const app = window.__app;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+  const libNames = () => JSON.parse(localStorage.getItem('2p5d.library.v1') || '[]').map(o => o.name);
+
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    ref: app.queue.snapshot(),
+  };
+  localStorage.setItem('2p5d.library.v1', '[]');
+
+  const writes = [];
+  const fileHandle = (name, file) => ({ kind: 'file', name, getFile: async () => file });
+  const mkDir = (name, children) => {
+    const h = {
+      kind: 'directory', name, children,
+      values: async function* () { for (const c of h.children) yield c; },
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      getDirectoryHandle: async n => {
+        const kid = h.children.find(c => c.kind === 'directory' && c.name === n);
+        if (!kid) throw new Error('no such folder');
+        return kid;
+      },
+      getFileHandle: async n => ({
+        createWritable: async () => ({
+          write: async text => { writes.push({ dir: h.name, name: n, text: String(text) }); },
+          close: async () => {},
+        }),
+      }),
+    };
+    return h;
+  };
+
+  // A bench folder of two photos, the first traced and the walk now on the
+  // second, which is exactly where a user reaches for "Choose photo…".
+  const bench = mkDir('bench', [
+    fileHandle('awl.jpg', await photoFile('awl.jpg', 320, 240)),
+    fileHandle('bevel.jpg', await photoFile('bevel.jpg', 360, 300)),
+  ]);
+  app.queue.clear();
+  await app.queue.ingestFolder(bench, 'bench');
+  app.queue.load(app.state.queue[0]);
+  await wait(700);
+  app.traceEditor.setTrace(rect(10, 10, 50, 25), []);
+  await app.queue.walk.next();
+  await wait(700);
+  const walking = {
+    onBevel: app.state.queueCurrentId === app.state.queue[1].id,
+    nameField: document.getElementById('queueSaveName').value,
+    writes: writes.map(w => `${w.dir}/${w.name}`),
+  };
+
+  // Mid-walk, an unrelated photo through the picker itself.
+  const input = document.getElementById('fileInput');
+  const dt = new DataTransfer();
+  dt.items.add(await photoFile('chisel.jpg', 500, 380));
+  input.files = dt.files;
+  input.dispatchEvent(new Event('change'));
+  await wait(800);
+  const picked = {
+    fileName: app.state.fileName,
+    wide: app.state.image.naturalWidth,
+    current: app.state.queueCurrentId,
+    nameField: document.getElementById('queueSaveName').value,
+    nextDisabled: document.getElementById('queueNextBtn').disabled,
+  };
+
+  // Next has nothing to save against now, and the queued photo is untouched.
+  app.traceEditor.setTrace(rect(4, 4, 30, 30), []);
+  const ret = await app.queue.walk.next();
+  await wait(400);
+  const guarded = {
+    ret,
+    writes: writes.map(w => `${w.dir}/${w.name}`),
+    libNames: libNames(),
+    bevelStatus: app.state.queue[1].status,
+    bevelPicked: app.state.queue[1].picked,
+  };
+
+  // The same for one file dropped on Step 1, the other path that loads a photo
+  // without the queue.
+  app.queue.load(app.state.queue[1]);
+  await wait(700);
+  const reBound = app.state.queueCurrentId === app.state.queue[1].id;
+  const dt2 = new DataTransfer();
+  dt2.items.add(await photoFile('mallet.jpg', 400, 300));
+  document.getElementById('stage1').dispatchEvent(
+    new DragEvent('drop', { dataTransfer: dt2, bubbles: true, cancelable: true }));
+  await wait(800);
+  const droppedOne = {
+    reBound,
+    fileName: app.state.fileName,
+    current: app.state.queueCurrentId,
+    nextDisabled: document.getElementById('queueNextBtn').disabled,
+    queued: app.state.queue.length,
+    bevelStatus: app.state.queue[1].status,
+  };
+
+  // Put the library, the folder, the queue and Step 1 back.
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.palette.refresh();
+  app.queue.applyRef(before.ref);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles);
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await wait(300);
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    lib: localStorage.getItem('2p5d.library.v1') === before.lib,
+    queue: app.state.queue.length,
+    handle: app.folderBackend.handle,
+    palette: app.palette.folder.entries.length,
+    trace: app.traceEditor.outer.length === before.trace.outer.length,
+  };
+
+  return { walking, picked, guarded, droppedOne, restored };
+});
+
+check('a photo chosen with the picker mid-walk takes the queue off the walk',
+  queueSeven.walking.onBevel && queueSeven.walking.nameField === 'bevel' &&
+  queueSeven.picked.fileName === 'chisel' && queueSeven.picked.wide === 500 &&
+  queueSeven.picked.current === null && queueSeven.picked.nameField === '' &&
+  queueSeven.picked.nextDisabled,
+  `after the picker: on “${queueSeven.picked.fileName}”, current ${queueSeven.picked.current}, ` +
+  `name field “${queueSeven.picked.nameField}”, Next disabled ${queueSeven.picked.nextDisabled}`);
+
+check('Next after that picker load writes nothing and leaves the queued photo untraced',
+  queueSeven.guarded.ret === null &&
+  JSON.stringify(queueSeven.guarded.writes) === JSON.stringify(['bench/awl.json']) &&
+  JSON.stringify(queueSeven.guarded.libNames) === JSON.stringify(['awl']) &&
+  queueSeven.guarded.bevelStatus === 'pending' && queueSeven.guarded.bevelPicked === true,
+  `Next returned ${queueSeven.guarded.ret}, folder writes ${JSON.stringify(queueSeven.guarded.writes)}, ` +
+  `library ${JSON.stringify(queueSeven.guarded.libNames)}, bevel ${queueSeven.guarded.bevelStatus}`);
+
+check('a single file dropped on Step 1 takes the queue off the walk as well',
+  queueSeven.droppedOne.reBound && queueSeven.droppedOne.fileName === 'mallet' &&
+  queueSeven.droppedOne.current === null && queueSeven.droppedOne.nextDisabled &&
+  queueSeven.droppedOne.queued === 2 && queueSeven.droppedOne.bevelStatus === 'pending',
+  `after the drop: on “${queueSeven.droppedOne.fileName}”, current ${queueSeven.droppedOne.current}, ` +
+  `queue ${queueSeven.droppedOne.queued}, bevel ${queueSeven.droppedOne.bevelStatus}`);
+
+check('the picker-mid-walk block leaves the library, the folder and Step 1 as it found them',
+  queueSeven.restored.step === 3 && queueSeven.restored.image && queueSeven.restored.lib &&
+  queueSeven.restored.queue === 0 && queueSeven.restored.handle === null &&
+  queueSeven.restored.palette === 0 && queueSeven.restored.trace,
+  `step ${queueSeven.restored.step}, library restored ${queueSeven.restored.lib}, ` +
+  `queue ${queueSeven.restored.queue}, handle ${queueSeven.restored.handle}`);
+
 // ---------- snap to grid in the layout editor (Part B) ----------
 // Snapping is a property of the gesture: a drag, an arrow-key nudge and a
 // rotation-handle drag land on the grid, and nothing already placed moves when
