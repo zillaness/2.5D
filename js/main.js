@@ -113,6 +113,11 @@ const state = {
       shape: null, offset: { x: 0, y: 0 },
       tabs: { enabled: false, head: 12, neck: 7, depth: 12, spacing: 80, fit: 0 },
     },
+    // Snap to grid while placing by hand. Additive and optional: off, at the
+    // 5 mm default pitch, so a layout exports exactly what it exported before
+    // snapping existed. Snapping quantises the gesture and never a stored
+    // value, so turning it on moves nothing.
+    snap: { on: false, pitch: 5 },
     // Tool labels. Off by default: an unlabelled layout must export exactly
     // what it exports today. `process` drives the minimum legible cap height,
     // which is a property of the machine, not a style preference.
@@ -2209,6 +2214,36 @@ function refreshLaySelects() {
   shapeSel.value = shape ? '__shape' : 'rect';
   refreshLayPalette();
 }
+// Snap to grid. The default pitch is 5 mm; 42 mm is the Gridfinity cell, so it
+// is offered only while the container is a Gridfinity bin, the way the plate
+// shape option is only there while a shape is in use. A pitch of 42 left over
+// from a bin goes back to the default when the container changes, rather than
+// leaving the select showing a value it no longer carries.
+const LAY_SNAP_DEFAULT = 5;
+const LAY_SNAP_GRID = 42;
+function syncSnapFields() {
+  // Defensive: a project file is free to carry no snap at all, and the panel
+  // is not the place to discover that.
+  const S = state.layout.snap ||
+    (state.layout.snap = { on: false, pitch: LAY_SNAP_DEFAULT });
+  const sel = $('laySnapPitch');
+  const grid = state.layout.container.type === 'grid';
+  let opt = sel.querySelector(`option[value="${LAY_SNAP_GRID}"]`);
+  if (grid && !opt) {
+    opt = document.createElement('option');
+    opt.value = String(LAY_SNAP_GRID);
+    opt.textContent = '42 mm (Gridfinity cell)';
+    sel.appendChild(opt);
+  } else if (!grid && opt) {
+    opt.remove();
+  }
+  if (!grid && S.pitch === LAY_SNAP_GRID) S.pitch = LAY_SNAP_DEFAULT;
+  $('laySnap').checked = !!S.on;
+  sel.value = String(S.pitch);
+  // The editor reads the grid off the state on every sync, so the toggle and
+  // the pitch reach the next gesture and no stored value at all.
+  layoutEditor.setSnap(S);
+}
 function syncLayoutFields() {
   const L = state.layout;
   const grid = L.container.type === 'grid';
@@ -2241,6 +2276,7 @@ function syncLayoutFields() {
     $('layKnownW').value = fmtDim(box.w);
     $('layKnownD').value = fmtDim(box.h);
   }
+  syncSnapFields();
   syncScaleInfo();
 }
 // What the measured numbers have done to the traced outline, and the warning
@@ -2303,6 +2339,7 @@ function layConstruction() {
 }
 function refreshLayoutEditor() {
   layoutEditor.setBed(layBedView());
+  layoutEditor.setSnap(state.layout.snap);
   layoutEditor.setLayout(layContainerLoop(), state.layout.items,
     state.layout.clearance, layBorderEff());
   updateLayoutInfo();
@@ -2881,18 +2918,40 @@ $('layBedCentreBtn').addEventListener('click', () => {
   refreshLayoutEditor();
 });
 // Arrow keys nudge the plate once its outline is selected: 1 mm, or 10 mm
-// with Shift. Nothing else on Step 4 uses the arrow keys.
+// with Shift. With no plate selected they nudge the selected tool instead, by
+// one snap pitch where snapping is on and by the same 1 mm / 10 mm where it is
+// not. The plate keeps first claim, so the keys never move two things at once.
 document.addEventListener('keydown', e => {
-  if (state.step !== 4 || !layoutEditor.bedSel) return;
+  if (state.step !== 4) return;
   const t = e.target.tagName;
   if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
   const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
   if (!d) return;
-  e.preventDefault();
-  const mm = e.shiftKey ? 10 : 1;
-  layoutEditor.nudgeBed(d[0] * mm, d[1] * mm);
-  syncBedFields();
-  refreshLayoutEditor();
+  if (layoutEditor.bedSel) {
+    e.preventDefault();
+    const mm = e.shiftKey ? 10 : 1;
+    layoutEditor.nudgeBed(d[0] * mm, d[1] * mm);
+    syncBedFields();
+    refreshLayoutEditor();
+    return;
+  }
+  if (layoutEditor.sel >= 0) {
+    e.preventDefault();
+    layoutEditor.nudgeItem(d[0], d[1], e.shiftKey);
+  }
+});
+// Snapping is a property of the gesture: the toggle and the pitch change what
+// the next drag, nudge or rotation writes, and touch no x, y or rot that is
+// already stored. So neither handler rewrites an item, and turning snap on
+// moves nothing.
+$('laySnap').addEventListener('change', e => {
+  state.layout.snap.on = !!e.target.checked;
+  syncSnapFields();
+});
+$('laySnapPitch').addEventListener('change', e => {
+  const mm = parseFloat(e.target.value);
+  if (mm > 0) state.layout.snap.pitch = mm;
+  syncSnapFields();
 });
 for (const [id, key] of [['layBedW', 'w'], ['layBedH', 'h']]) {
   $(id).addEventListener('change', e => {
@@ -4733,6 +4792,15 @@ function loadProject(p) {
         // on screen, which would retile it and change what it exports.
         shape: (p.layout.bed && p.layout.bed.shape) || null,
         offset: { x: 0, y: 0, ...((p.layout.bed && p.layout.bed.offset) || {}) },
+      },
+      // Additive and optional: a project saved before snapping existed has no
+      // `snap` key, and must open with it off at the default pitch rather than
+      // inheriting whatever grid the drawer before it was placed on, which
+      // would quantise the next drag the user made on it.
+      snap: {
+        on: !!(p.layout.snap && p.layout.snap.on),
+        pitch: Number.isFinite(p.layout.snap && p.layout.snap.pitch) &&
+          p.layout.snap.pitch > 0 ? p.layout.snap.pitch : LAY_SNAP_DEFAULT,
       },
       // Merged onto the defaults, not taken from the file: a project saved
       // before labels existed has no `labels` key, and rebuilding state.layout

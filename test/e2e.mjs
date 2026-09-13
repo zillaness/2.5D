@@ -8417,6 +8417,219 @@ check('the acceptance block hands the library, the folder and Step 1 back',
   `step ${queueFive.restored.step}, library restored ${queueFive.restored.lib}, ` +
   `queue ${queueFive.restored.queue}, palette ${queueFive.restored.palette}`);
 
+// ---------- snap to grid in the layout editor (Part B) ----------
+// Snapping is a property of the gesture: a drag, an arrow-key nudge and a
+// rotation-handle drag land on the grid, and nothing already placed moves when
+// the toggle goes on.
+const snapGrid = await page.evaluate(async () => {
+  const app = window.__app, ed = app.layoutEditor;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  // The whole session as a project, so the block can hand the page back
+  // whatever the container, the items and the snap grid are left as.
+  const restorePoint = app.serializeProject(false);
+  const before = { sel: ed.sel, bedSel: ed.bedSel, step: app.state.step };
+
+  // A plain drawer with one tool in it, and no plate, so the press lands on
+  // the tool rather than on a dashed outline through it.
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'rect', w: 220, h: 140, r: 6,
+    name: null, outer: null,
+  };
+  app.state.layout.bed = { ...app.state.layout.bed, preset: 'none', shape: null, offset: { x: 0, y: 0 } };
+  app.state.layout.items.length = 0;
+  app.state.layout.items.push({
+    name: 'scriber', outer: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }, { x: 0, y: 10 }],
+    holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 40, y: 40,
+  });
+  app.state.layout.snap.on = false;
+  app.state.layout.snap.pitch = 5;
+  ed.bedSel = false;
+  // Step 4, so the canvas is laid out and a pointer position means something.
+  app.goStep(4);
+  await wait(250);
+  app.refreshLayoutEditor();
+  await wait(150);
+
+  const cv = ed.canvas;
+  const cap = cv.setPointerCapture, rel = cv.releasePointerCapture;
+  cv.setPointerCapture = () => {}; cv.releasePointerCapture = () => {};
+  // Fractional client coordinates, so the pointer position converts back to
+  // exactly the millimetre it was built from and 13.2 means 13.2.
+  const client = mm => {
+    const r = cv.getBoundingClientRect();
+    const s = ed.mmToScreen(mm);
+    return { x: r.left + s.x * (r.width / cv.width), y: r.top + s.y * (r.height / cv.height) };
+  };
+  const ev = (type, p) => cv.dispatchEvent(new PointerEvent(type, {
+    clientX: p.x, clientY: p.y, pointerId: 1, bubbles: true,
+  }));
+  const it = () => app.state.layout.items[0];
+  // Grab the tool at its own centre, so the drag carries no offset and where
+  // the pointer stops is where the tool is asked to go.
+  const dragTo = (x, y) => {
+    ev('pointerdown', client({ x: it().x, y: it().y }));
+    ev('pointermove', client({ x, y }));
+    ev('pointerup', client({ x, y }));
+    return { x: it().x, y: it().y };
+  };
+  // Drag the rotation handle round to a given angle.
+  const rotateTo = deg => {
+    ev('pointerdown', client(ed._rotHandle(it())));
+    const a = ((deg - 90) * Math.PI) / 180;
+    const to = { x: it().x + 30 * Math.cos(a), y: it().y + 30 * Math.sin(a) };
+    ev('pointermove', client(to));
+    ev('pointerup', client(to));
+    return it().rot;
+  };
+
+  // Snap off: the tool stops where the pointer left it.
+  const loose = dragTo(13.2, 21.4);
+  const picked = { sel: ed.sel, kind: null };
+
+  // Turning snap on must move nothing that is already placed, including an
+  // angle that is nowhere near a quarter turn.
+  it().rot = 37;
+  $('laySnap').checked = true;
+  $('laySnap').dispatchEvent(new Event('change', { bubbles: true }));
+  const toggled = {
+    x: it().x, y: it().y, rot: it().rot,
+    on: app.state.layout.snap.on, edOn: ed.snap.on, pitch: ed.snap.pitch,
+  };
+  // A redraw is not a gesture either.
+  app.refreshLayoutEditor();
+  await wait(120);
+  const redrawn = { x: it().x, y: it().y, rot: it().rot };
+
+  // Snap on, 5 mm pitch: the same drag lands on the grid.
+  const snapped = dragTo(13.2, 21.4);
+  // And the rotation handle lands on a quarter turn.
+  const rotOn = rotateTo(87);
+
+  // Snap off again: both gestures go back to free.
+  $('laySnap').checked = false;
+  $('laySnap').dispatchEvent(new Event('change', { bubbles: true }));
+  const rotOff = rotateTo(87);
+  const looseAgain = dragTo(13.2, 21.4);
+
+  // Arrow keys nudge the selected tool: one pitch onto the grid with snap on,
+  // 1 mm with it off. The plate is not selected, so the keys are the tool's.
+  ed.sel = 0; ed.bedSel = false;
+  const key = k => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+  $('laySnap').checked = true;
+  $('laySnap').dispatchEvent(new Event('change', { bubbles: true }));
+  it().x = 13.2; it().y = 21.4;
+  key('ArrowRight');
+  key('ArrowUp');
+  const nudgedOn = { x: it().x, y: it().y };
+  $('laySnap').checked = false;
+  $('laySnap').dispatchEvent(new Event('change', { bubbles: true }));
+  it().x = 13.2; it().y = 21.4;
+  key('ArrowRight');
+  const nudgedOff = { x: it().x, y: it().y };
+
+  // The 42 mm Gridfinity cell is offered only while the container is a bin.
+  const pitchSel = $('laySnapPitch'), contSel = $('layContainerSel');
+  const rectPitches = Array.from(pitchSel.options).map(o => o.value);
+  contSel.value = '__grid';
+  contSel.dispatchEvent(new Event('change', { bubbles: true }));
+  await wait(200);
+  const gridPitches = Array.from(pitchSel.options).map(o => o.value);
+  pitchSel.value = '42';
+  pitchSel.dispatchEvent(new Event('change', { bubbles: true }));
+  const at42 = { state: app.state.layout.snap.pitch, ed: ed.snap.pitch };
+  contSel.value = 'rect';
+  contSel.dispatchEvent(new Event('change', { bubbles: true }));
+  await wait(200);
+  const backToRect = {
+    pitches: Array.from(pitchSel.options).map(o => o.value),
+    state: app.state.layout.snap.pitch,
+    field: pitchSel.value,
+  };
+
+  // Additive save format: the grid rides along in the project, and a project
+  // saved before snapping existed still loads, with it off at 5 mm.
+  app.state.layout.snap.on = true;
+  app.state.layout.snap.pitch = 10;
+  const saved = JSON.parse(app.serializeProject(false));
+  const legacy = JSON.parse(app.serializeProject(false));
+  delete legacy.layout.snap;
+  app.loadProject(saved);
+  await wait(300);
+  const roundTrip = { ...app.state.layout.snap, inFile: saved.layout.snap };
+  app.loadProject(legacy);
+  await wait(300);
+  const older = { ...app.state.layout.snap, defined: !!app.state.layout.snap };
+
+  // Hand the session back exactly as it was found.
+  cv.setPointerCapture = cap; cv.releasePointerCapture = rel;
+  app.loadProject(JSON.parse(restorePoint));
+  await wait(500);
+  ed.sel = before.sel; ed.bedSel = before.bedSel;
+  app.syncLaySelPanel(before.sel);
+  app.goStep(before.step);
+  await wait(300);
+  app.refreshLayoutEditor();
+  const restored = {
+    step: app.state.step,
+    items: app.state.layout.items.length,
+    snap: { ...app.state.layout.snap },
+    sel: ed.sel,
+    panelHidden: document.getElementById('laySelPanel').hidden,
+  };
+
+  return {
+    loose, picked, toggled, redrawn, snapped, rotOn, rotOff, looseAgain,
+    nudgedOn, nudgedOff, rectPitches, gridPitches, at42, backToRect,
+    roundTrip, older, restored,
+  };
+});
+
+check('a drag ending at 13.2 mm stores 15 with a 5 mm snap pitch',
+  snapGrid.snapped.x === 15 && snapGrid.snapped.y === 20,
+  `dragged to 13.2, 21.4 and stored ${snapGrid.snapped.x}, ${snapGrid.snapped.y}`);
+
+check('with snap off the same drag stores 13.2 mm, untouched',
+  Math.abs(snapGrid.loose.x - 13.2) < 1e-6 && Math.abs(snapGrid.loose.y - 21.4) < 1e-6 &&
+  Math.abs(snapGrid.looseAgain.x - 13.2) < 1e-6 && Math.abs(snapGrid.looseAgain.y - 21.4) < 1e-6,
+  `stored ${snapGrid.loose.x}, ${snapGrid.loose.y} (and ${snapGrid.looseAgain.x}, ${snapGrid.looseAgain.y} after snapping was turned off again)`);
+
+check('a rotation drag to 87° stores 90 with snap on and 87 with it off',
+  snapGrid.rotOn === 90 && Math.abs(snapGrid.rotOff - 87) < 1e-6,
+  `snap on ${snapGrid.rotOn}°, snap off ${snapGrid.rotOff}°`);
+
+check('turning snap on moves no item x, y or rot, and neither does a redraw',
+  snapGrid.toggled.on && snapGrid.toggled.edOn && snapGrid.toggled.pitch === 5 &&
+  Math.abs(snapGrid.toggled.x - 13.2) < 1e-6 && Math.abs(snapGrid.toggled.y - 21.4) < 1e-6 &&
+  snapGrid.toggled.rot === 37 &&
+  Math.abs(snapGrid.redrawn.x - 13.2) < 1e-6 && Math.abs(snapGrid.redrawn.y - 21.4) < 1e-6 &&
+  snapGrid.redrawn.rot === 37,
+  `after the toggle ${snapGrid.toggled.x}, ${snapGrid.toggled.y} at ${snapGrid.toggled.rot}°; ` +
+  `after a redraw ${snapGrid.redrawn.x}, ${snapGrid.redrawn.y} at ${snapGrid.redrawn.rot}°`);
+
+check('arrow keys nudge the selected tool one pitch onto the grid, or 1 mm with snap off',
+  snapGrid.nudgedOn.x === 20 && snapGrid.nudgedOn.y === 15 &&
+  Math.abs(snapGrid.nudgedOff.x - 14.2) < 1e-6 && Math.abs(snapGrid.nudgedOff.y - 21.4) < 1e-6,
+  `from 13.2, 21.4: snapped to ${snapGrid.nudgedOn.x}, ${snapGrid.nudgedOn.y}; ` +
+  `free to ${snapGrid.nudgedOff.x}, ${snapGrid.nudgedOff.y}`);
+
+check('the 42 mm Gridfinity pitch is offered only while the container is a bin',
+  !snapGrid.rectPitches.includes('42') && snapGrid.gridPitches.includes('42') &&
+  snapGrid.at42.state === 42 && snapGrid.at42.ed === 42 &&
+  !snapGrid.backToRect.pitches.includes('42') && snapGrid.backToRect.state === 5 &&
+  snapGrid.backToRect.field === '5',
+  `rectangle ${JSON.stringify(snapGrid.rectPitches)}, bin ${JSON.stringify(snapGrid.gridPitches)}, ` +
+  `back to a rectangle at ${snapGrid.backToRect.state} mm`);
+
+check('the snap grid rides in the project and an older project loads with it off',
+  snapGrid.roundTrip.on === true && snapGrid.roundTrip.pitch === 10 &&
+  snapGrid.roundTrip.inFile.on === true && snapGrid.roundTrip.inFile.pitch === 10 &&
+  snapGrid.older.defined && snapGrid.older.on === false && snapGrid.older.pitch === 5 &&
+  snapGrid.restored.step === 3 && snapGrid.restored.snap.on === false &&
+  snapGrid.restored.snap.pitch === 5,
+  `round trip ${JSON.stringify(snapGrid.roundTrip.inFile)}, older project ` +
+  `${JSON.stringify(snapGrid.older)}, page handed back at step ${snapGrid.restored.step}`);
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {

@@ -909,6 +909,23 @@
         <div class="field" style="margin-top:4px">
           <label title="Draw each tool's photo inside its outline, so the drawer reads as the tools rather than as silhouettes"><input type="checkbox" id="layShowPhotos" checked> Show photos</label>
         </div>
+        <!-- Snap to grid. The gesture is what snaps: a drag, an arrow-key
+             nudge and a rotation-handle drag land on the grid, and nothing
+             already placed moves when the toggle goes on. -->
+        <div class="field-row" id="laySnapRow">
+          <div class="field" style="display:flex; align-items:end">
+            <label title="Quantise dragging, arrow-key nudges and rotation while placing by hand. Turning it on moves nothing that is already placed."><input type="checkbox" id="laySnap"> Snap to grid</label>
+          </div>
+          <div class="field">
+            <label for="laySnapPitch">Snap pitch</label>
+            <select id="laySnapPitch" title="The grid a drag or a nudge lands on. Rotation snaps to 90° whatever the pitch.">
+              <option value="1">1 mm</option>
+              <option value="2.5">2.5 mm</option>
+              <option value="5">5 mm</option>
+              <option value="10">10 mm</option>
+            </select>
+          </div>
+        </div>
         <div id="laySelPanel" hidden>
           <p class="hint" id="laySelName" style="margin:0"></p>
           <div class="field">

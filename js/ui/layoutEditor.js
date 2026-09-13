@@ -1,7 +1,8 @@
 // 2D layout editor for multi-tool drawer inserts: draws the container and
 // the placed tool outlines, drags items around, rotates the selection via a
-// round handle (Shift snaps to 15°), and flags conflicts. Pure
-// view/controller — the geometry lives in js/holders.js.
+// round handle (Shift snaps to 15°), optionally snaps drags, nudges and
+// rotations to a grid, and flags conflicts. Pure view/controller — the
+// geometry lives in js/holders.js.
 
 import { pointInPolygon } from '../contour.js';
 import { placeLoop, layoutPockets, layoutConflicts, worldToItemLocal } from '../holders.js';
@@ -44,6 +45,14 @@ function distToLoop(p, loop) {
   return best;
 }
 
+// The snap grid. 5 mm is the default pitch; the step-4 panel offers 42 mm as
+// well when the container is a Gridfinity bin, because that is the cell pitch
+// a bin's tools want to line up with. A snapped rotation is a quarter turn:
+// the finer 15° step stays on Shift, where it already was.
+const SNAP_DEFAULT_PITCH = 5;
+const SNAP_ROT_DEG = 90;
+const SNAP_SHIFT_ROT_DEG = 15;
+
 export class LayoutEditor {
   constructor(canvas, callbacks = {}) {
     this.canvas = canvas;
@@ -65,6 +74,12 @@ export class LayoutEditor {
     // offset object is shared with the layout state, so a drag writes through.
     this.bed = null;
     this.bedSel = false;
+    // Snap to grid: { on, pitch } in layout mm, mirrored from
+    // state.layout.snap. Snapping is a property of the gesture and not of the
+    // layout, so it quantises what a drag or an arrow-key nudge writes and
+    // never touches a value that is already stored. Turning it on moves
+    // nothing.
+    this.snap = { on: false, pitch: SNAP_DEFAULT_PITCH };
     this._drag = null;
     canvas.addEventListener('pointerdown', e => this._down(e));
     canvas.addEventListener('pointermove', e => this._move(e));
@@ -81,6 +96,56 @@ export class LayoutEditor {
     this.fit();
     this.refreshConflicts();
     this.draw();
+  }
+
+  // The snap grid in force, from state.layout.snap. Read on every refresh, so
+  // the toggle and the pitch field take effect on the next gesture and on no
+  // stored value at all.
+  setSnap(snap) {
+    const pitch = snap && Number.isFinite(snap.pitch) && snap.pitch > 0
+      ? snap.pitch : SNAP_DEFAULT_PITCH;
+    this.snap = { on: !!(snap && snap.on), pitch };
+  }
+
+  // One coordinate put on the snap grid. The grid is absolute layout mm, so
+  // two tools snapped at the same pitch line up with each other and with the
+  // container's own origin, and the float dust of dividing by 0.1 or 42 never
+  // reaches a stored value.
+  _snapMm(v) {
+    if (!this.snap.on || !(this.snap.pitch > 0)) return v;
+    const p = this.snap.pitch;
+    return Math.round(Math.round(v / p) * p * 1e6) / 1e6;
+  }
+
+  // The angle a rotation-handle drag lands on: a quarter turn with snap on,
+  // the existing 15° while Shift is held, free otherwise. Shift wins, so a
+  // finer angle is still reachable without leaving the snap grid behind.
+  _snapDeg(deg, shift) {
+    if (shift) return Math.round(deg / SNAP_SHIFT_ROT_DEG) * SNAP_SHIFT_ROT_DEG;
+    if (this.snap.on) return Math.round(deg / SNAP_ROT_DEG) * SNAP_ROT_DEG;
+    return deg;
+  }
+
+  // How far one arrow-key press moves the selected item: one pitch with snap
+  // on, otherwise the 1 mm / 10 mm the plate nudge already uses.
+  snapStep(coarse) {
+    if (this.snap.on && this.snap.pitch > 0) return this.snap.pitch;
+    return coarse ? 10 : 1;
+  }
+
+  // Arrow-key nudge for the selected item, in steps of snapStep(). With snap
+  // on the item lands on the grid rather than one pitch off it, which is what
+  // makes a nudge and a drag agree.
+  nudgeItem(dx, dy, coarse = false) {
+    const it = this.items[this.sel];
+    if (!it) return false;
+    const step = this.snapStep(coarse);
+    it.x = this._snapMm(it.x + dx * step);
+    it.y = this._snapMm(it.y + dy * step);
+    this.refreshConflicts();
+    this.draw();
+    if (this.cb.onChange) this.cb.onChange(true);
+    return true;
   }
 
   // The plate the layout is cut or printed on. Pass null for "no limit".
@@ -283,8 +348,8 @@ export class LayoutEditor {
     const it = this.items[this._drag.idx];
     if (!it) return;
     if (this._drag.kind === 'move') {
-      it.x = mm.x + this._drag.dx;
-      it.y = mm.y + this._drag.dy;
+      it.x = this._snapMm(mm.x + this._drag.dx);
+      it.y = this._snapMm(mm.y + this._drag.dy);
     } else if (this._drag.kind === 'notch') {
       // Store in item-local coords; the pocket builder snaps it to the
       // boundary, so dragging anywhere pulls the notch to the nearest edge.
@@ -293,8 +358,8 @@ export class LayoutEditor {
       it.notch.y = local.y;
       this._pockets = layoutPockets(this.items, this.clearance); // live marker
     } else {
-      let deg = (Math.atan2(mm.y - it.y, mm.x - it.x) * 180) / Math.PI + 90;
-      if (e.shiftKey) deg = Math.round(deg / 15) * 15;
+      const deg = this._snapDeg(
+        (Math.atan2(mm.y - it.y, mm.x - it.x) * 180) / Math.PI + 90, e.shiftKey);
       it.rot = ((deg % 360) + 360) % 360;
     }
     this.draw();
