@@ -4403,6 +4403,187 @@ check('leaving the layered build restores the pocket panel',
   layRestore.labels === false && layRestore.onBase === true,
   JSON.stringify(layRestore));
 
+// ---------- nesting / auto-sort (holders.js, docs/nesting_prd_v1.1.md) ----------
+//
+// nestLayout() is pure geometry and deliberately has no UI yet: the Nest
+// button, the profile panel and the custom-profile store are that PRD's later
+// steps. So this block drives the module straight and touches no page state at
+// all — there is nothing here to set up, and nothing for it to restore for the
+// blocks that follow.
+
+const nestFix = await page.evaluate(async () => {
+  const { nestLayout, applyNest, layoutPockets, layoutConflicts, roundedRect } =
+    await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  // An L with arm thickness t: a w × h bbox with a big bite out of the top
+  // right, so two of them only both fit once one turns round and tucks in.
+  const ell = (w, h, t) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: t },
+    { x: t, y: t }, { x: t, y: h }, { x: 0, y: h }];
+  const mk = (name, outer, extra = {}) => ({
+    name, outer, holes: [], circles: [], x: 0, y: 0, rot: 0, depth: null,
+    thickness: 6, ...extra,
+  });
+  const drawer = (w, h) => roundedRect(w / 2, h / 2, w, h, 4);
+  const bbox = pts => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  };
+  // The pockets for exactly what the nester says it placed, rebuilt the way
+  // the editor would after applying the result.
+  const boxesOf = (items, res) => {
+    const moved = applyNest(items, res);
+    return layoutPockets(res.placements.map(p => moved[p.i]), 0.5);
+  };
+  const clash = (outer, items, res, border = 5) => {
+    const cf = layoutConflicts(outer, boxesOf(items, res), border);
+    return [cf.collisions.size, cf.escaped.size];
+  };
+  // A mixed 12-tool set, fabricated rather than traced, so the fixtures do not
+  // depend on the photo pipeline at all.
+  const mixed = () => {
+    const out = [];
+    for (let k = 0; k < 12; k++) {
+      out.push(k % 3 === 0 ? mk('L' + k, ell(50 + k, 30 + k, 12))
+        : k % 3 === 1 ? mk('r' + k, rect(60 - k, 18 + k))
+          : mk('s' + k, rect(24 + k, 24 + k)));
+    }
+    return out;
+  };
+
+  // 1. Two rectangles that cannot sit side by side have to take a second row,
+  //    and the settle pass must leave exactly minWeb between the rows rather
+  //    than whatever the coarse anchor grid handed it.
+  const stackItems = [mk('a', rect(40, 20)), mk('b', rect(40, 20))];
+  const stackC = drawer(60, 120);
+  const stack = nestLayout(stackC, stackItems, { rotationStep: 90 });
+  const sb = boxesOf(stackItems, stack).map(g => bbox(g.pocket))
+    .sort((p, q) => p.minY - q.minY);
+  const stackGap = sb.length === 2 ? sb[1].minY - sb[0].maxY : -1;
+
+  // 2. Two Ls: the greedy true-outline test has to let the second one tuck
+  //    into the first one's concavity, which bbox packing cannot do.
+  const tuckItems = [mk('L1', ell(60, 40, 14)), mk('L2', ell(60, 40, 14))];
+  const tuckC = drawer(200, 140);
+  const before = JSON.stringify(tuckItems);
+  const tuck = nestLayout(tuckC, tuckItems, {});
+  const tb = boxesOf(tuckItems, tuck).map(g => bbox(g.pocket));
+  const tuckOverlap = tb.length === 2 &&
+    Math.min(tb[0].maxX, tb[1].maxX) - Math.max(tb[0].minX, tb[1].minX) > 1 &&
+    Math.min(tb[0].maxY, tb[1].maxY) - Math.max(tb[0].minY, tb[1].minY) > 1;
+  const tuckMoved = applyNest(tuckItems, tuck);
+
+  // 3. An L that is too wide for the drawer flat has to turn to fit.
+  const spinItems = [mk('L', ell(60, 40, 14))];
+  const spin = nestLayout(drawer(62, 82), spinItems, { rotationStep: 90 });
+
+  // 4 + 5. Honest failure: too large in every orientation vs. simply no room.
+  const hugeItems = [mk('crowbar', rect(200, 200))];
+  const huge = nestLayout(drawer(60, 60), hugeItems, { rotationStep: 90 });
+  const fullItems = Array.from({ length: 8 }, (_, k) => mk('c' + k, rect(50, 30)));
+  const fullC = drawer(150, 110);
+  const full = nestLayout(fullC, fullItems, { rotationStep: 90 });
+
+  // 6. Determinism, and 7. pins as fixed obstacles.
+  const detItems = mixed();
+  const detC = drawer(300, 200);
+  const det1 = nestLayout(detC, detItems, {});
+  const det2 = nestLayout(detC, detItems, {});
+  const pinItems = mixed().map((it, i) =>
+    i === 0 ? { ...it, pin: true, x: 200, y: 150, rot: 30 } : it);
+  const pin = nestLayout(detC, pinItems, {});
+  const pinned = pin.placements.find(p => p.i === 0);
+
+  // 8. Per-item rotation policy: locked to current, locked to an angle, free.
+  const lockItems = mixed().map((it, i) =>
+    i < 3 ? { ...it, rotLock: 'current', rot: 90 }
+      : i < 6 ? { ...it, rotLock: 45 } : it);
+  const lock = nestLayout(detC, lockItems, {});
+  const lockRots = new Map(lock.placements.map(p => [p.i, p.rot]));
+
+  // 9. Bounded restarts: two shapes with the same pocket area but different
+  //    outlines are one equal-area group, so the seeded shuffles really do
+  //    produce different orders — and the answer is still reproducible.
+  const eqItems = [mk('wide', rect(40, 20)), mk('tall', rect(20, 40)),
+    mk('wide2', rect(40, 20)), mk('tall2', rect(20, 40))];
+  const eqC = drawer(140, 120);
+  const eq1 = nestLayout(eqC, eqItems, { rotationStep: 90, restarts: 20 });
+  const eq2 = nestLayout(eqC, eqItems, { rotationStep: 90, restarts: 20 });
+
+  return {
+    stack: { n: stack.placements.length, gap: stackGap, clash: clash(stackC, stackItems, stack) },
+    tuck: {
+      rots: tuck.placements.map(p => p.rot).sort((a, b) => a - b),
+      overlap: tuckOverlap, w: tuck.stats.bbox ? tuck.stats.bbox.w : -1,
+      clash: clash(tuckC, tuckItems, tuck),
+      untouched: JSON.stringify(tuckItems) === before,
+      fresh: tuckMoved[0] !== tuckItems[0] && tuckMoved[0].x === tuck.placements[0].x,
+    },
+    spin: { n: spin.placements.length, rot: spin.placements.length ? spin.placements[0].rot : -1 },
+    huge: { n: huge.placements.length, reason: huge.unplaced.map(u => u.reason).join(','),
+      name: huge.unplaced.map(u => u.name).join(',') },
+    full: { n: full.placements.length, left: full.unplaced.length,
+      reasons: Array.from(new Set(full.unplaced.map(u => u.reason))).join(','),
+      clash: clash(fullC, fullItems, full) },
+    det: { same: JSON.stringify(det1.placements) === JSON.stringify(det2.placements),
+      n: det1.placements.length, clash: clash(detC, detItems, det1) },
+    pin: { at: pinned || null, n: pin.placements.length,
+      pinnedFlag: !!(pinned && pinned.pinned), clash: clash(detC, pinItems, pin),
+      list: pin.stats.pinned.join(',') },
+    lock: { cur: [0, 1, 2].map(i => lockRots.get(i)).join(','),
+      at45: [3, 4, 5].map(i => lockRots.get(i)).join(','),
+      freeStepped: [6, 7, 8, 9, 10, 11].every(i => {
+        const r = lockRots.get(i);
+        return r === undefined || Math.abs(r % 15) < 1e-9;
+      }) },
+    eq: { passes: eq1.stats.passes, n: eq1.placements.length,
+      same: JSON.stringify(eq1.placements) === JSON.stringify(eq2.placements) },
+  };
+});
+
+console.log('\nNesting / auto-sort (holders.js)');
+check('two rectangles that cannot sit side by side take a second row, exactly minWeb apart',
+  nestFix.stack.n === 2 && near(nestFix.stack.gap, 4, 0.35) &&
+  nestFix.stack.clash[0] === 0 && nestFix.stack.clash[1] === 0,
+  `${nestFix.stack.n} placed, ${nestFix.stack.gap.toFixed(2)} mm web`);
+check('the second L turns round and tucks into the first one\'s concavity',
+  nestFix.tuck.rots.join(',') === '0,180' && nestFix.tuck.overlap && nestFix.tuck.w < 100,
+  `rots ${nestFix.tuck.rots.join(',')}, bbox ${nestFix.tuck.w.toFixed(1)} mm wide, overlap ${nestFix.tuck.overlap}`);
+check('the interleaved pair is still conflict-free',
+  nestFix.tuck.clash[0] === 0 && nestFix.tuck.clash[1] === 0,
+  `${nestFix.tuck.clash[0]} colliding, ${nestFix.tuck.clash[1]} escaped`);
+check('nestLayout leaves the items it was handed untouched, and applyNest copies',
+  nestFix.tuck.untouched && nestFix.tuck.fresh, `untouched ${nestFix.tuck.untouched}`);
+check('an L too wide for the drawer flat rotates 90° to fit',
+  nestFix.spin.n === 1 && (nestFix.spin.rot === 90 || nestFix.spin.rot === 270),
+  `${nestFix.spin.n} placed at ${nestFix.spin.rot}°`);
+check('a tool too big in every orientation comes back named, as tooLarge',
+  nestFix.huge.n === 0 && nestFix.huge.reason === 'tooLarge' && nestFix.huge.name === 'crowbar',
+  `${nestFix.huge.n} placed, ${nestFix.huge.reason} for ${nestFix.huge.name}`);
+check('a full drawer packs 2 × 2, names the leftovers as noRoom, stays conflict-free',
+  nestFix.full.n === 4 && nestFix.full.left === 4 && nestFix.full.reasons === 'noRoom' &&
+  nestFix.full.clash[0] === 0 && nestFix.full.clash[1] === 0,
+  `${nestFix.full.n} placed, ${nestFix.full.left} left (${nestFix.full.reasons})`);
+check('12 mixed tools nest identically twice over — no clock, no Math.random',
+  nestFix.det.same && nestFix.det.n === 12 &&
+  nestFix.det.clash[0] === 0 && nestFix.det.clash[1] === 0,
+  `${nestFix.det.n} placed, identical ${nestFix.det.same}`);
+check('a pinned tool keeps its exact x, y and rot and the pack routes around it',
+  !!nestFix.pin.at && nestFix.pin.at.x === 200 && nestFix.pin.at.y === 150 &&
+  nestFix.pin.at.rot === 30 && nestFix.pin.pinnedFlag && nestFix.pin.list === '0' &&
+  nestFix.pin.n === 12 && nestFix.pin.clash[0] === 0 && nestFix.pin.clash[1] === 0,
+  nestFix.pin.at ? `at ${nestFix.pin.at.x},${nestFix.pin.at.y} @ ${nestFix.pin.at.rot}°, ${nestFix.pin.n} placed` : 'pin dropped');
+check('rotation policy: locked to current, locked to an angle, or free on the step',
+  nestFix.lock.cur === '90,90,90' && nestFix.lock.at45 === '45,45,45' &&
+  nestFix.lock.freeStepped,
+  `current ${nestFix.lock.cur}, locked ${nestFix.lock.at45}, stepped ${nestFix.lock.freeStepped}`);
+check('bounded restarts shuffle the equal-area group and still reproduce',
+  nestFix.eq.passes > 1 && nestFix.eq.n === 4 && nestFix.eq.same,
+  `${nestFix.eq.passes} distinct passes, identical ${nestFix.eq.same}`);
+
 // ---------- Gridfinity bin (holders.js) ----------
 
 const grid = await page.evaluate(async () => {

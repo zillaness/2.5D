@@ -590,6 +590,52 @@ Those base tiles are split on exactly the same seams as the top and carry no
 puzzle tabs, so tile A1 of the base is the same rectangle as tile A1 of the
 top and the glue holds the sandwich together.
 
+### Auto-sorting a drawer
+
+Dropping a dozen traced tools into a drawer and dragging each one into place by
+hand is the slow part of Step 4, and the result is usually looser than it needs
+to be, because nobody arranges a plier's handles into a screwdriver's shaft by
+eye. `nestLayout()` in `js/holders.js` does that arrangement for you.
+
+It packs the same pockets the editor draws, so the clearance offset and the
+finger notch are part of the shape it fits, and a tool with a notch reserves the
+notch lobe for free. Tools go down biggest first, each one tried at every
+rotation its policy allows, and every candidate position is tested against the
+true outlines of what is already placed rather than their bounding boxes, which
+is what lets one tool tuck into another's concavity. Each placement then slides
+up and left until it is exactly a set minimum web of foam away from its
+neighbours and from the drawer's border inset. That check is the same one the
+editor turns red with, so a nested layout cannot come back red. The same tools
+in the same drawer always nest to the same answer.
+
+Pin a tool and the nester treats it as a fixed obstacle: it packs around it
+without moving it a hair. Lock a tool's rotation to the angle it already has, or
+to a specific angle, or leave it free to take any step. Anything that will not
+fit is left exactly where it was and reported by name, saying whether it was too
+big for the drawer in every orientation or whether the drawer simply ran out of
+room.
+
+The numbers come in two bundles, because a travelling toolbox and a shop drawer
+want different things at once:
+
+- **Dense** is for a box that gets carried. Thin webs (4 mm), rotation free in
+  15 degree steps, and a finger notch that ends up sealed against a wall is
+  reported rather than refused. The lid holds the tools in anyway.
+- **Access** is for a drawer you reach into. Wide webs (8 mm) so fingers fit,
+  rotation restricted to 90 degrees so labels still read from the front of the
+  drawer, and a finger notch that has to stay reachable or the placement is
+  refused.
+
+Neither is a mode. Picking one seeds the individual values and every one of them
+stays editable afterward, and a project saves the actual numbers rather than a
+profile name, so editing a profile can never change the geometry of a drawer you
+cut six months ago.
+
+**None of this has a button yet.** The nester is geometry the module exposes and
+the test suite drives. The Nest control, the profile picker, the saved custom
+profiles and the reserving of label space all live in the Step 4 panel and are
+not wired up, so for now the only way to run it is from code.
+
 ## How it works
 
 - `js/homography.js` — 4-point DLT homography; inverse-mapped bilinear
