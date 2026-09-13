@@ -37,7 +37,22 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - ✅ labelling step 4: engrave layer in both SVG export paths — committed below
 - ✅ labelling step 5: labels carve into printed inserts as recesses — committed below
 - ✅ labelling step 7: UI toggle, process settings, legibility readout — committed below
-- ▶ NEXT: labelling step 6 (drag/rotate labels in the layout editor), then nesting steps 1-4
+- ✅ Sam signed off docs/selection_and_organize_prd_v1.2.md; status flipped in the repo — d7b2771
+- ✅ Part A selection modes: 7 plan steps in a worktree lane, 319 checks
+- ✅ Part B Step 4 Organize: 9 plan steps in a worktree lane, 338 checks
+- ✅ Part D laser constructions: 6 plan steps in a worktree lane, 325 checks
+- ✅ Three-lens adversarial review loop over all three lanes: 43 findings raised,
+  6 refuted away, 26 fixed in place. Caught an innerHTML injection from a
+  project file's plate-shape name and a pre-release project inheriting the live
+  session's plate offset.
+- ✅ Merged A, then B, then C. One real conflict in js/main.js, where Part B had
+  extracted the export handlers into shared functions and Part D had rewritten
+  them inline for a two-part layered build. Resolved by keeping the shared
+  functions and folding the layered and base-sheet paths into them.
+- ✅ Merged suite: 472 checks, all passing, which is the 275 baseline plus 44,
+  63 and 50 from the three lanes, so nothing was lost in the merge — 47ba7c3
+- ✅ Deployed v1.24.0 to gh-pages, carrying the unreleased labelling work — 3cae543
+- ▶ NEXT: S6, docs/batch_ingest_prd_v1.0.md (lanes B2, D, E), then nesting steps 1-4
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done
@@ -134,3 +149,4 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.5 (2026-09-12): batch_ingest_prd_v1.0.md drafted; Step 4 PRD marked signed off.
 - v1.4 (2026-09-10): PRD at v1.2: circles in crossing select, File System Access backend, container scaling, Part D laser constructions, session uprevs.
 - v1.3 (2026-09-10): PRD widened to docs/selection_and_organize_prd_v1.2.md (Step 4 Organize, ultracode build plan).
+- v1.5 (2026-09-13): S5 shipped. Parts A, B and D built in parallel lanes, reviewed, merged and deployed as v1.24.0.

@@ -1,16 +1,16 @@
 ---
 file: selection_and_organize_prd_v1.2.md
-version: 1.2
+version: 1.3
 author: Sam Cao
 created: 2026-09-10
-last_updated: 2026-09-10
+last_updated: 2026-09-13
 description: PRD for trace-editor selection modes, a new Step 4 Organize with folder access and container scaling, laser-cut foam constructions, and build instructions for an ultracode session.
 ai_update: Update last_updated and version. Rename file to match. Append changelog at bottom.
 ---
 
 # PRD: Selection modes and Step 4 Organize
 
-Status: **SIGNED OFF by Sam, 2026-09-10. Build in progress.** · 2026-09-10 ·
+Status: **SHIPPED in v1.24.0, 2026-09-13.** · 2026-09-10 ·
 target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 Sam signed off Parts A, B, and D and the lane plan in Part C as written, with
@@ -20,6 +20,23 @@ crossing box does not expand managed straight lines), Part A 2 (lasso and
 brush do not expand arc runs), Part B 3 (a container-kind folder entry is
 reported as skipped, not offered as the drawer outline), and Part D 1 (one top
 sheet, with a warning when an item is deeper than it).
+
+All three Parts shipped in v1.24.0 on 2026-09-13. Part A landed all seven plan
+steps, Part B all nine, Part D all six, built in three parallel worktrees and
+merged A, then B, then C. A three-lens adversarial review loop ran over each
+lane and its confirmed findings were fixed in place: twenty-six fixes in all,
+including a blocker where a project file's plate-shape name reached innerHTML
+unescaped, and a save-format fault where a project saved before the build
+plate existed inherited the live session's plate offset. The merged suite runs
+472 checks, all passing, against a 275 baseline.
+
+Known gaps, recorded rather than fixed: the library thumbnail trim past 4 MB
+asks before dropping photos but the Save dialog has no separate include
+thumbnails checkbox, so project files always carry the thumbs of placed items;
+the tiling window offset is applied in js/main.js rather than by giving
+splitTiles an offset parameter, because Part B's scope forbade touching
+js/holders.js; and README's three Step 4 screenshot paths are placeholders
+awaiting captures.
 
 This document is the unit for the next session, which Sam intends to run on
 Opus with ultracode. It has four parts:
@@ -994,3 +1011,4 @@ ones that change what gets built; the rest are defaults.
 - v1.0 (2026-09-10): Initial draft of the selection-modes PRD (as `selection_modes_prd_v1.0.md`) from the 2026-09-09 chat decisions.
 - v1.2 (2026-09-10): Sam's 2026-09-10 additions. Part A: crossing box and the other gestures also select circles. Part B: File System Access backend beside the directory input, container-from-photo path documented, known width and depth scaling, photos drawn inside traces, bed as a build plate with shape, auto-centre, and nudge. New Part D: through-cut and two-layer laser foam constructions with base-layer labels. Part C: third lane, and the session now uprevs and deploys.
 - v1.1 (2026-09-10): Renamed and widened. Added Part B, Step 4 Organize with a folder-of-traces palette, and Part C, build instructions and workflow scripts for the Opus + ultracode session. Written without em dashes per Sam's style guide; the repo's older docs use them and that conflict is still open in BURNDOWN.md.
+- v1.3 (2026-09-13): Shipped in v1.24.0. Status records what landed, the review loop's twenty-six fixes, the 472-check suite, and the three recorded gaps.
