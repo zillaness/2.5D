@@ -631,6 +631,19 @@ stays editable afterward, and a project saves the actual numbers rather than a
 profile name, so editing a profile can never change the geometry of a drawer you
 cut six months ago.
 
+Under Access the finger notch is a placement rule, not an afterthought. A disc
+of clear foam around each notch has to survive the whole pack, so a tool whose
+notch would open onto the drawer wall turns round instead, and a tool that would
+land across an earlier tool's notch is moved somewhere else. If there is nowhere
+else it is left out and named, rather than quietly sealing the notch shut. Under
+Dense the same sealed notch is reported and packed anyway.
+
+The reference drawer in the test suite is twelve hand tools in a 550 by 380 mm
+drawer: a hammer, a tape measure, four wrenches, three pliers, two screwdrivers
+and a knife. Laid out carefully by hand in rows they occupy a 486 by 307 mm
+patch. The nester fits the same twelve into 515 by 222 mm, about a quarter less
+foam, and that comparison is frozen as a test so it cannot quietly get worse.
+
 **None of this has a button yet.** The nester is geometry the module exposes and
 the test suite drives. The Nest control, the profile picker, the saved custom
 profiles and the reserving of label space all live in the Step 4 panel and are

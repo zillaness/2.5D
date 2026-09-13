@@ -4871,6 +4871,146 @@ check('require: with nowhere legal left the tool is refused rather than sealing 
   nestWeb.tightReq.reach >= nestWeb.notchClear - 1e-6 && nestWeb.tightReq.clash === 0,
   `warn placed ${nestWeb.tightWarn.n} and warned on [${nestWeb.tightWarn.warnings}], require placed ${nestWeb.tightReq.n} and reported ${nestWeb.tightReq.left}`);
 
+// Step 4 of the same PRD: the reference fixture behind success criterion 2. A
+// set of 12 hand tools in a 550 x 380 mm drawer, and the claim that the nester
+// fits at least as many of them as a careful manual arrangement, in no more
+// than the same bounding area.
+//
+// The outlines are fabricated rather than traced, on purpose: a fixture that
+// needed twelve photographs through the whole ingest pipeline would be testing
+// the pipeline, not the nester. What matters is that they are tool-shaped, with
+// the fat ends, thin shafts and open handles that give a real nester something
+// to interleave.
+//
+// The manual arrangement is the other half of the fixture, and it is the part
+// that is frozen. It was laid out once by hand, the way a person actually does
+// it: rows of long tools sorted by height, the tape measure filling the gap
+// beside the hammer head, a small wrench slipped into the dead space under the
+// hammer handle. Its numbers are written down below as constants, and the test
+// re-derives them and checks they still hold, so the baseline cannot drift
+// quietly and make the comparison easy.
+const HAND_W = 486, HAND_H = 307, HAND_AREA = HAND_W * HAND_H;
+const nestRef = await page.evaluate(async () => {
+  const { nestLayout, applyNest, layoutPockets, layoutConflicts, roundedRect } =
+    await import('/js/holders.js');
+  const P = (x, y) => ({ x, y });
+  // Combination wrench: fat ring and open ends, narrow shaft between them.
+  const wrench = (L, j) => [P(0, j * 0.15), P(L * 0.11, 0), P(L * 0.2, 0), P(L * 0.28, j * 0.3),
+    P(L * 0.72, j * 0.3), P(L * 0.8, 0), P(L * 0.9, 0), P(L, j * 0.18), P(L, j * 0.82),
+    P(L * 0.9, j), P(L * 0.8, j), P(L * 0.72, j * 0.7), P(L * 0.28, j * 0.7), P(L * 0.2, j),
+    P(L * 0.11, j), P(0, j * 0.85)];
+  // Screwdriver: fat handle at the left, tapering into a thin blade.
+  const driver = (L, h) => [P(0, h * 0.25), P(L * 0.06, 0), P(L * 0.34, 0), P(L * 0.4, h * 0.3),
+    P(L, h * 0.42), P(L, h * 0.58), P(L * 0.4, h * 0.7), P(L * 0.34, h), P(L * 0.06, h),
+    P(0, h * 0.75)];
+  // Pliers: jaws at the right, two handles at the left with the gap between
+  // them open, which is the concavity another tool can tuck into.
+  const pliers = (L, h) => [P(L, h * 0.45), P(L * 0.62, h * 0.16), P(L * 0.26, h * 0.04),
+    P(0, 0), P(0, h * 0.28), P(L * 0.32, h * 0.43), P(L * 0.32, h * 0.57), P(0, h * 0.72),
+    P(0, h), P(L * 0.26, h * 0.96), P(L * 0.62, h * 0.84), P(L, h * 0.55)];
+  // Hammer: a T, head at the left, thin handle running right.
+  const hammer = (L, H, hw, th) => [P(0, 0), P(hw, 0), P(hw, (H - th) / 2), P(L, (H - th) / 2 + 3),
+    P(L, (H + th) / 2 - 3), P(hw, (H + th) / 2), P(hw, H), P(0, H)];
+  const knife = (L, h) => [P(0, h * 0.2), P(L * 0.1, 0), P(L * 0.62, 0), P(L, h * 0.34),
+    P(L, h * 0.5), P(L * 0.62, h * 0.8), P(L * 0.1, h), P(0, h * 0.8)];
+  const tape = s => [P(s * 0.18, 0), P(s * 0.82, 0), P(s, s * 0.18), P(s, s * 0.82),
+    P(s * 0.82, s), P(s * 0.18, s), P(0, s * 0.82), P(0, s * 0.18)];
+  const bbox = pts => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  };
+  const unionBB = loops => loops.reduce((acc, l) => {
+    const b = bbox(l);
+    return acc ? {
+      minX: Math.min(acc.minX, b.minX), minY: Math.min(acc.minY, b.minY),
+      maxX: Math.max(acc.maxX, b.maxX), maxY: Math.max(acc.maxY, b.maxY),
+    } : b;
+  }, null);
+
+  // name, outline, and the left / top corner it was hand-placed at. Every row
+  // is 5 mm clear of the next, which is 4 mm of foam once the 0.5 mm clearance
+  // offset on each pocket is counted, and 12 mm in from the drawer edge, which
+  // clears the 5 mm border inset plus the same 4 mm web.
+  const HAND = [
+    ['ball-pein hammer', hammer(300, 112, 46, 26), 12, 12],
+    ['tape measure', tape(72), 317, 12],
+    ['combination wrench 10', wrench(150, 26), 63, 90],
+    ['adjustable wrench', wrench(210, 52), 12, 129],
+    ['needle-nose pliers', pliers(185, 46), 227, 129],
+    ['side cutters', pliers(150, 58), 12, 186],
+    ['combination pliers', pliers(165, 52), 167, 186],
+    ['utility knife', knife(160, 34), 337, 186],
+    ['flat screwdriver', driver(230, 30), 12, 249],
+    ['combination wrench 17', wrench(190, 34), 247, 249],
+    ['phillips screwdriver', driver(205, 28), 12, 288],
+    ['combination wrench 13', wrench(170, 30), 222, 288],
+  ];
+  // x / y are the outline bbox CENTRE, which is what placeLoop moves.
+  const items = HAND.map(([name, outer, left, top]) => {
+    const b = bbox(outer);
+    return { name, outer, holes: [], circles: [], depth: null, thickness: 8,
+      rot: 0, x: left + b.w / 2, y: top + b.h / 2 };
+  });
+
+  const DW = 550, DH = 380;
+  const drawer = roundedRect(DW / 2, DH / 2, DW, DH, 6);
+  const opts = { minWeb: 4, border: 5, clearance: 0.5, rotationStep: 15, notchClear: 0 };
+
+  const handGeo = layoutPockets(items, opts.clearance);
+  const handCf = layoutConflicts(drawer, handGeo, opts.border);
+  const hb = unionBB(handGeo.map(g => g.pocket));
+
+  const res = nestLayout(drawer, items, opts);
+  const moved = applyNest(items, res);
+  const nestGeo = layoutPockets(res.placements.map(p => moved[p.i]), opts.clearance);
+  const nestCf = layoutConflicts(drawer, nestGeo, opts.border);
+  const nb = unionBB(nestGeo.map(g => g.pocket));
+
+  // Success criterion 6, kept deliberately loose. The PRD's budget is 2 s for
+  // 30 items on a mid-range laptop; a headless browser in a container is not
+  // that, so this only has to catch the difference between a nester that runs
+  // and one that has gone quadratic. The measured figure is printed either way.
+  const many = [];
+  for (let k = 0; k < 30; k++) {
+    many.push({ ...items[k % 12], name: `bulk ${k}`, x: 20 + k * 3, y: 20 + k * 2 });
+  }
+  const bulkC = roundedRect(450, 350, 900, 700, 6);
+  const t0 = performance.now();
+  const bulk = nestLayout(bulkC, many, opts);
+  const bulkMs = performance.now() - t0;
+
+  return {
+    hand: { clash: handCf.collisions.size + handCf.escaped.size,
+      w: hb.maxX - hb.minX, h: hb.maxY - hb.minY,
+      area: (hb.maxX - hb.minX) * (hb.maxY - hb.minY) },
+    nest: { placed: res.placements.length, left: res.unplaced.length,
+      clash: nestCf.collisions.size + nestCf.escaped.size,
+      w: nb.maxX - nb.minX, h: nb.maxY - nb.minY,
+      area: (nb.maxX - nb.minX) * (nb.maxY - nb.minY),
+      names: res.unplaced.map(u => u.name).join(','),
+      rots: Array.from(new Set(res.placements.map(p => p.rot))).sort((a, b) => a - b).join(',') },
+    bulk: { placed: bulk.placements.length, ms: Math.round(bulkMs) },
+  };
+});
+
+check('the hand-laid 12-tool reference drawer is legal, and measures the frozen 486 x 307 mm',
+  nestRef.hand.clash === 0 && near(nestRef.hand.w, HAND_W, 0.01) &&
+  near(nestRef.hand.h, HAND_H, 0.01) && near(nestRef.hand.area, HAND_AREA, 20),
+  `${nestRef.hand.w.toFixed(1)} x ${nestRef.hand.h.toFixed(1)} mm, ${Math.round(nestRef.hand.area)} mm2, ${nestRef.hand.clash} conflicts`);
+check('the nester fits all 12 reference tools in the 550 x 380 drawer, conflict-free',
+  nestRef.nest.placed === 12 && nestRef.nest.left === 0 && nestRef.nest.clash === 0,
+  `${nestRef.nest.placed} placed, ${nestRef.nest.left} left over (${nestRef.nest.names || 'none'}), angles used ${nestRef.nest.rots}`);
+check('and uses no more bounding area than the careful hand arrangement',
+  nestRef.nest.area <= HAND_AREA + 1e-6,
+  `${Math.round(nestRef.nest.area)} mm2 nested (${nestRef.nest.w.toFixed(1)} x ${nestRef.nest.h.toFixed(1)}) vs ${HAND_AREA} by hand, ${(100 - 100 * nestRef.nest.area / HAND_AREA).toFixed(1)}% less`);
+check('30 tools nest without the run running away (criterion 6, generous ceiling)',
+  nestRef.bulk.placed === 30 && nestRef.bulk.ms < 8000,
+  `${nestRef.bulk.placed} placed in ${nestRef.bulk.ms} ms`);
+
 // ---------- Gridfinity bin (holders.js) ----------
 
 const grid = await page.evaluate(async () => {
