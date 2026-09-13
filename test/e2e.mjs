@@ -8902,6 +8902,151 @@ check('the picker-mid-walk block leaves the library, the folder and Step 1 as it
   `step ${queueSeven.restored.step}, library restored ${queueSeven.restored.lib}, ` +
   `queue ${queueSeven.restored.queue}, handle ${queueSeven.restored.handle}`);
 
+// ---------- the walk files tools, whatever the Kind select says ----------
+//
+// Saving the drawer itself as a container outline is the documented way to get
+// a container shape into the library, and it leaves the Save outline panel's
+// Kind select on Container for the rest of the session. Every photo the walk
+// saves after that must still be a tool: Step 4's palette drops containers, so
+// a mis-kinded row is ticked nowhere and Add all places nothing.
+const queueEight = await page.evaluate(async () => {
+  const app = window.__app;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+  const lib = () => JSON.parse(localStorage.getItem('2p5d.library.v1') || '[]');
+
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    libJson: localStorage.getItem('2p5d.library.v1'),
+    ref: app.queue.snapshot(),
+    kind: document.getElementById('libKind').value,
+    items: app.state.layout.items.slice(),
+    sel: app.layoutEditor.sel,
+  };
+  localStorage.setItem('2p5d.library.v1', '[]');
+  app.state.layout.items.length = 0;
+
+  // What a container save leaves behind on the panel.
+  const kindSel = document.getElementById('libKind');
+  kindSel.value = 'container';
+  kindSel.dispatchEvent(new Event('change', { bubbles: true }));
+
+  app.queue.clear();
+  app.folderBackend.forget();
+  await app.queue.add([
+    await photoFile('mallet.jpg', 480, 360),
+    await photoFile('punch.jpg', 360, 480),
+  ]);
+  app.queue.load(app.state.queue[0]);
+  await wait(700);
+  app.traceEditor.setTrace(rect(9, 9, 44, 20), []);
+  await app.queue.walk.next();
+  await wait(700);
+  app.traceEditor.setTrace(rect(8, 8, 30, 46), []);
+  await app.queue.walk.next();
+  await wait(500);
+  const filed = {
+    names: lib().map(o => o.name),
+    kinds: lib().map(o => o.kind),
+    // The user's own choice on the panel is left where they put it.
+    select: document.getElementById('libKind').value,
+  };
+
+  const got = app.queue.organize();
+  await wait(300);
+  const organized = {
+    picked: got.picked,
+    missing: got.missing,
+    picks: app.palette.picks.slice().sort(),
+    rows: document.querySelectorAll('#layPalLibList .pal-row').length,
+  };
+  document.getElementById('layPalAddAllBtn').click();
+  await wait(250);
+  const placed = {
+    n: app.state.layout.items.length,
+    names: app.state.layout.items.map(i => i.name),
+  };
+
+  // Put the layout, the library, the queue, the panel and Step 1 back.
+  app.state.layout.items.length = 0;
+  app.state.layout.items.push(...before.items);
+  app.layoutEditor.sel = before.sel;
+  kindSel.value = before.kind;
+  kindSel.dispatchEvent(new Event('change', { bubbles: true }));
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  if (before.libJson === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.libJson);
+  app.palette.refresh();
+  app.queue.applyRef(before.ref);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles);
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await wait(300);
+  app.refreshLayoutEditor();
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    lib: localStorage.getItem('2p5d.library.v1') === before.libJson,
+    kind: document.getElementById('libKind').value === before.kind,
+    queue: app.state.queue.length,
+    picks: app.palette.picks.length,
+    items: app.state.layout.items.length === before.items.length,
+  };
+
+  return { filed, organized, placed, restored };
+});
+
+check('Next files the photo as a tool even with the Kind select left on Container',
+  JSON.stringify(queueEight.filed.names) === JSON.stringify(['mallet', 'punch']) &&
+  JSON.stringify(queueEight.filed.kinds) === JSON.stringify(['tool', 'tool']) &&
+  queueEight.filed.select === 'container',
+  `library ${JSON.stringify(queueEight.filed.names)} as ${JSON.stringify(queueEight.filed.kinds)}, ` +
+  `panel still on “${queueEight.filed.select}”`);
+
+check('so Organize what I have still ticks them and Add all places exactly them',
+  queueEight.organized.picked === 2 && queueEight.organized.missing === 0 &&
+  JSON.stringify(queueEight.organized.picks) === JSON.stringify(['lib:mallet', 'lib:punch']) &&
+  queueEight.organized.rows === 2 && queueEight.placed.n === 2 &&
+  JSON.stringify(queueEight.placed.names) === JSON.stringify(['mallet', 'punch']),
+  `picked ${queueEight.organized.picked}, missing ${queueEight.organized.missing}, ` +
+  `${queueEight.organized.rows} palette rows, placed ${JSON.stringify(queueEight.placed.names)}`);
+
+check('the Kind block leaves the library, the layout, the panel and Step 1 as it found them',
+  queueEight.restored.step === 3 && queueEight.restored.image && queueEight.restored.lib &&
+  queueEight.restored.kind && queueEight.restored.queue === 0 &&
+  queueEight.restored.picks === 0 && queueEight.restored.items,
+  `step ${queueEight.restored.step}, library restored ${queueEight.restored.lib}, ` +
+  `kind restored ${queueEight.restored.kind}, queue ${queueEight.restored.queue}`);
+
 // ---------- snap to grid in the layout editor (Part B) ----------
 // Snapping is a property of the gesture: a drag, an arrow-key nudge and a
 // rotation-handle drag land on the grid, and nothing already placed moves when

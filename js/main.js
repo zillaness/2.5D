@@ -1256,6 +1256,13 @@ async function queueNext() {
   const name = queueLibName(item, $('queueSaveName').value);
   const entry = libEntryFromTrace(name);
   if (!entry) { toast('Nothing traced yet — trace the outline in Step 2, then Next.'); return null; }
+  // The walk traces tools. libEntryFromTrace takes the kind from the Save
+  // outline panel's Kind select, which holds whatever the user last chose
+  // there, so a session that saved the drawer as a container outline would
+  // have filed every photo after it as a container too, and Step 4 drops
+  // containers from the palette: the tools traced this session would be
+  // ticked nowhere and Add all would place none of them.
+  entry.kind = 'tool';
   libCommit(entry);
   item.libName = name;
   const wrote = await queueWriteProject(item);
