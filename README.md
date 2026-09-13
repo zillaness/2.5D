@@ -685,6 +685,62 @@ warns when two measured axes disagree by more than 2 percent, which usually
 means a mis-traced edge rather than warp. The original outline stays in the
 library; only the layout's copy is scaled.
 
+### Tracing a whole drawer in one pass
+
+A drawer is a dozen tools, and tracing them one at a time means a dozen trips
+through Steps 1 to 3, with the reference set up again on every trip and a
+library name typed by hand at the end of each. The photo queue is the
+recommended way to do a drawer: bring every photo in first, tick the ones worth
+tracing, walk them in sequence, then stop and organize what is done.
+
+**Bring the photos in.** Step 1 gains **➕ Add photos…**, a multi-select of
+image files, and **📁 Add folder…**, which reads a whole folder through the same
+two backends the Step 4 palette uses. Dropping several files, or a folder, onto
+Step 1 appends them as well. Everything lands in a **Photo queue** strip above
+the Step 1 panel: a thumbnail per photo with a tick box, a status badge
+(pending, traced, skipped, or unsupported), **Select all**, **Clear done**, and
+a count. Clicking a thumbnail loads that photo. The strip rides Steps 1 to 3 and
+collapses on Step 4, where the drawer, not the next photo, is what you are
+working on. HEIC photos join the queue marked unsupported, because no browser
+canvas will decode one; export them as JPEG first.
+
+**Walk it.** With a queued photo loaded, the strip offers **Next ▸**, **Skip**
+and, once something has been done, **↶ Undo**. Next saves the current trace into
+the outline library under the photo's file name without its extension (editable
+in **Library name for this photo** before you press it), writes the project JSON
+beside the photo when the folder was opened with the File System Access picker,
+marks the photo traced, unticks it, and opens the next ticked photo with the
+reference settings carried across. Only the settings carry: corners are
+re-detected on every photo, because the sheet moves between shots, so a copied
+corner is a wrong corner. Skip leaves a photo untraced and moves on, and the
+photo stays in the queue for later. Undo returns to the photo just finished,
+pending and ticked again; its library entry stays saved, and tracing that photo
+again under the same name overwrites that entry rather than adding a second one.
+A name the library already holds takes the photo's folder as a suffix, so
+`wrench.jpg` from two different folders cannot overwrite one entry. Where the
+photo has no writable folder of its own, on the directory-input backend, after
+a drop of a folder the open one does not contain, or for a loose photo from
+**➕ Add photos…** or a drop of single files, which carry no folder of their
+own at all, the project is offered as a download instead, once per photo. A
+project is never written into a folder the photo does not sit in.
+
+**Stop and organize.** **Organize what I have ▸** opens Step 4 with every tool
+traced this session ticked in the palette, so **Add all** places exactly those
+and leaves the rest of the library alone. Ticks are yours to change, and
+**＋ Add ticked** places whatever is ticked at the time.
+
+**Resume later.** The queue is session-only and no part of the project file: the
+folder is the persistence. Reopening the same folder rebuilds the queue and
+marks as traced every photo that has a 2.5D project JSON of its own beside it,
+so a second evening picks up where the first stopped. Those traces go straight
+into the Step 4 palette, read out of the same JSON, so nothing is traced twice.
+A library export sitting next to a photo is not a trace of that photo, and does
+not count as done.
+
+**Memory.** A hundred phone photos are never decoded at once. Ingest is
+sequential, each queue item holds a file reference and a 160 px thumbnail, and
+the only full-size decode alive at any moment is the photo being worked on.
+
 ## Tests
 
 An end-to-end test renders a synthetic photo with a known homography, drives

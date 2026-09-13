@@ -40,7 +40,7 @@ import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
 import { Viewer3D } from './viewer3d.js';
 import { importCad } from './import/cadImport.js';
-import { tracesFromFiles, thumbFromImage } from './import/traceFolder.js';
+import { tracesFromFiles, thumbFromImage, isProject } from './import/traceFolder.js';
 import {
   hasDirectoryPicker, pickFolder, walkFolder, ensurePermission,
   rememberFolder, recallFolder, writeProjectFile,
@@ -51,6 +51,13 @@ const $ = id => document.getElementById(id);
 const state = {
   image: null,
   fileName: 'object',
+  // Batch ingest: the photo queue. [{ id, name, path, file, status, thumb,
+  // picked }] with status 'pending' | 'traced' | 'skipped' | 'unsupported'.
+  // Session-only and never serialised: the Files are held by reference and the
+  // thumbs are 160 px data URLs, so a hundred phone photos costs tens of
+  // megabytes and only the photo being worked on is ever decoded full size.
+  queue: [],
+  queueCurrentId: null,   // the queue item loaded into Step 1, if any
   corners: null,          // [{x,y} x4] source-image px, TL TR BR BL
   // 'rect' (paper/card, perspective-corrected) | 'grid' (graph/dot paper,
   // perspective-corrected off counted squares) | 'coin' (scale only)
@@ -106,6 +113,11 @@ const state = {
       shape: null, offset: { x: 0, y: 0 },
       tabs: { enabled: false, head: 12, neck: 7, depth: 12, spacing: 80, fit: 0 },
     },
+    // Snap to grid while placing by hand. Additive and optional: off, at the
+    // 5 mm default pitch, so a layout exports exactly what it exported before
+    // snapping existed. Snapping quantises the gesture and never a stored
+    // value, so turning it on moves nothing.
+    snap: { on: false, pitch: 5 },
     // Tool labels. Off by default: an unlabelled layout must export exactly
     // what it exports today. `process` drives the minimum legible cap height,
     // which is a property of the machine, not a style preference.
@@ -298,6 +310,10 @@ function goStep(n) {
   }
   if (n === 3) rebuildMesh(true);
   if (split) openLayoutPanel(); else $('layoutModal').hidden = true;
+  // The photo queue rides along on Steps 1 to 3 and collapses on Step 4, where
+  // the drawer, not the next photo, is what the user is looking at.
+  queueCollapsed = n === 4;
+  queueSyncVisible();
   updateStepButtons();
 }
 
@@ -313,18 +329,26 @@ function updateStepButtons() {
 
 // ---------- step 1: image + corners ----------
 
-function loadFile(file) {
+// Returns true when the file was accepted as a photo and the decode has been
+// started. onFail runs when that decode then fails, which is the only way the
+// caller hears about it: the file name and the label are already on screen by
+// then, but state.image still holds the photo before this one.
+function loadFile(file, onFail) {
   if (!file || !file.type.startsWith('image/')) {
     toast('Please choose an image file.');
-    return;
+    return false;
   }
   state.fileName = (file.name || 'object').replace(/\.[^.]+$/, '');
   const url = URL.createObjectURL(file);
-  loadImageFromURL(url, () => URL.revokeObjectURL(url));
+  loadImageFromURL(url, () => URL.revokeObjectURL(url), () => {
+    URL.revokeObjectURL(url);
+    if (onFail) onFail();
+  });
   $('fileLabelText').textContent = file.name;
+  return true;
 }
 
-function loadImageFromURL(url, done) {
+function loadImageFromURL(url, done, fail) {
   const img = new Image();
   img.onload = () => {
     state.image = img;
@@ -347,7 +371,10 @@ function loadImageFromURL(url, done) {
     updateStepButtons();
     if (done) done();
   };
-  img.onerror = () => toast('Could not load that image.');
+  img.onerror = () => {
+    toast('Could not load that image.');
+    if (fail) fail();
+  };
   img.src = url;
 }
 
@@ -512,6 +539,1009 @@ function doRectify() {
   if (state.back.showing) exitUnderside(); else backUISync();
   return true;
 }
+
+// ---------- batch ingest: the photo queue ----------
+//
+// The queue sits beside the existing single-photo state rather than replacing
+// it. Loading a queue item goes through loadFile, the very same path the file
+// picker uses, so nothing downstream learns that a queue exists.
+//
+// Memory is the constraint that shapes this file. A drawer is a hundred phone
+// photos; decoding a hundred of those at full size would sink the tab. So
+// ingest is strictly sequential, each photo is decoded only long enough to
+// draw a 160 px thumbnail, and the only full-size decode alive at any moment
+// is state.image, the photo being worked on.
+
+const QUEUE_THUMB_PX = 160;
+const QUEUE_THUMB_QUALITY = 0.7;
+
+// HEIC is the one format a browser canvas still cannot open. Rather than
+// silently dropping half an iPhone folder, the photo joins the queue marked
+// unsupported and says what to do about it.
+const QUEUE_HEIC_MSG =
+  'HEIC photos cannot be opened by the browser — export them as JPEG first ' +
+  '(on iPhone: Settings › Camera › Formats › Most Compatible).';
+
+// A photo that is not HEIC and still will not decode: a half-copied file, a
+// truncated download, a camera format this browser has no decoder for.
+const QUEUE_BAD_PHOTO_MSG =
+  'could not be opened — the file may be damaged or in a format this browser ' +
+  'cannot decode. Open it in another app and save it again as JPEG or PNG.';
+
+const QUEUE_BADGES = {
+  pending: { text: 'pending', color: 'var(--muted)' },
+  traced: { text: 'traced', color: 'var(--good)' },
+  skipped: { text: 'skipped', color: 'var(--warn)' },
+  unsupported: { text: 'unsupported', color: 'var(--warn)' },
+};
+
+// Ids are a plain counter, so the same ingest always yields the same ids and
+// the tests can name them. No clock and no randomness anywhere in here.
+let queueSeq = 0;
+// The strip's own collapsed flag. goStep drives it to true on Step 4; the
+// toggle button overrides it either way on any step.
+let queueCollapsed = false;
+
+function queuePathOf(item, file) {
+  if (item && typeof item === 'object' && typeof item.path === 'string' && item.path) return item.path;
+  return (file && (file.webkitRelativePath || file.name)) || '';
+}
+
+// Two File objects are the same photo when they are the same object, or when
+// name, size and last-modified all agree. A folder re-opened hands over fresh
+// File objects for the same bytes, so object identity on its own is not
+// enough; two different photos that merely share a name agree on none of the
+// three.
+function queueSameFile(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.name === b.name && a.size === b.size && a.lastModified === b.lastModified;
+}
+
+function queueBaseName(path) {
+  const last = String(path || '').split('/').pop() || '';
+  return last.replace(/\.[^.]+$/, '') || last;
+}
+
+function queueIsHeic(path, file) {
+  const type = (file && file.type) || '';
+  return /\.hei[cf]$/i.test(String(path || '')) || /^image\/hei[cf]/i.test(type);
+}
+
+// What counts as a photo for the queue. A folder of traces holds project JSON
+// and stray text files too; those are not photos and are silently passed over
+// here (the folder ingest hands them to the palette reader instead).
+function queueIsPhoto(path, file) {
+  const type = (file && file.type) || '';
+  if (type.startsWith('image/')) return true;
+  return /\.(jpe?g|png|webp|gif|bmp|avif|hei[cf])$/i.test(String(path || ''));
+}
+
+// One photo -> a 160 px JPEG data URL. The full-size decode lives only inside
+// this promise: the Image is dropped and its blob URL revoked before the
+// caller moves on to the next file, which is what keeps a hundred-photo ingest
+// inside a phone's memory budget.
+function queueMakeThumb(file) {
+  return new Promise(resolve => {
+    if (typeof Image === 'undefined' || typeof document === 'undefined') { resolve(null); return; }
+    let url = null;
+    try { url = URL.createObjectURL(file); } catch { resolve(null); return; }
+    const im = new Image();
+    const finish = out => {
+      im.onload = null;
+      im.onerror = null;
+      try { URL.revokeObjectURL(url); } catch { /* already gone */ }
+      resolve(out);
+    };
+    im.onload = () => {
+      let out = null;
+      try {
+        const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
+        if (iw > 0 && ih > 0) {
+          const s = Math.min(1, QUEUE_THUMB_PX / Math.max(iw, ih));
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(iw * s));
+          c.height = Math.max(1, Math.round(ih * s));
+          const ctx = c.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(im, 0, 0, c.width, c.height);
+            out = c.toDataURL('image/jpeg', QUEUE_THUMB_QUALITY);
+          }
+        }
+      } catch { out = null; }
+      finish(out);
+    };
+    im.onerror = () => finish(null);
+    im.src = url;
+  });
+}
+
+// files: a FileList, an array of File, or an array of { path, file } — the
+// same three shapes tracesFromFiles accepts, so a folder walk feeds this
+// unchanged. Returns the items actually appended, in order.
+async function queueAddFiles(files) {
+  const list = Array.from(files || []);
+  const added = [];
+  for (const it of list) {
+    const file = it && typeof it === 'object' && it.file ? it.file : it;
+    if (!file || typeof file.name !== 'string') continue;
+    const path = queuePathOf(it, file);
+    if (!queueIsPhoto(path, file)) continue;
+    // The same photo twice (a folder re-opened, a drop repeated) is one item.
+    // The path alone is not the identity: a multi-select and a drop of loose
+    // files carry no relative path at all, so two genuinely different photos
+    // from two folders both arrive as "wrench.jpg". Identity is the path plus
+    // the file behind it, so the second one is queued rather than silently
+    // discarded as a duplicate. `added` is checked too: the batch is not in
+    // state.queue until the loop is done.
+    if (state.queue.some(q => q.path === path && queueSameFile(q.file, file))) continue;
+    if (added.some(q => q.path === path && queueSameFile(q.file, file))) continue;
+    const heic = queueIsHeic(path, file);
+    added.push({
+      id: 'q' + (++queueSeq),
+      name: queueBaseName(path),
+      path,
+      file,
+      status: heic ? 'unsupported' : 'pending',
+      thumb: null,
+      picked: !heic,
+    });
+  }
+  if (!added.length) return added;
+  state.queue.push(...added);
+  renderQueue();
+  // Sequential on purpose: one decode alive at a time.
+  for (const item of added) {
+    if (item.status === 'unsupported') continue;
+    item.thumb = await queueMakeThumb(item.file);
+    queueRefreshThumb(item);
+  }
+  renderQueue();
+  return added;
+}
+
+// The next photo the queue would hand to Step 1: the first ticked pending item
+// after the one loaded now, wrapping to the start. Step 3 of the plan (Next
+// and Skip) is the caller this exists for.
+function queueNextPending(afterId) {
+  const at = state.queue.findIndex(q => q.id === (afterId === undefined ? state.queueCurrentId : afterId));
+  const n = state.queue.length;
+  for (let k = 1; k <= n; k++) {
+    const item = state.queue[(at + k + n) % n];
+    if (item && item.picked && item.status === 'pending') return item;
+  }
+  return null;
+}
+
+// Every photo arrives untraced. Nothing on the load path clears the editor —
+// the single-photo flow always passes through Step 2, which re-rectifies and
+// re-traces — so without this the outline, the rectified image and the diff
+// map of the photo just finished are still live when the next one opens, and
+// a second Next would save that outline again under the new photo's name and
+// write it into the new photo's project file. The trace belongs to the photo,
+// so it leaves with it.
+function queueClearTrace() {
+  traceEditor.setTrace([], []);
+  traceEditor.setCircles([]);
+  traceEditor.setMaskOverlay(null);
+  state.rect = null;
+  state.diffMap = null;
+  state.mask = null;
+  state.rectDirty = true;
+  updateStepButtons();
+}
+
+// Clicking a thumbnail loads that photo. The load is the picker's own path, so
+// the corner auto-detect, the step buttons and the file label all follow.
+function queueLoad(item) {
+  if (!item) return false;
+  if (item.status === 'unsupported') { toast(item.note || QUEUE_HEIC_MSG); return false; }
+  state.queueCurrentId = item.id;
+  // The library name this photo will be saved under, editable before Next.
+  $('queueSaveName').value = item.libName || item.name;
+  queueClearTrace();
+  // What Step 1 says now, so a decode that fails can put it back: the name and
+  // the label move to this photo before the decode is even attempted.
+  const was = { fileName: state.fileName, label: $('fileLabelText').textContent };
+  loadFile(item.file, () => queueLoadFailed(item, was));
+  if (state.step !== 1) goStep(1);
+  renderQueue();
+  return true;
+}
+
+// A photo the browser cannot decode never reaches the screen: state.image is
+// still the photo before it, while the file name, the label, the save name and
+// the walk have all moved on to this one. Tracing what is on screen and
+// pressing Next would then file the previous photo's outline under this
+// photo's name, write it as this photo's sibling project, and mark this photo
+// traced, which the resume rule would honour on every later reopen. So the
+// photo that would not open is retired the way a HEIC is, the walk lets go of
+// it, and Step 1 goes back to saying what it is actually showing.
+function queueLoadFailed(item, was) {
+  if (!item) return;
+  item.status = 'unsupported';
+  item.picked = false;
+  item.note = `“${item.name}” ${QUEUE_BAD_PHOTO_MSG}`;
+  if (state.queueCurrentId === item.id) {
+    state.queueCurrentId = null;
+    $('queueSaveName').value = '';
+    if (was) {
+      state.fileName = was.fileName;
+      $('fileLabelText').textContent = was.label;
+    }
+  }
+  renderQueue();
+  queueSyncWalk();
+  toast(item.note, 6000);
+}
+
+// The queue lets go of the photo on screen. "Choose photo…" and a single
+// dropped file load straight through loadFile, and the walk would otherwise
+// still be pointed at the queued photo it was on: Next would save the outline
+// of whatever is now on screen under the queued photo's name, write it as that
+// photo's sibling project over anything already there, and retire that photo
+// traced so the walk never offers it again. A photo that did not come from the
+// queue is not the queued photo, so the binding leaves with it and Next has
+// nothing to save against until a thumbnail is clicked.
+function queueDetach() {
+  if (!state.queueCurrentId) return;
+  state.queueCurrentId = null;
+  $('queueSaveName').value = '';
+  renderQueue();
+  queueSyncWalk();
+}
+
+function queueClear() {
+  state.queue.length = 0;
+  state.queueCurrentId = null;
+  queueUndoable = null;
+  queueTraced.length = 0;
+  $('queueSaveName').value = '';
+  renderQueue();
+}
+
+// ---------- the strip ----------
+
+function queueCounts() {
+  let picked = 0, traced = 0, pending = 0;
+  for (const q of state.queue) {
+    if (q.picked) picked++;
+    if (q.status === 'traced') traced++;
+    if (q.status === 'pending') pending++;
+  }
+  return { total: state.queue.length, picked, traced, pending };
+}
+
+// Every item that could be traced. HEIC cannot, so Select all leaves it alone.
+function queueSelectable() {
+  return state.queue.filter(q => q.status !== 'unsupported');
+}
+
+function queueSyncHeader() {
+  const c = queueCounts();
+  const parts = [`${c.total} photo${c.total === 1 ? '' : 's'}`, `${c.picked} ticked`];
+  if (c.traced) parts.push(`${c.traced} traced`);
+  $('queueCount').textContent = parts.join(' · ');
+  const sel = queueSelectable();
+  const all = sel.length > 0 && sel.every(q => q.picked);
+  const btn = $('queueSelectAllBtn');
+  btn.textContent = all ? 'Select none' : 'Select all';
+  btn.disabled = sel.length === 0;
+  $('queueClearDoneBtn').disabled =
+    !state.queue.some(q => q.status === 'traced' || q.status === 'skipped');
+}
+
+// Visible on Steps 1 to 3, collapsed on Step 4, and gone entirely while the
+// queue is empty so the single-photo flow looks exactly as it did before.
+function queueSyncVisible() {
+  $('queueStrip').hidden = state.queue.length === 0;
+  $('queueBody').hidden = queueCollapsed;
+  $('queueToggle').textContent = queueCollapsed ? '▸' : '▾';
+  queueSyncWalk();
+}
+
+function queueTileFor(id) {
+  return $('queueList').querySelector(`.queue-item[data-id="${id}"]`);
+}
+
+// A thumbnail landing mid-ingest repaints one tile, not the whole strip, so a
+// folder of a hundred photos is not a hundred full rebuilds.
+function queueRefreshThumb(item) {
+  const tile = queueTileFor(item.id);
+  const img = tile && tile.querySelector('.queue-thumb');
+  if (img && item.thumb) img.src = item.thumb;
+}
+
+function renderQueue() {
+  const list = $('queueList');
+  list.textContent = '';
+  for (const item of state.queue) {
+    const badge = QUEUE_BADGES[item.status] || QUEUE_BADGES.pending;
+    const current = item.id === state.queueCurrentId;
+    const tile = document.createElement('div');
+    tile.className = 'queue-item';
+    tile.dataset.id = item.id;
+    tile.dataset.status = item.status;
+    tile.dataset.name = item.name;
+    tile.style.cssText =
+      'flex:0 0 auto; width:160px; padding:4px; border-radius:6px; cursor:pointer; ' +
+      `border:1px solid ${current ? 'var(--accent2)' : 'var(--border)'}`;
+    tile.title = item.path;
+
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex; align-items:center; gap:4px';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'queue-pick';
+    box.checked = !!item.picked;
+    box.disabled = item.status === 'unsupported';
+    box.title = 'Trace this photo';
+    box.addEventListener('click', e => e.stopPropagation());
+    box.addEventListener('change', () => { item.picked = box.checked; queueSyncHeader(); });
+    const name = document.createElement('span');
+    name.className = 'queue-name';
+    name.textContent = item.name;
+    name.style.cssText = 'flex:1; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap';
+    head.append(box, name);
+
+    const img = document.createElement('img');
+    img.className = 'queue-thumb';
+    img.alt = item.name;
+    img.style.cssText =
+      'display:block; width:100%; height:110px; object-fit:contain; margin:3px 0; ' +
+      'background:var(--bg2); border-radius:4px';
+    if (item.thumb) img.src = item.thumb;
+
+    const foot = document.createElement('span');
+    foot.className = 'queue-badge';
+    foot.textContent = badge.text;
+    foot.style.cssText = `font-size:10px; text-transform:uppercase; letter-spacing:1px; color:${badge.color}`;
+
+    tile.append(head, img, foot);
+    tile.addEventListener('click', () => queueLoad(item));
+    list.appendChild(tile);
+  }
+  queueSyncHeader();
+  queueSyncVisible();
+}
+
+// ---------- folder ingest: photos to the queue, traces to the palette ----------
+//
+// A folder of a drawer's photographs is the unit of work. Its photos become
+// queue items; any trace JSON in the same folder goes to the Step 4 palette
+// through tracesFromFiles, the reader the palette already uses. So one folder
+// is both the input and the persistence, which is what makes the flow
+// resumable without saving the queue anywhere.
+//
+// Both of Part B's backends feed this. The File System Access picker gives a
+// handle that can be re-read and written back into; the directory input gives
+// one flat read and no handle, so the per-photo project write has to fall back
+// to a download. Everything past walkFolder sees the same { path, file } pairs.
+
+function queueSiblingJson(path) {
+  return String(path || '').replace(/\.[^./]+$/, '') + '.json';
+}
+
+// The resume rule: a pending photo whose sibling <name>.json parses as a 2.5D
+// project has already been traced, so it comes in marked traced and unticked,
+// and the walk passes over it. Its trace is in the palette already, read out of
+// that same JSON, so nothing is traced twice.
+//
+// Siblings are read one at a time and only one parsed project is alive at a
+// time, so a folder of a hundred costs no more than a folder of one.
+async function queueResume(pairs) {
+  const jsons = new Map();
+  for (const p of pairs) {
+    if (/\.json$/i.test(p.path)) jsons.set(String(p.path).toLowerCase(), p);
+  }
+  if (!jsons.size) return 0;
+  let resumed = 0;
+  // One project file is one traced photo. Two photos can share a path when
+  // they come in with no relative path of their own, and a single wrench.json
+  // is a trace of one of them, not of both, so a sibling that has already
+  // retired a photo does not retire the next one as well.
+  const spent = new Set();
+  for (const item of state.queue) {
+    if (item.status !== 'pending') continue;
+    const key = queueSiblingJson(item.path).toLowerCase();
+    if (spent.has(key)) continue;
+    const pair = jsons.get(key);
+    if (!pair) continue;
+    let json = null;
+    try { json = JSON.parse(await pair.file.text()); } catch { json = null; }
+    // A library export beside a photo is not a trace OF that photo, so only a
+    // project file counts.
+    if (!isProject(json)) continue;
+    spent.add(key);
+    item.status = 'traced';
+    item.picked = false;
+    resumed++;
+  }
+  return resumed;
+}
+
+// pairs: { path, file } from either backend, or from a drop.
+async function queueIngestPairs(pairs, label) {
+  const list = Array.from(pairs || []);
+  const added = await queueAddFiles(list);
+  const resumed = await queueResume(list);
+  const jsons = list.filter(p => /\.json$/i.test(p.path));
+  // A folder with no JSON in it is a folder of fresh photos; leave whatever the
+  // palette already holds alone rather than blanking it.
+  if (jsons.length) {
+    laySetFolder(await tracesFromFiles(jsons, { onProgress: layFolderProgress }), label || '');
+  }
+  renderQueue();
+  return { added, resumed, traces: jsons.length };
+}
+
+function queueIngestToast(got, label) {
+  if (!got) return;
+  const n = got.added.length;
+  if (!n && !got.resumed) { toast(`No photos in “${label}”.`); return; }
+  const bits = [`${n} photo${n === 1 ? '' : 's'} from “${label}”`];
+  if (got.resumed) bits.push(`${got.resumed} already traced`);
+  toast(bits.join(', ') + '.');
+}
+
+// The File System Access backend. The handle is shared with the Step 4 palette,
+// so there is one open folder per session and the per-photo project write lands
+// in the same place "Save here" does.
+async function queueIngestFolder(handle, label) {
+  if (!handle) return null;
+  if (!await ensurePermission(handle, 'read')) {
+    toast('That folder was not shared with this page.');
+    return null;
+  }
+  const name = label || handle.name || 'folder';
+  layFolderHandle = handle;
+  layRemembered = { label: name, handle };
+  syncFolderButtons();
+  const pairs = await walkFolder(handle);
+  const got = await queueIngestPairs(pairs, name);
+  syncFolderButtons();
+  await rememberFolder(handle, name);
+  return got;
+}
+
+// ---------- drag and drop of several files, or a folder ----------
+//
+// A drop hands over DataTransferItems, not a file list, when a folder is in
+// play. webkitGetAsEntry turns each into a FileSystemEntry tree, which walks
+// into the same { path, file } pairs folderAccess.js's walkFolder produces, so
+// a dropped folder and a picked folder are indistinguishable downstream.
+
+// The same caps folderAccess.js uses, for the same reason: a mis-dropped home
+// directory must not hang the tab.
+const QUEUE_MAX_DEPTH = 12;
+const QUEUE_MAX_FILES = 5000;
+
+// Must be called synchronously inside the drop event: the DataTransfer is
+// emptied as soon as the handler yields.
+function queueEntriesFrom(dt) {
+  const out = [];
+  const items = dt && dt.items ? Array.from(dt.items) : [];
+  for (const it of items) {
+    if (it.kind && it.kind !== 'file') continue;
+    const en = typeof it.webkitGetAsEntry === 'function' ? it.webkitGetAsEntry() : null;
+    if (en) out.push(en);
+  }
+  return out;
+}
+
+function queueEntryFile(entry) {
+  return new Promise(resolve => {
+    try { entry.file(f => resolve(f || null), () => resolve(null)); }
+    catch { resolve(null); }
+  });
+}
+
+// readEntries hands over one batch at a time and signals the end with an empty
+// batch, so a directory of hundreds needs the loop.
+function queueEntryChildren(dir) {
+  return new Promise(resolve => {
+    const all = [];
+    let reader = null;
+    try { reader = dir.createReader(); } catch { resolve(all); return; }
+    const step = () => reader.readEntries(batch => {
+      // An empty batch is the end of the directory. The file cap is the other
+      // way out, so a reader that never empties cannot spin forever.
+      if (!batch || !batch.length || all.length >= QUEUE_MAX_FILES) { resolve(all); return; }
+      all.push(...batch);
+      step();
+    }, () => resolve(all));
+    step();
+  });
+}
+
+async function queueWalkEntry(entry, prefix, out, depth = 0) {
+  if (!entry || out.length >= QUEUE_MAX_FILES) return out;
+  const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+  if (entry.isDirectory) {
+    if (depth >= QUEUE_MAX_DEPTH) return out;
+    const kids = await queueEntryChildren(entry);
+    // Sorted by name, so the same folder always ingests in the same order.
+    kids.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const k of kids) await queueWalkEntry(k, path, out, depth + 1);
+  } else {
+    const f = await queueEntryFile(entry);
+    if (f) out.push({ path, file: f });
+  }
+  return out;
+}
+
+// entries: what queueEntriesFrom read out of the drop. files: the plain
+// fallback for a browser without the entry API.
+async function queueDropPairs(entries, files) {
+  const pairs = [];
+  if (entries && entries.length) {
+    for (const en of entries) await queueWalkEntry(en, '', pairs);
+  }
+  if (!pairs.length) {
+    for (const f of Array.from(files || [])) {
+      pairs.push({ path: f.webkitRelativePath || f.name, file: f });
+    }
+  }
+  return pairs;
+}
+
+// A drop of a folder gets the same resume rule and the same palette read a
+// picked folder does. What it cannot get is a writable handle: a drop hands
+// over entries, not a directory handle. So a drop that replaces the palette
+// also drops the handle, and "Save here" goes out of reach until a folder is
+// picked again, rather than silently writing into the wrong folder.
+function queueDropLabel(pairs) {
+  for (const p of pairs) {
+    const parts = String(p.path).split('/');
+    if (parts.length > 1) return parts[0];
+  }
+  return 'dropped photos';
+}
+
+async function queueDrop(entries, files) {
+  const pairs = await queueDropPairs(entries, files);
+  const label = queueDropLabel(pairs);
+  if (pairs.some(p => /\.json$/i.test(p.path))) {
+    layFolderHandle = null;
+    syncFolderButtons();
+  }
+  const got = await queueIngestPairs(pairs, label);
+  queueIngestToast(got, label);
+  if (!state.image && !state.rect) {
+    const first = got.added.find(q => q.status === 'pending');
+    if (first) queueLoad(first);
+  }
+  return got;
+}
+
+// ---------- the walk: Next, Skip, and the reference carry-over ----------
+//
+// Next is the point of the queue: save this trace under the photo's own name,
+// write its project beside the photo so the folder becomes the tool collection
+// Step 4 reads back, mark the photo traced, and open the next ticked one. The
+// PRD's first open question is answered advance, with Undo coming back, because
+// throughput is what the batch flow is for.
+//
+// What carries over between photos is the reference settings and nothing else.
+// Corners are re-detected on every photo: the sheet moves between shots, so a
+// copied corner is a wrong corner.
+
+// What this session traced, in order: { id, name, fileName, path, json }.
+// Session-only, never serialised, and what "Organize what I have" preselects.
+const queueTraced = [];
+// The photo Next or Skip just left, so Undo can return to it.
+let queueUndoable = null;
+// The download fallback explains itself once per session, not once per photo.
+let queueDownloadNoted = false;
+
+// Everything the next photo inherits. state.corners is deliberately absent.
+function queueRefSnapshot() {
+  return {
+    reference: state.reference,
+    paper: { ...state.paper },
+    grid: { ...state.grid },
+    bar: { lengthMm: state.bar.lengthMm },
+    coin: { ...state.coin },
+    captureFrac: state.captureFrac,
+  };
+}
+
+// Put a snapshot back and sync the Step 1 controls with it, the way
+// loadProject syncs them after a project load.
+function queueApplyRef(snap) {
+  if (!snap) return;
+  state.reference = snap.reference;
+  state.paper = { ...state.paper, ...snap.paper };
+  // autoSig and lastAuto are about the photo on screen, not about the
+  // settings, so the new photo starts its square count from scratch.
+  state.grid = { ...state.grid, ...snap.grid, autoSig: null, lastAuto: null };
+  state.bar.lengthMm = snap.bar.lengthMm;
+  state.coin = { ...state.coin, ...snap.coin };
+  state.captureFrac = snap.captureFrac;
+  $('refType').value = state.reference;
+  sizeSel.value = state.paper.size;
+  $('paperOrient').value = state.paper.orientation;
+  $('customSizeRow').hidden = state.paper.size !== 'custom';
+  $('customW').value = fmtDim(state.paper.customW);
+  $('customH').value = fmtDim(state.paper.customH);
+  $('captureArea').value = String(state.captureFrac);
+  $('coinSize').value = state.coin.size;
+  $('coinCustomRow').hidden = state.coin.size !== 'coin_custom';
+  syncRefControls();
+  state.rectDirty = true;
+}
+
+// Load the next photo with the settings from the one just finished. The
+// restore is synchronous, so it lands before the decode does and the load's
+// own auto-detect runs against the carried reference rather than the old one.
+function queueLoadCarrying(item) {
+  const snap = queueRefSnapshot();
+  const ok = queueLoad(item);
+  if (ok) queueApplyRef(snap);
+  return ok;
+}
+
+// The folder a photo sits in, for the name-collision suffix.
+function queueParentName(path) {
+  const parts = String(path || '').split('/');
+  parts.pop();
+  return parts.length ? parts[parts.length - 1] : '';
+}
+
+// The library is keyed by name, and two folders can hold a wrench.jpg each.
+// The PRD's second open question is answered suffix with the parent folder,
+// the way the palette tells two same-named traces apart, so a morning's work
+// is never overwritten by an afternoon's. A photo re-traced after an Undo
+// keeps the name it already has, which overwrites its own row and nothing
+// else.
+function queueLibName(item, typed) {
+  const wanted = String(typed || '').trim() || item.name || 'outline';
+  if (item.libName && wanted === item.libName) return wanted;
+  const taken = new Set(libLoad().map(o => o.name));
+  if (!taken.has(wanted)) return wanted;
+  const parent = queueParentName(item.path);
+  const suffixed = parent ? `${wanted} (${parent})` : wanted;
+  if (!taken.has(suffixed)) return suffixed;
+  for (let k = 2; k < 1000; k++) {
+    if (!taken.has(`${suffixed} ${k}`)) return `${suffixed} ${k}`;
+  }
+  return suffixed;
+}
+
+// The subfolder a photo sits in, as a handle under the open folder, so the
+// project lands beside its photo and not in the folder root.
+//
+// A photo whose own folder is not inside the open one is not this folder's
+// photo at all, and it has no directory here: a dropped folder and a second
+// picked folder both leave the queue holding photos from somewhere else, and
+// writing their projects into the open folder's root would put them beside
+// the wrong photos and overwrite whatever already answers to the same name.
+// queueDirFor returns null for those and the caller falls back to the
+// download. Once a segment has resolved the photo really is in here, so a
+// subfolder gone since the ingest falls back to the deepest folder that did
+// resolve, which still keeps the project inside the tool collection. A photo
+// with no path at all ("Add photos…" and a drop of loose files hand over bare
+// names) says nothing about where it sits, so it is not this folder's photo
+// either: writing awl.json into the open folder for an awl.jpg picked off the
+// Desktop would truncate the project of the awl.jpg that really is in there.
+// Those take the download too.
+async function queueDirFor(path) {
+  if (!layFolderHandle) return null;
+  const parts = String(path || '').split('/');
+  parts.pop();
+  if (!parts.length) return null;
+  let inside = false;
+  if (parts[0] === layFolderHandle.name) { parts.shift(); inside = true; }
+  let dir = layFolderHandle;
+  for (const seg of parts) {
+    if (!dir || typeof dir.getDirectoryHandle !== 'function') return inside ? dir : null;
+    let next = null;
+    try { next = await dir.getDirectoryHandle(seg); } catch { next = null; }
+    if (!next) return inside ? dir : null;
+    dir = next;
+    inside = true;
+  }
+  return dir || null;
+}
+
+// Where the project Next wrote for a photo sits, as a path in the same shape
+// the ingest gives the photo. The written file name on its own is no identity:
+// two subfolders can each hold a wrench.jpg, and each gets a wrench.json.
+function queueJsonPath(path, written) {
+  const parts = String(path || '').split('/');
+  parts.pop();
+  parts.push(written);
+  return parts.join('/');
+}
+
+// serializeProject(false) leaves the photo out: the photo is the sibling file,
+// so embedding it would double the folder's size for nothing.
+async function queueWriteProject(item) {
+  const text = serializeProject(false);
+  const base = queueBaseName(item.path);
+  if (layFolderHandle && await ensurePermission(layFolderHandle, 'readwrite')) {
+    try {
+      const dir = await queueDirFor(item.path);
+      if (dir) {
+        const written = await writeProjectFile(dir, base, text);
+        item.json = written;
+        item.jsonPath = queueJsonPath(item.path, written);
+        return { kind: 'folder', name: written };
+      }
+    } catch {
+      // A folder that refuses the write is not a reason to lose the trace.
+    }
+  }
+  // No writable folder for this photo: the directory-input backend reads once,
+  // a drop hands over no handle at all, and a photo from a folder outside the
+  // open one has no place in it. The project is offered as a download instead,
+  // once per photo, and says once per session what a picked folder would do.
+  const name = `${base}.json`;
+  downloadBlob(new Blob([text], { type: 'application/json' }), name);
+  item.json = name;
+  item.jsonPath = queueJsonPath(item.path, name);
+  const first = !queueDownloadNoted;
+  queueDownloadNoted = true;
+  return { kind: 'download', name, first };
+}
+
+function queueWroteWords(wrote) {
+  if (!wrote) return '';
+  if (wrote.kind === 'folder') return `, project written as “${wrote.name}” beside the photo`;
+  return `, project downloaded as “${wrote.name}”`;
+}
+
+// Mark the current item done and open the next ticked pending photo.
+function queueAdvance(item, done) {
+  queueUndoable = { id: item.id, kind: done };
+  const nxt = queueNextPending(item.id);
+  if (nxt) queueLoadCarrying(nxt);
+  else renderQueue();
+  queueSyncWalk();
+  return nxt;
+}
+
+async function queueNext() {
+  const item = state.queue.find(q => q.id === state.queueCurrentId);
+  if (!item) { toast('No queued photo is loaded — click a thumbnail to start.'); return null; }
+  const name = queueLibName(item, $('queueSaveName').value);
+  const entry = libEntryFromTrace(name);
+  if (!entry) { toast('Nothing traced yet — trace the outline in Step 2, then Next.'); return null; }
+  // The walk traces tools. libEntryFromTrace takes the kind from the Save
+  // outline panel's Kind select, which holds whatever the user last chose
+  // there, so a session that saved the drawer as a container outline would
+  // have filed every photo after it as a container too, and Step 4 drops
+  // containers from the palette: the tools traced this session would be
+  // ticked nowhere and Add all would place none of them.
+  entry.kind = 'tool';
+  libCommit(entry);
+  item.libName = name;
+  const wrote = await queueWriteProject(item);
+  item.status = 'traced';
+  item.picked = false;
+  queueTraced.push({
+    id: item.id, name, fileName: state.fileName, path: item.path,
+    json: item.json, jsonPath: item.jsonPath,
+  });
+  const nxt = queueAdvance(item, 'next');
+  const tail = nxt
+    ? ` Now on “${nxt.name}”.`
+    : ' That was the last ticked photo — Organize what I have when you are ready.';
+  const note = wrote.kind === 'download' && wrote.first
+    ? ' Open the folder with the picker to have projects written into it instead.'
+    : '';
+  toast(`Saved “${name}”${queueWroteWords(wrote)}.${tail}${note}`, 6000);
+  return { name, wrote, next: nxt ? nxt.id : null };
+}
+
+function queueSkip() {
+  const item = state.queue.find(q => q.id === state.queueCurrentId);
+  if (!item) { toast('No queued photo is loaded — click a thumbnail to start.'); return null; }
+  item.status = 'skipped';
+  item.picked = false;
+  const nxt = queueAdvance(item, 'skip');
+  toast(nxt
+    ? `Skipped “${item.name}”. Now on “${nxt.name}”.`
+    : `Skipped “${item.name}”. Nothing else is ticked — it stays in the queue.`);
+  return { skipped: item.id, next: nxt ? nxt.id : null };
+}
+
+// Undo comes back to the photo just finished. The trace itself is gone: the
+// next photo replaced the rectified image, and keeping a second one decoded
+// would break the memory rule the queue is built on. So the photo comes back
+// pending and ticked, and its library entry stays where it is until the photo
+// is traced again under the same name.
+function queueUndo() {
+  const back = queueUndoable;
+  queueUndoable = null;
+  const item = back && state.queue.find(q => q.id === back.id);
+  if (!item) { queueSyncWalk(); toast('Nothing to undo.'); return false; }
+  const at = queueTraced.findIndex(t => t.id === item.id);
+  if (at >= 0) queueTraced.splice(at, 1);
+  item.status = 'pending';
+  item.picked = true;
+  const ok = queueLoad(item);
+  queueSyncWalk();
+  toast(back.kind === 'next'
+    ? `Back on “${item.name}”. Its library entry is still saved — tracing it again under the same name overwrites it.`
+    : `Back on “${item.name}”.`, 5000);
+  return ok;
+}
+
+// The walk belongs to Steps 1 to 3. On Step 4 the drawer, not the next photo,
+// is what the user is working on.
+function queueSyncWalk() {
+  const cur = state.queue.find(q => q.id === state.queueCurrentId) || null;
+  const walking = state.queue.length > 0 && state.step >= 1 && state.step <= 3;
+  $('queueWalkRow').hidden = !walking;
+  $('queueNameRow').hidden = !walking;
+  $('queueNextBtn').disabled = !cur;
+  $('queueSkipBtn').disabled = !cur;
+  $('queueUndoBtn').hidden = !queueUndoable;
+}
+
+// ---------- "Organize what I have" ----------
+//
+// Stop tracing and lay out what is done. Step 4 opens with the tools traced
+// this session ticked in the palette, so Add all places exactly them and not
+// whatever else the library happens to hold.
+
+// A palette row is this session's tool when it is the very project file Next
+// wrote for it. The whole path has to agree: shelfA/wrench.jpg and
+// shelfB/wrench.jpg each write a wrench.json, so on the file name alone both
+// tools claim the first row, one tool silently loses its place, and Add all
+// places fewer tools than were traced.
+function queueTracedFile(entry, t) {
+  const path = entry.source && entry.source.path;
+  return !!(t.jsonPath && path && String(path) === t.jsonPath);
+}
+
+// Failing that, a row that carries the name Next saved the tool under, or the
+// photo's own file name.
+function queueTracedNamed(entry, t) {
+  return entry.name === t.name || entry.name === t.fileName;
+}
+
+// One row per tool traced this session, so Add all places each tool once even
+// when the folder has been re-read and the same trace shows in both lists. The
+// folder row wins there: it carries the photo crop its project was written
+// with.
+function queueSelectTraced() {
+  laySelected.clear();
+  const lib = libLoad().filter(o => o.kind !== 'container');
+  // One row per tool, and one tool per row: a row already claimed is not
+  // offered to the next tool, or two tools would collapse into one tick and
+  // the count would still look right. The project files are matched first, so
+  // a tool that can be named exactly never loses its row to a tool that can
+  // only be matched on a name the two of them share.
+  const used = new Set();
+  const rest = [];
+  for (const t of queueTraced) {
+    const folder = layFolder.entries.find(
+      e => !used.has(layRowKey('folder', e)) && queueTracedFile(e, t));
+    if (folder) {
+      const key = layRowKey('folder', folder);
+      used.add(key);
+      laySelected.add(key);
+      continue;
+    }
+    rest.push(t);
+  }
+  let missing = 0;
+  for (const t of rest) {
+    const folder = layFolder.entries.find(
+      e => !used.has(layRowKey('folder', e)) && queueTracedNamed(e, t));
+    if (folder) {
+      const key = layRowKey('folder', folder);
+      used.add(key);
+      laySelected.add(key);
+      continue;
+    }
+    const row = lib.find(o => !used.has(layRowKey('lib', o)) && o.name === t.name);
+    if (row) {
+      const key = layRowKey('lib', row);
+      used.add(key);
+      laySelected.add(key);
+      continue;
+    }
+    missing++;
+  }
+  return { picked: laySelected.size, missing };
+}
+
+function queueOrganize() {
+  const got = queueSelectTraced();
+  goStep(4);
+  refreshLayPalette();
+  if (!queueTraced.length) {
+    toast('Nothing is traced yet this session — the palette is all yours.');
+  } else if (got.missing) {
+    toast(`${got.picked} of ${queueTraced.length} tools traced this session are ticked; ` +
+      `${got.missing} are no longer in the palette.`, 5000);
+  } else {
+    toast(`${got.picked} tool${got.picked === 1 ? '' : 's'} traced this session ` +
+      `${got.picked === 1 ? 'is' : 'are'} ticked — Add all places exactly ` +
+      `${got.picked === 1 ? 'it' : 'them'}.`, 5000);
+  }
+  return got;
+}
+
+// ---------- wiring: the strip, "Add photos…" and "Add folder…" ----------
+
+$('queueToggle').addEventListener('click', () => {
+  queueCollapsed = !queueCollapsed;
+  queueSyncVisible();
+});
+
+$('queueSelectAllBtn').addEventListener('click', () => {
+  const sel = queueSelectable();
+  const all = sel.length > 0 && sel.every(q => q.picked);
+  for (const q of sel) q.picked = !all;
+  renderQueue();
+});
+
+$('queueClearDoneBtn').addEventListener('click', () => {
+  const keep = state.queue.filter(q => q.status !== 'traced' && q.status !== 'skipped');
+  if (keep.length === state.queue.length) { toast('Nothing traced or skipped yet.'); return; }
+  if (!keep.some(q => q.id === state.queueCurrentId)) state.queueCurrentId = null;
+  state.queue.length = 0;
+  state.queue.push(...keep);
+  renderQueue();
+});
+
+$('queueOrganizeBtn').addEventListener('click', () => { queueOrganize(); });
+
+$('queueNextBtn').addEventListener('click', () => { queueNext(); });
+$('queueSkipBtn').addEventListener('click', () => { queueSkip(); });
+$('queueUndoBtn').addEventListener('click', () => { queueUndo(); });
+
+$('queueAddPhotosBtn').addEventListener('click', () => $('queuePhotosInput').click());
+
+$('queueAddFolderBtn').addEventListener('click', async () => {
+  if (hasDirectoryPicker()) {
+    let handle = null;
+    try {
+      handle = await pickFolder();
+    } catch {
+      // The API is there but unusable here (an iframe, a policy). Fall back.
+      $('queueFolderInput').click();
+      return;
+    }
+    if (!handle) return; // cancelled: do not pop the input open behind it
+    const got = await queueIngestFolder(handle, null);
+    queueIngestToast(got, handle.name || 'folder');
+    return;
+  }
+  $('queueFolderInput').click();
+});
+
+// The baseline backend: one shot, every file already read, no handle to keep,
+// so the per-photo project write falls back to a download.
+$('queueFolderInput').addEventListener('change', async e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  const label = (files[0].webkitRelativePath || '').split('/')[0] || 'folder';
+  layFolderHandle = null;
+  syncFolderButtons();
+  const pairs = files.map(f => ({ path: f.webkitRelativePath || f.name, file: f }));
+  const got = await queueIngestPairs(pairs, label);
+  queueIngestToast(got, label);
+});
+
+$('queuePhotosInput').addEventListener('change', async e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  const added = await queueAddFiles(files);
+  if (!added.length) { toast('Those photos are already in the queue.'); return; }
+  toast(`${added.length} photo${added.length === 1 ? '' : 's'} added to the queue.`);
+  // A first ingest with nothing loaded yet goes straight to work.
+  if (!state.image && !state.rect) {
+    const first = added.find(q => q.status === 'pending');
+    if (first) queueLoad(first);
+  }
+});
 
 // ---------- step 2: segmentation + trace ----------
 
@@ -1369,6 +2399,36 @@ function refreshLaySelects() {
   shapeSel.value = shape ? '__shape' : 'rect';
   refreshLayPalette();
 }
+// Snap to grid. The default pitch is 5 mm; 42 mm is the Gridfinity cell, so it
+// is offered only while the container is a Gridfinity bin, the way the plate
+// shape option is only there while a shape is in use. A pitch of 42 left over
+// from a bin goes back to the default when the container changes, rather than
+// leaving the select showing a value it no longer carries.
+const LAY_SNAP_DEFAULT = 5;
+const LAY_SNAP_GRID = 42;
+function syncSnapFields() {
+  // Defensive: a project file is free to carry no snap at all, and the panel
+  // is not the place to discover that.
+  const S = state.layout.snap ||
+    (state.layout.snap = { on: false, pitch: LAY_SNAP_DEFAULT });
+  const sel = $('laySnapPitch');
+  const grid = state.layout.container.type === 'grid';
+  let opt = sel.querySelector(`option[value="${LAY_SNAP_GRID}"]`);
+  if (grid && !opt) {
+    opt = document.createElement('option');
+    opt.value = String(LAY_SNAP_GRID);
+    opt.textContent = '42 mm (Gridfinity cell)';
+    sel.appendChild(opt);
+  } else if (!grid && opt) {
+    opt.remove();
+  }
+  if (!grid && S.pitch === LAY_SNAP_GRID) S.pitch = LAY_SNAP_DEFAULT;
+  $('laySnap').checked = !!S.on;
+  sel.value = String(S.pitch);
+  // The editor reads the grid off the state on every sync, so the toggle and
+  // the pitch reach the next gesture and no stored value at all.
+  layoutEditor.setSnap(S);
+}
 function syncLayoutFields() {
   const L = state.layout;
   const grid = L.container.type === 'grid';
@@ -1401,6 +2461,7 @@ function syncLayoutFields() {
     $('layKnownW').value = fmtDim(box.w);
     $('layKnownD').value = fmtDim(box.h);
   }
+  syncSnapFields();
   syncScaleInfo();
 }
 // What the measured numbers have done to the traced outline, and the warning
@@ -1463,6 +2524,7 @@ function layConstruction() {
 }
 function refreshLayoutEditor() {
   layoutEditor.setBed(layBedView());
+  layoutEditor.setSnap(state.layout.snap);
   layoutEditor.setLayout(layContainerLoop(), state.layout.items,
     state.layout.clearance, layBorderEff());
   updateLayoutInfo();
@@ -2041,18 +3103,40 @@ $('layBedCentreBtn').addEventListener('click', () => {
   refreshLayoutEditor();
 });
 // Arrow keys nudge the plate once its outline is selected: 1 mm, or 10 mm
-// with Shift. Nothing else on Step 4 uses the arrow keys.
+// with Shift. With no plate selected they nudge the selected tool instead, by
+// one snap pitch where snapping is on and by the same 1 mm / 10 mm where it is
+// not. The plate keeps first claim, so the keys never move two things at once.
 document.addEventListener('keydown', e => {
-  if (state.step !== 4 || !layoutEditor.bedSel) return;
+  if (state.step !== 4) return;
   const t = e.target.tagName;
   if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
   const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
   if (!d) return;
-  e.preventDefault();
-  const mm = e.shiftKey ? 10 : 1;
-  layoutEditor.nudgeBed(d[0] * mm, d[1] * mm);
-  syncBedFields();
-  refreshLayoutEditor();
+  if (layoutEditor.bedSel) {
+    e.preventDefault();
+    const mm = e.shiftKey ? 10 : 1;
+    layoutEditor.nudgeBed(d[0] * mm, d[1] * mm);
+    syncBedFields();
+    refreshLayoutEditor();
+    return;
+  }
+  if (layoutEditor.sel >= 0) {
+    e.preventDefault();
+    layoutEditor.nudgeItem(d[0], d[1], e.shiftKey);
+  }
+});
+// Snapping is a property of the gesture: the toggle and the pitch change what
+// the next drag, nudge or rotation writes, and touch no x, y or rot that is
+// already stored. So neither handler rewrites an item, and turning snap on
+// moves nothing.
+$('laySnap').addEventListener('change', e => {
+  state.layout.snap.on = !!e.target.checked;
+  syncSnapFields();
+});
+$('laySnapPitch').addEventListener('change', e => {
+  const mm = parseFloat(e.target.value);
+  if (mm > 0) state.layout.snap.pitch = mm;
+  syncSnapFields();
 });
 for (const [id, key] of [['layBedW', 'w'], ['layBedH', 'h']]) {
   $(id).addEventListener('change', e => {
@@ -2094,6 +3178,17 @@ function layPlaceTool(src) {
 // backends; empty until one of them runs.
 let layFolder = { entries: [], skipped: [], label: '' };
 
+// The ticked palette rows, as row keys (see layRowKey). This is what "Organize
+// what I have" preselects and what Add all places when it is not empty, so a
+// session's traced tools can be laid out without hunting for them in a library
+// that also holds last month's.
+const laySelected = new Set();
+
+function layRowKey(kind, row) {
+  if (kind === 'folder') return `folder:${(row.source && row.source.path) || ''}|${row.name}`;
+  return `lib:${row.name}`;
+}
+
 const SKIP_WORDS = {
   'not-json': 'not a .json file',
   'parse-error': 'not readable JSON',
@@ -2101,10 +3196,26 @@ const SKIP_WORDS = {
   container: 'a container outline, not a tool',
 };
 
-function layPaletteRow(name, hint, buttons) {
+// `pick` is the row's tick box, as { key }, or null for a list that has none.
+// The box goes before the name and the buttons keep their order, so a caller
+// (and a test) that reaches for the first button still finds Add.
+function layPaletteRow(name, hint, buttons, pick) {
   const row = document.createElement('div');
   row.className = 'pal-row';
   row.style.cssText = 'display:flex; align-items:center; gap:6px; padding:2px 0';
+  if (pick) {
+    row.dataset.key = pick.key;
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'pal-pick';
+    box.checked = laySelected.has(pick.key);
+    box.title = 'Tick to place this tool with Add ticked';
+    box.addEventListener('change', () => {
+      if (box.checked) laySelected.add(pick.key); else laySelected.delete(pick.key);
+      laySyncPicks();
+    });
+    row.appendChild(box);
+  }
   const label = document.createElement('span');
   label.style.cssText = 'flex:1; min-width:0; display:flex; gap:6px; align-items:baseline';
   const nm = document.createElement('span');
@@ -2169,7 +3280,7 @@ function refreshLayPalette() {
         syncLaySelPanel(i);
         refreshLayoutEditor();
       }],
-    ]));
+    ], { key: layRowKey('lib', o) }));
   }
 
   const group = $('layPalFolderGroup');
@@ -2181,7 +3292,6 @@ function refreshLayPalette() {
   const has = layFolder.entries.length > 0 || layFolder.skipped.length > 0 || !!layFolder.label;
   group.hidden = !has;
   $('layPalFolderName').textContent = layFolder.label || '';
-  $('layPalAddAllBtn').disabled = layFolder.entries.length === 0;
   const skip = $('layPalSkipped');
   skip.hidden = layFolder.skipped.length === 0;
   skip.textContent = layFolder.skipped.length
@@ -2211,8 +3321,60 @@ function refreshLayPalette() {
         refreshLayoutEditor();
       }],
       ['\u2606 Library', 'Save this trace to the outline library', () => layPaletteSaveToLibrary(e)],
-    ]));
+    ], { key: layRowKey('folder', e) }));
   }
+  // A tick on a row that is gone (a folder re-read, a library entry deleted)
+  // would inflate the count and place nothing, so the keys are pruned to the
+  // rows that exist.
+  const live = new Set([
+    ...lib.map(o => layRowKey('lib', o)),
+    ...layFolder.entries.map(e => layRowKey('folder', e)),
+  ]);
+  for (const key of Array.from(laySelected)) if (!live.has(key)) laySelected.delete(key);
+  laySyncPicks();
+}
+
+// The ticked rows, library first then folder, in the order the palette lists
+// them, so Add ticked places them the way they are read.
+function layPickedRows() {
+  const out = [];
+  for (const o of libLoad().filter(x => x.kind !== 'container')) {
+    if (laySelected.has(layRowKey('lib', o))) out.push(o);
+  }
+  for (const e of layFolder.entries) {
+    if (laySelected.has(layRowKey('folder', e))) out.push(e);
+  }
+  return out;
+}
+
+function laySyncPicks() {
+  const n = laySelected.size;
+  $('layPalPickRow').hidden = n === 0;
+  $('layPalPickCount').textContent = n ? `${n} tool${n === 1 ? '' : 's'} ticked` : '';
+  // Add all places the ticked tools when there are any, which is what
+  // "Organize what I have" leans on, so it must be reachable even when no
+  // folder is open and every ticked row is a library row.
+  const addAll = $('layPalAddAllBtn');
+  addAll.disabled = layFolder.entries.length === 0 && n === 0;
+  addAll.title = n
+    ? `Place the ${n} ticked tool${n === 1 ? '' : 's'} in the drawer`
+    : 'Place every trace in this folder in the drawer';
+  for (const row of $('layPalette').querySelectorAll('.pal-row')) {
+    const box = row.querySelector('.pal-pick');
+    if (box) box.checked = laySelected.has(row.dataset.key);
+  }
+}
+
+// Place exactly the ticked tools, with one redraw at the end.
+function layAddPicked() {
+  const rows = layPickedRows();
+  if (!rows.length) { toast('Tick the tools to place first.'); return 0; }
+  for (const row of rows) layPlaceTool(structuredClone(row));
+  layoutEditor.sel = state.layout.items.length - 1;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+  toast(`Added ${rows.length} ticked tool${rows.length === 1 ? '' : 's'} to the drawer.`);
+  return rows.length;
 }
 
 // Called by the folder backends once a folder has been read.
@@ -2337,6 +3499,9 @@ if (hasDirectoryPicker()) {
 }
 
 $('layPalAddAllBtn').addEventListener('click', () => {
+  // A selection is the whole point of "Organize what I have": Add all then
+  // places exactly the ticked tools and nothing else.
+  if (laySelected.size) { layAddPicked(); return; }
   if (!layFolder.entries.length) { toast('Open a folder of traces first.'); return; }
   // One redraw at the end, not one per tool.
   for (const e of layFolder.entries) layPlaceTool(structuredClone(e));
@@ -2344,6 +3509,12 @@ $('layPalAddAllBtn').addEventListener('click', () => {
   syncLaySelPanel(layoutEditor.sel);
   refreshLayoutEditor();
   toast(`Added ${layFolder.entries.length} tool${layFolder.entries.length === 1 ? '' : 's'} from the folder.`);
+});
+
+$('layPalAddTickedBtn').addEventListener('click', () => { layAddPicked(); });
+$('layPalClearPicksBtn').addEventListener('click', () => {
+  laySelected.clear();
+  refreshLayPalette();
 });
 
 $('layAddBtn').addEventListener('click', () => {
@@ -2743,7 +3914,10 @@ function rotatePhoto(dir) {
 $('rotatePhotoLeftBtn').addEventListener('click', () => rotatePhoto('ccw'));
 $('rotatePhotoRightBtn').addEventListener('click', () => rotatePhoto('cw'));
 
-$('fileInput').addEventListener('change', e => loadFile(e.target.files[0]));
+// A photo picked here is not the queued photo: the queue lets go of the walk.
+$('fileInput').addEventListener('change', e => {
+  if (loadFile(e.target.files[0])) queueDetach();
+});
 $('detectBtn').addEventListener('click', () => autoDetect(true));
 $('resetCornersBtn').addEventListener('click', () => {
   state.corners = defaultCorners();
@@ -2760,9 +3934,22 @@ for (const ev of ['dragenter', 'dragover']) {
 for (const ev of ['dragleave', 'drop']) {
   stage1.addEventListener(ev, e => { e.preventDefault(); $('dropHint').classList.remove('dragover'); });
 }
+// One file dropped is the old behaviour: load it. Several files, or a folder,
+// go into the queue instead, which is what "bring all the tools in first"
+// means from the drop target.
 stage1.addEventListener('drop', e => {
-  const file = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (file) loadFile(file);
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  // webkitGetAsEntry has to be read inside the event, before any await, or the
+  // DataTransfer is emptied out from under us.
+  const entries = queueEntriesFrom(dt);
+  const files = Array.from(dt.files || []);
+  const folders = entries.some(en => en && en.isDirectory);
+  if (!folders && files.length <= 1) {
+    if (files[0] && loadFile(files[0])) queueDetach();
+    return;
+  }
+  queueDrop(entries, files);
 });
 
 // ---------- wiring: step 2 ----------
@@ -3794,6 +4981,15 @@ function loadProject(p) {
         shape: (p.layout.bed && p.layout.bed.shape) || null,
         offset: { x: 0, y: 0, ...((p.layout.bed && p.layout.bed.offset) || {}) },
       },
+      // Additive and optional: a project saved before snapping existed has no
+      // `snap` key, and must open with it off at the default pitch rather than
+      // inheriting whatever grid the drawer before it was placed on, which
+      // would quantise the next drag the user made on it.
+      snap: {
+        on: !!(p.layout.snap && p.layout.snap.on),
+        pitch: Number.isFinite(p.layout.snap && p.layout.snap.pitch) &&
+          p.layout.snap.pitch > 0 ? p.layout.snap.pitch : LAY_SNAP_DEFAULT,
+      },
       // Merged onto the defaults, not taken from the file: a project saved
       // before labels existed has no `labels` key, and rebuilding state.layout
       // wholesale would otherwise leave it undefined.
@@ -4027,10 +5223,12 @@ function refreshLibList() {
   if (!$('layoutModal').hidden) refreshLaySelects();
 }
 
-$('libSaveBtn').addEventListener('click', () => {
+// One library entry from whatever is traced now, or null when there is no
+// outline to save. Shared by the Save outline button and by the queue's Next,
+// which saves under the photo's own file name instead of a typed one.
+function libEntryFromTrace(name) {
   const { outer, holes, circles } = traceEditor.getTrace();
-  if (!outer || outer.length < 3) { toast('No outline to save yet.'); return; }
-  const name = ($('libName').value || '').trim() || `Outline ${new Date().toISOString().slice(0, 10)}`;
+  if (!outer || outer.length < 3) return null;
   // Normalize to a small-margin origin so saved outlines stay compact.
   let minX = Infinity, minY = Infinity;
   for (const p of outer) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); }
@@ -4059,10 +5257,22 @@ $('libSaveBtn').addEventListener('click', () => {
       };
     }
   }
+  return entry;
+}
+
+// Write one entry into the library, replacing the row of the same name.
+function libCommit(entry) {
   const list = libLoad();
-  const existing = list.findIndex(o => o.name === name);
+  const existing = list.findIndex(o => o.name === entry.name);
   if (existing >= 0) list[existing] = entry; else list.push(entry);
-  libSaveFitted(list, name);
+  libSaveFitted(list, entry.name);
+}
+
+$('libSaveBtn').addEventListener('click', () => {
+  const name = ($('libName').value || '').trim() || `Outline ${new Date().toISOString().slice(0, 10)}`;
+  const entry = libEntryFromTrace(name);
+  if (!entry) { toast('No outline to save yet.'); return; }
+  libCommit(entry);
 });
 
 $('libDeleteBtn').addEventListener('click', () => {
@@ -4336,7 +5546,26 @@ window.__app = {
     },
   },
   layoutExports: { stl: layoutStlExport, svg: layoutSvgExport },
-  palette: { setFolder: laySetFolder, refresh: refreshLayPalette, get folder() { return layFolder; } },
+  palette: {
+    setFolder: laySetFolder, refresh: refreshLayPalette,
+    addPicked: layAddPicked, rowKey: layRowKey,
+    get folder() { return layFolder; },
+    get picks() { return Array.from(laySelected); },
+  },
+  queue: {
+    add: queueAddFiles, load: queueLoad, clear: queueClear,
+    render: renderQueue, next: queueNextPending,
+    dropPairs: queueDropPairs, drop: queueDrop,
+    ingestPairs: queueIngestPairs, ingestFolder: queueIngestFolder,
+    resume: queueResume,
+    // The walk: Next, Skip and Undo, kept apart from `next`, which is the
+    // "which photo comes next" lookup the strip and the walk both use.
+    walk: { next: queueNext, skip: queueSkip, undo: queueUndo },
+    organize: queueOrganize,
+    snapshot: queueRefSnapshot, applyRef: queueApplyRef, libName: queueLibName,
+    get items() { return state.queue; },
+    get traced() { return queueTraced; },
+  },
   libFitThumbs,
   folderBackend: {
     use: layUseHandle, sync: syncFolderButtons,

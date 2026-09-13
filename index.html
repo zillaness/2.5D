@@ -37,6 +37,36 @@
 <main>
   <aside id="sidebar">
 
+    <!-- ============ Photo queue (batch ingest) ============ -->
+    <!-- Above Step 1, collapsible, and collapsed on Step 4 so a drawer's worth
+         of thumbnails never pushes the photo below the fold on a phone. -->
+    <section id="queueStrip" class="panel" hidden style="margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid var(--border)">
+      <div style="display:flex; align-items:center; gap:6px">
+        <button id="queueToggle" class="btn small" title="Collapse or expand the photo queue" style="padding:2px 7px">▾</button>
+        <b style="font-size:13px">Photo queue</b>
+        <span id="queueCount" class="hint" style="margin:0; flex:1; text-align:right"></span>
+      </div>
+      <div id="queueBody">
+        <div id="queueList" style="display:flex; gap:8px; overflow-x:auto; padding:8px 0"></div>
+        <div class="field" id="queueNameRow" hidden style="margin:2px 0 6px">
+          <label for="queueSaveName">Library name for this photo</label>
+          <input type="text" id="queueSaveName" placeholder="from the photo's file name">
+        </div>
+        <div class="btn-row" id="queueWalkRow" hidden>
+          <button id="queueNextBtn" class="btn small" style="flex:1" title="Save this trace to the outline library, write its project beside the photo, and open the next ticked photo">Next ▸</button>
+          <button id="queueSkipBtn" class="btn small" style="flex:1" title="Leave this photo untraced and open the next ticked one">Skip</button>
+          <button id="queueUndoBtn" class="btn small" hidden style="flex:1" title="Go back to the photo just finished">↶ Undo</button>
+        </div>
+        <div class="btn-row">
+          <button id="queueSelectAllBtn" class="btn small" style="flex:1" title="Tick every photo that can be traced">Select all</button>
+          <button id="queueClearDoneBtn" class="btn small" style="flex:1" title="Drop the traced and skipped photos from the queue">Clear done</button>
+        </div>
+        <div class="btn-row">
+          <button id="queueOrganizeBtn" class="btn small" style="flex:1" title="Stop tracing and lay out the tools traced so far: Step 4 opens with them ticked in the palette">Organize what I have ▸</button>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ Step 1 ============ -->
     <section id="panel1" class="panel">
       <h2>Photo &amp; reference</h2>
@@ -48,6 +78,13 @@
         <input type="file" id="fileInput" accept="image/*">
         <span id="fileLabelText">Choose photo…</span>
       </label>
+
+      <div class="btn-row">
+        <button id="queueAddPhotosBtn" class="btn small" style="flex:1" title="Add several photos to the queue and trace them one after another">➕ Add photos…</button>
+        <button id="queueAddFolderBtn" class="btn small" style="flex:1" title="Add every photo in a folder to the queue. A photo that already has its project JSON beside it comes in already traced.">📁 Add folder…</button>
+      </div>
+      <input type="file" id="queuePhotosInput" accept="image/*" multiple hidden>
+      <input type="file" id="queueFolderInput" webkitdirectory directory multiple hidden>
 
       <div class="field">
         <label for="refType">Reference</label>
@@ -845,6 +882,13 @@
         <!-- Palette: the outline library and, once a folder is opened, the
              traces read out of it. Both groups show at once. -->
         <div id="layPalette" style="margin-top:8px">
+          <!-- The ticked tools. "Organize what I have" fills this in with the
+               tools traced this session; ticking rows by hand works too. -->
+          <div id="layPalPickRow" class="pal-head" hidden style="display:flex; align-items:center; gap:6px; margin-bottom:4px; font-size:12px">
+            <span id="layPalPickCount" class="hint" style="margin:0; flex:1"></span>
+            <button id="layPalAddTickedBtn" class="btn small" title="Place exactly the ticked tools in the drawer">＋ Add ticked</button>
+            <button id="layPalClearPicksBtn" class="btn small" title="Untick every tool">Clear ticks</button>
+          </div>
           <div class="pal-group">
             <div class="pal-head" style="display:flex; align-items:center; gap:6px; font-weight:600; font-size:12px; opacity:.85">
               <span>Library</span><span id="layPalLibCount" class="hint" style="margin:0"></span>
@@ -864,6 +908,23 @@
         </div>
         <div class="field" style="margin-top:4px">
           <label title="Draw each tool's photo inside its outline, so the drawer reads as the tools rather than as silhouettes"><input type="checkbox" id="layShowPhotos" checked> Show photos</label>
+        </div>
+        <!-- Snap to grid. The gesture is what snaps: a drag, an arrow-key
+             nudge and a rotation-handle drag land on the grid, and nothing
+             already placed moves when the toggle goes on. -->
+        <div class="field-row" id="laySnapRow">
+          <div class="field" style="display:flex; align-items:end">
+            <label title="Quantise dragging, arrow-key nudges and rotation while placing by hand. Turning it on moves nothing that is already placed."><input type="checkbox" id="laySnap"> Snap to grid</label>
+          </div>
+          <div class="field">
+            <label for="laySnapPitch">Snap pitch</label>
+            <select id="laySnapPitch" title="The grid a drag or a nudge lands on. Rotation snaps to 90° whatever the pitch.">
+              <option value="1">1 mm</option>
+              <option value="2.5">2.5 mm</option>
+              <option value="5">5 mm</option>
+              <option value="10">10 mm</option>
+            </select>
+          </div>
         </div>
         <div id="laySelPanel" hidden>
           <p class="hint" id="laySelName" style="margin:0"></p>

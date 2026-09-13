@@ -109,7 +109,10 @@ function entryFrom(src, name, thickness, path) {
   return entry;
 }
 
-function isProject(p) {
+// Exported for the batch queue's resume rule, which marks a photo traced when
+// the sibling <name>.json beside it parses as a 2.5D project. A library export
+// beside a photo is not that, so it does not count as already traced.
+export function isProject(p) {
   return !!p && !Array.isArray(p) && p.app === '2.5D' &&
     !!p.trace && isLoop(p.trace.outer, 3);
 }
