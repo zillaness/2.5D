@@ -485,10 +485,21 @@ export function layoutConflicts(containerOuter, pockets, border) {
 // equal-area groups hold shapes the packer can tell apart runs every one of
 // the 20 and spends tens of seconds doing it. testBudget caps the total number
 // of candidate validity tests the restarts may spend instead, measured in the
-// same unit stats.tests reports. The first pass always runs to the end, so a
-// budget can only cost density, never a placement; a further restart only
-// starts while there is budget left. A clock would do the same job and break
-// determinism, which is not a trade this module is allowed to make.
+// same unit stats.tests reports.
+//
+// What the budget may spend is density, and only density. The restart loop
+// keeps the best run by placed count first, so a restart it cancels can be
+// the one that would have placed one more tool: the budget is a prefix of the
+// pass sequence, and the best of a prefix is never better than the best of
+// the whole. Reporting a tool as 'noRoom' because the work counter ran out,
+// in a drawer that had room, would be exactly the dishonesty criterion 7
+// forbids, and criterion 6's own escape hatch is to yield with progress, not
+// to drop placements. So the ceiling only applies once every item is already
+// placed, which is the case where a further restart can win nothing but a
+// tighter bounding box. While anything is still unplaced the configured
+// restarts all run, because those are the passes that can change the answer.
+// A clock would bound the other case too and break determinism, which is not
+// a trade this module is allowed to make.
 
 export const NEST_DEFAULTS = {
   clearance: 0.5,      // pocket offset, same units/meaning as layoutPockets
@@ -864,8 +875,14 @@ export function nestLayout(containerOuter, items, opts = {}) {
   const budget = Math.max(0, Number(o.testBudget) || 0);
   for (let r = 0; r < passes; r++) {
     // The work ceiling, checked before a restart is started rather than during
-    // one, so a pass is never left half finished and pass 0 always runs.
-    if (r > 0 && budget > 0 && tests >= budget) { budgetHit = true; break; }
+    // one, so a pass is never left half finished and pass 0 always runs. It
+    // only bites once the best run so far has placed everything: from there a
+    // restart can only improve density, so cancelling one cannot cost a
+    // placement. With items still unplaced the restarts are the only thing
+    // that can place them, and they run however much work they take.
+    if (r > 0 && budget > 0 && tests >= budget && best && !best.missed.length) {
+      budgetHit = true; break;
+    }
     const order = orderFor(r);
     const key = order.map(shapeKey).join('>');
     if (seen.has(key)) continue;

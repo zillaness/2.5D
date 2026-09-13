@@ -5145,6 +5145,27 @@ const nestRef = await page.evaluate(async () => {
   // spent without a budget is a measured number rather than an assertion.
   const one = nestLayout(bulkC, twins, { ...opts, restarts: 1 });
 
+  // What the budget is NOT allowed to spend. The loose fixture above is one
+  // where every tool places on pass 0, so cancelling restarts there can only
+  // cost bounding area. Here is the other case: a drawer tight enough that
+  // the restarts are the only thing that finds room for the last two tools.
+  // The budget is set far below what those passes cost, so a ceiling that
+  // simply stopped at the counter would return the single-pass answer and
+  // report two tools as 'noRoom' in a drawer the same module fills given its
+  // own configured restarts. Best is kept by placed count first, so a
+  // truncated run is a prefix and can only ever place fewer.
+  const tightTwins = [];
+  for (let k = 0; k < 12; k++) {
+    const src = { ...items[Math.floor(k / 2) % 12], name: `tight ${k}`,
+      x: 20 + k * 3, y: 20 + k * 2 };
+    tightTwins.push(k % 2 ? { ...src, rotLock: 'current', rot: 90 } : src);
+  }
+  const tightC = roundedRect(230, 160, 460, 320, 6);
+  const cutOpts = { ...opts, restarts: 8, testBudget: 2000 };
+  const cut = nestLayout(tightC, tightTwins, cutOpts);
+  const whole = nestLayout(tightC, tightTwins, { ...cutOpts, testBudget: 0 });
+  const once = nestLayout(tightC, tightTwins, { ...cutOpts, restarts: 1 });
+
   return {
     hand: { clash: handCf.collisions.size + handCf.escaped.size,
       w: hb.maxX - hb.minX, h: hb.maxY - hb.minY,
@@ -5162,6 +5183,10 @@ const nestRef = await page.evaluate(async () => {
       deg: skewDeg },
     bulk: { placed: bulk.placements.length, ms: Math.round(bulkMs),
       passes: bulk.stats.passes },
+    cut: { placed: cut.placements.length, whole: whole.placements.length,
+      once: once.placements.length, tests: cut.stats.tests,
+      budget: cutOpts.testBudget, hit: cut.stats.budgetHit,
+      same: JSON.stringify(cut.placements) === JSON.stringify(whole.placements) },
     twin: { placed: twin.placements.length, left: twin.unplaced.length,
       ms: Math.round(twinMs), passes: twin.stats.passes, tests: twin.stats.tests,
       budget: twin.stats.testBudget, budgetHit: twin.stats.budgetHit,
@@ -5200,6 +5225,14 @@ check('the work budget bounds the restart loop instead of letting 20 passes run 
   nestRef.twin.tests < 2 * nestRef.twin.budget &&
   nestRef.twin.onePass * nestRef.twin.restarts > 4 * nestRef.twin.tests,
   `${nestRef.twin.tests} tests over ${nestRef.twin.passes} passes against a ${nestRef.twin.budget} budget, vs ~${nestRef.twin.onePass * nestRef.twin.restarts} for the ${nestRef.twin.restarts} unbounded`);
+// The other half of the same budget: it may cost density, and it may never
+// cost a placement. This drawer is tight enough that the restarts are what
+// place the last two tools, and the budget is set far below what they cost.
+check('the work budget costs bounding area, never a placement',
+  nestRef.cut.placed === nestRef.cut.whole && nestRef.cut.same &&
+  nestRef.cut.whole > nestRef.cut.once && !nestRef.cut.hit &&
+  nestRef.cut.tests > nestRef.cut.budget,
+  `${nestRef.cut.placed} placed against a ${nestRef.cut.budget} budget and ${nestRef.cut.tests} tests spent, vs ${nestRef.cut.whole} unbudgeted and ${nestRef.cut.once} in one pass`);
 check('30 tools with live restarts nest inside the ceiling too (criterion 6)',
   nestRef.twin.ms < 8000,
   `${nestRef.twin.ms} ms for ${nestRef.twin.passes} passes`);
