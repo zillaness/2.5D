@@ -1,16 +1,16 @@
 ---
 file: batch_ingest_prd_v1.0.md
-version: 1.0
+version: 1.1
 author: Sam Cao
 created: 2026-09-12
-last_updated: 2026-09-12
+last_updated: 2026-09-13
 description: Follow-on PRD to selection_and_organize_prd_v1.2.md, from 2026-09-12 user feedback. Batch ingest queue, snap to grid, and the nesting lane, for a second ultracode build session.
 ai_update: Update last_updated and version. Rename file to match. Append changelog at bottom.
 ---
 
 # PRD: Batch ingest, snap to grid, and the nesting lane
 
-Status: **SIGNED OFF by Sam, 2026-09-13. Build in progress.** · 2026-09-12 ·
+Status: **SHIPPED in v1.25.0, 2026-09-13.** · 2026-09-12 ·
 target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 Sam signed off Parts A and B and the Part C lane plan as written, with no
@@ -242,3 +242,4 @@ advance after save) is the only one that changes the build.
 
 ## CHANGELOG
 - v1.0 (2026-09-12): Initial draft from the 2026-09-12 user feedback, split out of selection_and_organize_prd so the running build session is not disturbed.
+- v1.1 (2026-09-13): Shipped in v1.25.0. Status records what landed, the review results, and the two recorded gaps.

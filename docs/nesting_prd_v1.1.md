@@ -1,17 +1,29 @@
 ---
 file: nesting_prd_v1.1.md
-version: 1.1
+version: 1.2
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-05
+last_updated: 2026-09-13
 description: PRD for automatic nesting / auto-sort of tool outlines in 2.5D drawer and toolbox layouts.
 ai_update: Update last_updated and version. Rename file to match. Append changelog at bottom.
 ---
 
 # PRD: Nesting / auto-sort for drawer layouts
 
-Status: **DRAFT — awaiting sign-off. Nothing here is built.** · 2026-09-04 ·
+Status: **Steps 1 to 4 SHIPPED in v1.25.0, 2026-09-13. Steps 5 to 9 not built.** · 2026-09-04 ·
 target branch `claude/2.5d-photo-stl-s3-y0oodn`
+
+Sam signed this off and steps 1 to 4 shipped in v1.25.0 on 2026-09-13:
+nestLayout() in js/holders.js as pure geometry, the conflict-freeness property
+test that this document asks to gate the feature on, the notch-reach and
+minimum-web tests, and the 12-tool reference drawer.
+
+Nothing calls it yet. The Nest button, the profile picker, the
+2p5d.packprofiles.v1 custom-profile store, label-space reservation and seam
+corridors are steps 5 to 9 and remain unbuilt, so the nester ships as reachable
+geometry with no user-facing entry point. Success criterion 6 (30 items under
+2 s) is guarded only by a loose 8000 ms ceiling, measuring about 1.3 to 1.5 s
+in the test container.
 
 ## Problem
 
@@ -391,3 +403,4 @@ been implemented.
   effective web of `max(minWeb, textHeight + 2*textMargin)` so text size
   raises the web instead of being clipped. Notch reachability became
   profile-dependent, required under Access and a warning under Dense.
+- v1.2 (2026-09-13): Steps 1 to 4 shipped in v1.25.0 as pure geometry. Steps 5 to 9, including the Nest button, remain unbuilt.

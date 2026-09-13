@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.5
+version: 1.6
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-12
@@ -52,7 +52,27 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - ✅ Merged suite: 472 checks, all passing, which is the 275 baseline plus 44,
   63 and 50 from the three lanes, so nothing was lost in the merge — 47ba7c3
 - ✅ Deployed v1.24.0 to gh-pages, carrying the unreleased labelling work — 3cae543
-- ▶ NEXT: S6, docs/batch_ingest_prd_v1.0.md (lanes B2, D, E), then nesting steps 1-4
+- ✅ Sam signed off docs/batch_ingest_prd_v1.0.md; status flipped in the repo — ce5e8ca
+- ✅ Lane B2, batch ingest + snap to grid: 7 plan steps, 537 checks after review
+- ✅ Lane D, nesting steps 1-4: nestLayout() as pure geometry, 511 checks after review
+- ✅ Lane E, labelling step 6: label drag and rotate, 489 checks after review
+- ✅ Leaner review loop: severity-scaled refuters, settled questions filtered at the
+  lens stage, 2 rounds by default. B2 and D both converged clean.
+- ⚠ The monthly spend limit was hit mid-review. 18 of 124 agents died, including
+  lane E's round-2 fix agent. Three lenses had independently found that a base
+  label auto-placed inside its own pocket could never be grabbed, which made
+  label drag dead for the layered construction; their refuters never voted, so it
+  showed as dropped at 0 votes rather than refuted. Fixed by hand in the main
+  loop instead: glyph-level hit test before the tool — 411fccf
+- ✅ Merged B2, then D, then E. Four additive conflicts in js/main.js and
+  js/ui/layoutEditor.js, all snap-versus-label state; both sides kept.
+- ✅ Merged suite: 593 checks, all passing, which is 472 plus 65, 39 and 17, so
+  nothing was lost in the merge — 931657c
+- ✅ Deployed v1.25.0 to gh-pages — 90717c3
+- ▶ NEXT: nesting steps 5-9 (the Nest button, profile picker, 2p5d.packprofiles.v1,
+  label-space reservation, seam corridors) — the geometry is shipped but unreachable.
+  Then autosave of trace progress, which Sam raised on 2026-09-13 and which wants a
+  PRD once the queue's folder write is settled.
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done
@@ -150,3 +170,4 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.4 (2026-09-10): PRD at v1.2: circles in crossing select, File System Access backend, container scaling, Part D laser constructions, session uprevs.
 - v1.3 (2026-09-10): PRD widened to docs/selection_and_organize_prd_v1.2.md (Step 4 Organize, ultracode build plan).
 - v1.5 (2026-09-13): S5 shipped. Parts A, B and D built in parallel lanes, reviewed, merged and deployed as v1.24.0.
+- v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
