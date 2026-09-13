@@ -8417,6 +8417,218 @@ check('the acceptance block hands the library, the folder and Step 1 back',
   `step ${queueFive.restored.step}, library restored ${queueFive.restored.lib}, ` +
   `queue ${queueFive.restored.queue}, palette ${queueFive.restored.palette}`);
 
+// ---------- the per-photo project write stays with the photo ----------
+//
+// One writable folder is open and the queue holds a photo from somewhere else:
+// a folder dropped onto Step 1, or a second folder picked. That photo has no
+// folder here, so its project must not be written into the open folder's root,
+// where it would sit beside the wrong photo and overwrite whatever already
+// answers to its name. The download fallback takes it instead, and a photo
+// that really is inside the open folder still writes beside itself.
+const queueSix = await page.evaluate(async () => {
+  const app = window.__app;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    ref: app.queue.snapshot(),
+  };
+  localStorage.setItem('2p5d.library.v1', '[]');
+
+  // Every write records the directory it landed in, so "beside the photo" is
+  // checked and not assumed.
+  const writes = [];
+  const fileHandle = (name, file) => ({ kind: 'file', name, getFile: async () => file });
+  const mkDir = (name, children) => {
+    const h = {
+      kind: 'directory', name, children,
+      values: async function* () { for (const c of h.children) yield c; },
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      getDirectoryHandle: async n => {
+        const kid = h.children.find(c => c.kind === 'directory' && c.name === n);
+        if (!kid) throw new Error('no such folder');
+        return kid;
+      },
+      getFileHandle: async n => ({
+        createWritable: async () => ({
+          write: async text => { writes.push({ dir: h.name, name: n, text: String(text) }); },
+          close: async () => {},
+        }),
+      }),
+    };
+    return h;
+  };
+
+  // Drawer one, opened with the picker: an awl already traced last week, its
+  // project sitting beside the photo.
+  const benchProject = JSON.stringify({
+    app: '2.5D', version: 1, fileName: 'awl',
+    regions: [{ thickness: 6 }],
+    trace: { outer: rect(3, 3, 30, 14), holes: [], circles: [] },
+  });
+  const bench = mkDir('bench', [
+    fileHandle('awl.jpg', await photoFile('awl.jpg', 320, 240)),
+    fileHandle('awl.json', new File([benchProject], 'awl.json', { type: 'application/json' })),
+  ]);
+  app.queue.clear();
+  await app.queue.ingestFolder(bench, 'bench');
+  const opened = {
+    handle: app.folderBackend.handle && app.folderBackend.handle.name,
+    paths: app.state.queue.map(q => q.path),
+    statuses: app.state.queue.map(q => q.status),
+  };
+
+  // Drawer two dragged onto Step 1: fresh photos, no project beside them, and
+  // the camera gave one of them the same name drawer one already uses.
+  const fileEntry = (name, file) => ({
+    isFile: true, isDirectory: false, name, file: cb => cb(file),
+  });
+  const dirEntry = (name, kids) => ({
+    isFile: false, isDirectory: true, name,
+    createReader: () => {
+      let sent = false;
+      return { readEntries: cb => { const batch = sent ? [] : kids; sent = true; cb(batch); } };
+    },
+  });
+  await app.queue.drop([dirEntry('garage', [
+    fileEntry('awl.jpg', await photoFile('awl.jpg', 300, 300)),
+  ])], []);
+  const dropped = { paths: app.state.queue.map(q => q.path) };
+
+  app.queue.load(app.state.queue.find(q => q.path === 'garage/awl.jpg'));
+  await wait(700);
+  app.traceEditor.setTrace(rect(11, 12, 53, 27), []);
+  const one = await app.queue.walk.next();
+  await wait(400);
+  const outside = {
+    wrote: one && one.wrote.kind,
+    name: one && one.wrote.name,
+    writes: writes.map(w => `${w.dir}/${w.name}`),
+    libNames: JSON.parse(localStorage.getItem('2p5d.library.v1')).map(o => o.name),
+    status: app.state.queue.find(q => q.path === 'garage/awl.jpg').status,
+    handleKept: app.folderBackend.handle === bench,
+  };
+
+  // Two folders picked in one session: the second is the open one, and the
+  // first folder's photo must not write into it either.
+  app.queue.clear();
+  const shelfA = mkDir('shelfA', [
+    fileHandle('wrench.jpg', await photoFile('wrench.jpg', 340, 260)),
+  ]);
+  const shelfB = mkDir('shelfB', [
+    fileHandle('plier.jpg', await photoFile('plier.jpg', 280, 360)),
+  ]);
+  await app.queue.ingestFolder(shelfA, 'shelfA');
+  await app.queue.ingestFolder(shelfB, 'shelfB');
+  writes.length = 0;
+  app.queue.load(app.state.queue.find(q => q.path === 'shelfA/wrench.jpg'));
+  await wait(700);
+  app.traceEditor.setTrace(rect(9, 9, 40, 22), []);
+  const two = await app.queue.walk.next();
+  await wait(700);
+  const crossed = {
+    wrote: two && two.wrote.kind,
+    name: two && two.wrote.name,
+    writes: writes.map(w => `${w.dir}/${w.name}`),
+    onB: app.state.fileName,
+  };
+
+  // The control: a photo that really is inside the open folder still writes
+  // beside itself, so the fallback has not simply switched folder writes off.
+  app.traceEditor.setTrace(rect(7, 7, 38, 20), []);
+  const three = await app.queue.walk.next();
+  await wait(400);
+  const inside = {
+    wrote: three && three.wrote.kind,
+    name: three && three.wrote.name,
+    writes: writes.map(w => `${w.dir}/${w.name}`),
+  };
+
+  // Put the library, the folder, the queue and Step 1 back.
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.palette.refresh();
+  app.queue.applyRef(before.ref);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles);
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await wait(300);
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    lib: localStorage.getItem('2p5d.library.v1') === before.lib,
+    queue: app.state.queue.length,
+    handle: app.folderBackend.handle,
+    palette: app.palette.folder.entries.length,
+    trace: app.traceEditor.outer.length === before.trace.outer.length,
+  };
+
+  return { opened, dropped, outside, crossed, inside, restored };
+});
+
+check('a dropped folder’s project is never written into the folder the picker opened',
+  queueSix.opened.handle === 'bench' &&
+  JSON.stringify(queueSix.opened.statuses) === JSON.stringify(['traced']) &&
+  JSON.stringify(queueSix.dropped.paths) === JSON.stringify(['bench/awl.jpg', 'garage/awl.jpg']) &&
+  queueSix.outside.handleKept && queueSix.outside.wrote === 'download' &&
+  queueSix.outside.name === 'awl.json' &&
+  JSON.stringify(queueSix.outside.writes) === JSON.stringify([]) &&
+  queueSix.outside.status === 'traced' &&
+  JSON.stringify(queueSix.outside.libNames) === JSON.stringify(['awl']),
+  `queue ${JSON.stringify(queueSix.dropped.paths)} with “bench” open; the project went to ` +
+  `${queueSix.outside.wrote} as “${queueSix.outside.name}”, folder writes ${JSON.stringify(queueSix.outside.writes)}`);
+
+check('with a second folder picked, the first folder’s photo downloads instead of writing into it',
+  queueSix.crossed.wrote === 'download' && queueSix.crossed.name === 'wrench.json' &&
+  JSON.stringify(queueSix.crossed.writes) === JSON.stringify([]) &&
+  queueSix.crossed.onB === 'plier',
+  `wrote ${queueSix.crossed.wrote} “${queueSix.crossed.name}”, folder writes ${JSON.stringify(queueSix.crossed.writes)}`);
+
+check('a photo that is inside the open folder still writes its project beside itself',
+  queueSix.inside.wrote === 'folder' && queueSix.inside.name === 'plier.json' &&
+  JSON.stringify(queueSix.inside.writes) === JSON.stringify(['shelfB/plier.json']),
+  `wrote ${queueSix.inside.wrote} “${queueSix.inside.name}” into ${JSON.stringify(queueSix.inside.writes)}`);
+
+check('the cross-folder write block leaves the library, the folder and Step 1 as it found them',
+  queueSix.restored.step === 3 && queueSix.restored.image && queueSix.restored.lib &&
+  queueSix.restored.queue === 0 && queueSix.restored.handle === null &&
+  queueSix.restored.palette === 0 && queueSix.restored.trace,
+  `step ${queueSix.restored.step}, library restored ${queueSix.restored.lib}, ` +
+  `queue ${queueSix.restored.queue}, handle ${queueSix.restored.handle}`);
+
 // ---------- snap to grid in the layout editor (Part B) ----------
 // Snapping is a property of the gesture: a drag, an arrow-key nudge and a
 // rotation-handle drag land on the grid, and nothing already placed moves when

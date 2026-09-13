@@ -717,9 +717,11 @@ photo stays in the queue for later. Undo returns to the photo just finished,
 pending and ticked again; its library entry stays saved, and tracing that photo
 again under the same name overwrites that entry rather than adding a second one.
 A name the library already holds takes the photo's folder as a suffix, so
-`wrench.jpg` from two different folders cannot overwrite one entry. Where no
-writable folder is open, on the directory-input backend or after a drop, the
-project is offered as a download instead, once per photo.
+`wrench.jpg` from two different folders cannot overwrite one entry. Where the
+photo has no writable folder of its own, on the directory-input backend or
+after a drop of a folder the open one does not contain, the project is offered
+as a download instead, once per photo. A project is never written into a folder
+the photo does not sit in.
 
 **Stop and organize.** **Organize what I have ▸** opens Step 4 with every tool
 traced this session ticked in the palette, so **Add all** places exactly those

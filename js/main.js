@@ -1102,23 +1102,35 @@ function queueLibName(item, typed) {
 }
 
 // The subfolder a photo sits in, as a handle under the open folder, so the
-// project lands beside its photo and not in the folder root. A handle that
-// will not walk (a subfolder gone since the ingest) falls back to the root,
-// which still keeps the project inside the tool collection.
+// project lands beside its photo and not in the folder root.
+//
+// A photo whose own folder is not inside the open one is not this folder's
+// photo at all, and it has no directory here: a dropped folder and a second
+// picked folder both leave the queue holding photos from somewhere else, and
+// writing their projects into the open folder's root would put them beside
+// the wrong photos and overwrite whatever already answers to the same name.
+// queueDirFor returns null for those and the caller falls back to the
+// download. Once a segment has resolved the photo really is in here, so a
+// subfolder gone since the ingest falls back to the deepest folder that did
+// resolve, which still keeps the project inside the tool collection. A photo
+// with no path at all (a multi-select hands over bare names) belongs to the
+// open folder by default, the way "Save here" does.
 async function queueDirFor(path) {
+  if (!layFolderHandle) return null;
   const parts = String(path || '').split('/');
   parts.pop();
-  if (parts.length && layFolderHandle && parts[0] === layFolderHandle.name) parts.shift();
+  let inside = !parts.length;
+  if (parts.length && parts[0] === layFolderHandle.name) { parts.shift(); inside = true; }
   let dir = layFolderHandle;
-  try {
-    for (const seg of parts) {
-      if (!dir || typeof dir.getDirectoryHandle !== 'function') return layFolderHandle;
-      dir = await dir.getDirectoryHandle(seg);
-    }
-  } catch {
-    return layFolderHandle;
+  for (const seg of parts) {
+    if (!dir || typeof dir.getDirectoryHandle !== 'function') return inside ? dir : null;
+    let next = null;
+    try { next = await dir.getDirectoryHandle(seg); } catch { next = null; }
+    if (!next) return inside ? dir : null;
+    dir = next;
+    inside = true;
   }
-  return dir || layFolderHandle;
+  return dir || null;
 }
 
 // serializeProject(false) leaves the photo out: the photo is the sibling file,
@@ -1129,15 +1141,18 @@ async function queueWriteProject(item) {
   if (layFolderHandle && await ensurePermission(layFolderHandle, 'readwrite')) {
     try {
       const dir = await queueDirFor(item.path);
-      const written = await writeProjectFile(dir, base, text);
-      item.json = written;
-      return { kind: 'folder', name: written };
+      if (dir) {
+        const written = await writeProjectFile(dir, base, text);
+        item.json = written;
+        return { kind: 'folder', name: written };
+      }
     } catch {
       // A folder that refuses the write is not a reason to lose the trace.
     }
   }
-  // No writable folder: the directory-input backend reads once and a drop
-  // hands over no handle at all. The project is offered as a download instead,
+  // No writable folder for this photo: the directory-input backend reads once,
+  // a drop hands over no handle at all, and a photo from a folder outside the
+  // open one has no place in it. The project is offered as a download instead,
   // once per photo, and says once per session what a picked folder would do.
   const name = `${base}.json`;
   downloadBlob(new Blob([text], { type: 'application/json' }), name);
