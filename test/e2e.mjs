@@ -7485,6 +7485,199 @@ check('the queue block leaves Step 1 and the strip as it found them',
   queueOne.restored.stripHidden && queueOne.restored.step === 3,
   `step ${queueOne.restored.step}, photo restored ${queueOne.restored.image}, strip hidden ${queueOne.restored.stripHidden}`);
 
+// Folder ingest: the photos go to the queue, the traces go to the palette, and
+// a photo that already has its project JSON beside it resumes as traced.
+const queueTwo = await page.evaluate(async () => {
+  const app = window.__app;
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], String(name).split('/').pop(), { type: 'image/jpeg' });
+  };
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  // anvil.json is a 2.5D project, so anvil.jpg is already traced. rasp.json is
+  // a library export, which is not a trace of rasp.jpg, so rasp.jpg is not.
+  const anvilJson = JSON.stringify({
+    app: '2.5D', version: 1, fileName: 'anvil',
+    regions: [{ thickness: 8 }],
+    trace: { outer: rect(20, 30, 70, 25), holes: [], circles: [] },
+  });
+  const raspJson = JSON.stringify([
+    { name: 'rasp bench', kind: 'tool', thickness: 4, outer: rect(0, 0, 30, 30) },
+  ]);
+
+  const files = {
+    'anvil.jpg': await photoFile('anvil.jpg', 400, 300),
+    'anvil.json': new File([anvilJson], 'anvil.json', { type: 'application/json' }),
+    'hammer.jpg': await photoFile('hammer.jpg', 360, 280),
+    'notes.txt': new File(['bench notes'], 'notes.txt', { type: 'text/plain' }),
+    'rasp.jpg': await photoFile('rasp.jpg', 300, 300),
+    'rasp.json': new File([raspJson], 'rasp.json', { type: 'application/json' }),
+    'chisel.jpg': await photoFile('chisel.jpg', 260, 200),
+  };
+  const fileHandle = name => ({ kind: 'file', name, getFile: async () => files[name] });
+  const dirHandle = (name, children) => {
+    const h = {
+      kind: 'directory', name, children,
+      values: async function* () { for (const c of h.children) yield c; },
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      getFileHandle: async () => ({
+        createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+      }),
+    };
+    return h;
+  };
+  // Deliberately unsorted: walkFolder's own sort is what makes the order fixed.
+  const dir = dirHandle('drawer', [
+    fileHandle('rasp.json'),
+    dirHandle('sub', [fileHandle('chisel.jpg')]),
+    fileHandle('hammer.jpg'),
+    fileHandle('anvil.json'),
+    fileHandle('notes.txt'),
+    fileHandle('rasp.jpg'),
+    fileHandle('anvil.jpg'),
+  ]);
+
+  app.queue.clear();
+  // Through the real button, so the picker path is what is under test.
+  Object.defineProperty(window, 'showDirectoryPicker', { value: async () => dir, configurable: true });
+  document.getElementById('queueAddFolderBtn').click();
+  for (let i = 0; i < 80 && app.state.queue.length < 4; i++) await new Promise(r => setTimeout(r, 50));
+  await new Promise(r => setTimeout(r, 400));
+
+  const picked = {
+    paths: app.state.queue.map(q => q.path),
+    names: app.state.queue.map(q => q.name),
+    statuses: app.state.queue.map(q => q.status),
+    picked: app.state.queue.map(q => q.picked),
+    thumbs: app.state.queue.filter(q => typeof q.thumb === 'string').length,
+    // The resumed photo's trace is in the palette, read out of its own JSON.
+    palette: app.palette.folder.entries.map(e => e.name),
+    paletteLabel: app.palette.folder.label,
+    // The queue shares the Step 4 handle, so the per-photo project write and
+    // "Save here" land in the same folder.
+    handle: app.folderBackend.handle === dir,
+    saveReachable: !document.getElementById('layPalSaveFolderBtn').hidden,
+    tiles: Array.from(document.querySelectorAll('#queueList .queue-item')).map(t => t.dataset.status),
+  };
+
+  // Reopening the same folder rebuilds nothing twice: the photos are already
+  // there, and the traced one stays traced.
+  const again = await app.queue.ingestFolder(dir, 'drawer');
+  const reopened = {
+    added: again.added.length,
+    n: app.state.queue.length,
+    statuses: app.state.queue.map(q => q.status),
+  };
+
+  // The directory-input backend reads the very same folder flat, with no
+  // handle, and must land on the same queue.
+  app.queue.clear();
+  app.folderBackend.forget();
+  const flat = [
+    'anvil.jpg', 'anvil.json', 'hammer.jpg', 'notes.txt', 'rasp.jpg', 'rasp.json',
+  ].map(n => ({ path: `drawer/${n}`, file: files[n] }));
+  flat.push({ path: 'drawer/sub/chisel.jpg', file: files['chisel.jpg'] });
+  const gotFlat = await app.queue.ingestPairs(flat, 'drawer');
+  const input = {
+    paths: app.state.queue.map(q => q.path),
+    statuses: app.state.queue.map(q => q.status),
+    resumed: gotFlat.resumed,
+    traces: gotFlat.traces,
+    palette: app.palette.folder.entries.map(e => e.name),
+    handle: app.folderBackend.handle,
+    saveHidden: document.getElementById('layPalSaveFolderBtn').hidden,
+    hasInput: !!document.getElementById('queueFolderInput').webkitdirectory,
+  };
+
+  // A folder with no JSON in it leaves the palette alone rather than blanking
+  // whatever drawer is already loaded there.
+  app.queue.clear();
+  const kept = await app.queue.ingestPairs(
+    [{ path: 'shed/awl.jpg', file: files['hammer.jpg'] }], 'shed');
+  const untouched = {
+    traces: kept.traces,
+    palette: app.palette.folder.entries.map(e => e.name),
+    label: app.palette.folder.label,
+  };
+
+  // Put the folder palette and the queue back.
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  delete window.showDirectoryPicker;
+  app.refreshLayoutEditor();
+  const restored = {
+    queue: app.state.queue.length,
+    palette: app.palette.folder.entries.length,
+    group: document.getElementById('layPalFolderGroup').hidden,
+    strip: document.getElementById('queueStrip').hidden,
+    step: app.state.step,
+  };
+  return { picked, reopened, input, untouched, restored };
+});
+
+check('a picked folder queues every photo in it, deepest last, and skips the non-photos',
+  JSON.stringify(queueTwo.picked.paths) === JSON.stringify(
+    ['drawer/anvil.jpg', 'drawer/hammer.jpg', 'drawer/rasp.jpg', 'drawer/sub/chisel.jpg']) &&
+  JSON.stringify(queueTwo.picked.names) === JSON.stringify(['anvil', 'hammer', 'rasp', 'chisel']) &&
+  queueTwo.picked.thumbs === 4 && queueTwo.picked.tiles.length === 4,
+  `${JSON.stringify(queueTwo.picked.paths)}, ${queueTwo.picked.thumbs} thumbs`);
+
+check('a photo with a sibling 2.5D project resumes as traced, and its trace is in the palette',
+  JSON.stringify(queueTwo.picked.statuses) === JSON.stringify(
+    ['traced', 'pending', 'pending', 'pending']) &&
+  JSON.stringify(queueTwo.picked.picked) === JSON.stringify([false, true, true, true]) &&
+  JSON.stringify(queueTwo.picked.tiles) === JSON.stringify(
+    ['traced', 'pending', 'pending', 'pending']) &&
+  JSON.stringify(queueTwo.picked.palette) === JSON.stringify(['anvil', 'rasp bench']) &&
+  queueTwo.picked.paletteLabel === 'drawer',
+  `${JSON.stringify(queueTwo.picked.statuses)}, palette ${JSON.stringify(queueTwo.picked.palette)} from “${queueTwo.picked.paletteLabel}”`);
+
+check('a sibling library export is not a trace of the photo, so that photo stays pending',
+  queueTwo.picked.statuses[2] === 'pending' && queueTwo.picked.picked[2] === true,
+  `rasp.jpg is ${queueTwo.picked.statuses[2]}, ticked ${queueTwo.picked.picked[2]}`);
+
+check('the queue adopts the folder handle, so the project write and “Save here” share it',
+  queueTwo.picked.handle && queueTwo.picked.saveReachable &&
+  queueTwo.input.handle === null && queueTwo.input.saveHidden && queueTwo.input.hasInput,
+  `picker handle ${queueTwo.picked.handle}, save reachable ${queueTwo.picked.saveReachable}; ` +
+  `input handle ${queueTwo.input.handle}, save hidden ${queueTwo.input.saveHidden}`);
+
+check('reopening the same folder adds nothing twice and keeps the traced photo traced',
+  queueTwo.reopened.added === 0 && queueTwo.reopened.n === 4 &&
+  JSON.stringify(queueTwo.reopened.statuses) === JSON.stringify(
+    ['traced', 'pending', 'pending', 'pending']),
+  `added ${queueTwo.reopened.added}, queue ${queueTwo.reopened.n}, ${JSON.stringify(queueTwo.reopened.statuses)}`);
+
+check('the directory-input backend reads the same folder to the same queue, with no handle',
+  JSON.stringify(queueTwo.input.paths) === JSON.stringify(
+    ['drawer/anvil.jpg', 'drawer/hammer.jpg', 'drawer/rasp.jpg', 'drawer/sub/chisel.jpg']) &&
+  JSON.stringify(queueTwo.input.statuses) === JSON.stringify(
+    ['traced', 'pending', 'pending', 'pending']) &&
+  queueTwo.input.resumed === 1 && queueTwo.input.traces === 2 &&
+  JSON.stringify(queueTwo.input.palette) === JSON.stringify(['anvil', 'rasp bench']),
+  `${JSON.stringify(queueTwo.input.statuses)}, ${queueTwo.input.resumed} resumed of ${queueTwo.input.traces} trace files`);
+
+check('a folder of fresh photos leaves the loaded drawer palette alone',
+  queueTwo.untouched.traces === 0 &&
+  JSON.stringify(queueTwo.untouched.palette) === JSON.stringify(['anvil', 'rasp bench']) &&
+  queueTwo.untouched.label === 'drawer',
+  `${queueTwo.untouched.traces} trace files, palette still ${JSON.stringify(queueTwo.untouched.palette)}`);
+
+check('the folder-ingest block hands the palette, the handle and the strip back empty',
+  queueTwo.restored.queue === 0 && queueTwo.restored.palette === 0 &&
+  queueTwo.restored.group && queueTwo.restored.strip && queueTwo.restored.step === 3,
+  `queue ${queueTwo.restored.queue}, palette ${queueTwo.restored.palette}, group hidden ${queueTwo.restored.group}, step ${queueTwo.restored.step}`);
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {

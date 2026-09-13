@@ -69,8 +69,10 @@
 
       <div class="btn-row">
         <button id="queueAddPhotosBtn" class="btn small" style="flex:1" title="Add several photos to the queue and trace them one after another">➕ Add photos…</button>
+        <button id="queueAddFolderBtn" class="btn small" style="flex:1" title="Add every photo in a folder to the queue. A photo that already has its project JSON beside it comes in already traced.">📁 Add folder…</button>
       </div>
       <input type="file" id="queuePhotosInput" accept="image/*" multiple hidden>
+      <input type="file" id="queueFolderInput" webkitdirectory directory multiple hidden>
 
       <div class="field">
         <label for="refType">Reference</label>

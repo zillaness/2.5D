@@ -40,7 +40,7 @@ import { CornerEditor } from './ui/cornerEditor.js';
 import { TraceEditor } from './ui/traceEditor.js';
 import { Viewer3D } from './viewer3d.js';
 import { importCad } from './import/cadImport.js';
-import { tracesFromFiles, thumbFromImage } from './import/traceFolder.js';
+import { tracesFromFiles, thumbFromImage, isProject } from './import/traceFolder.js';
 import {
   hasDirectoryPicker, pickFolder, walkFolder, ensurePermission,
   rememberFolder, recallFolder, writeProjectFile,
@@ -795,6 +795,97 @@ function renderQueue() {
   queueSyncVisible();
 }
 
+// ---------- folder ingest: photos to the queue, traces to the palette ----------
+//
+// A folder of a drawer's photographs is the unit of work. Its photos become
+// queue items; any trace JSON in the same folder goes to the Step 4 palette
+// through tracesFromFiles, the reader the palette already uses. So one folder
+// is both the input and the persistence, which is what makes the flow
+// resumable without saving the queue anywhere.
+//
+// Both of Part B's backends feed this. The File System Access picker gives a
+// handle that can be re-read and written back into; the directory input gives
+// one flat read and no handle, so the per-photo project write has to fall back
+// to a download. Everything past walkFolder sees the same { path, file } pairs.
+
+function queueSiblingJson(path) {
+  return String(path || '').replace(/\.[^./]+$/, '') + '.json';
+}
+
+// The resume rule: a pending photo whose sibling <name>.json parses as a 2.5D
+// project has already been traced, so it comes in marked traced and unticked,
+// and the walk passes over it. Its trace is in the palette already, read out of
+// that same JSON, so nothing is traced twice.
+//
+// Siblings are read one at a time and only one parsed project is alive at a
+// time, so a folder of a hundred costs no more than a folder of one.
+async function queueResume(pairs) {
+  const jsons = new Map();
+  for (const p of pairs) {
+    if (/\.json$/i.test(p.path)) jsons.set(String(p.path).toLowerCase(), p);
+  }
+  if (!jsons.size) return 0;
+  let resumed = 0;
+  for (const item of state.queue) {
+    if (item.status !== 'pending') continue;
+    const pair = jsons.get(queueSiblingJson(item.path).toLowerCase());
+    if (!pair) continue;
+    let json = null;
+    try { json = JSON.parse(await pair.file.text()); } catch { json = null; }
+    // A library export beside a photo is not a trace OF that photo, so only a
+    // project file counts.
+    if (!isProject(json)) continue;
+    item.status = 'traced';
+    item.picked = false;
+    resumed++;
+  }
+  return resumed;
+}
+
+// pairs: { path, file } from either backend, or from a drop.
+async function queueIngestPairs(pairs, label) {
+  const list = Array.from(pairs || []);
+  const added = await queueAddFiles(list);
+  const resumed = await queueResume(list);
+  const jsons = list.filter(p => /\.json$/i.test(p.path));
+  // A folder with no JSON in it is a folder of fresh photos; leave whatever the
+  // palette already holds alone rather than blanking it.
+  if (jsons.length) {
+    laySetFolder(await tracesFromFiles(jsons, { onProgress: layFolderProgress }), label || '');
+  }
+  renderQueue();
+  return { added, resumed, traces: jsons.length };
+}
+
+function queueIngestToast(got, label) {
+  if (!got) return;
+  const n = got.added.length;
+  if (!n && !got.resumed) { toast(`No photos in “${label}”.`); return; }
+  const bits = [`${n} photo${n === 1 ? '' : 's'} from “${label}”`];
+  if (got.resumed) bits.push(`${got.resumed} already traced`);
+  toast(bits.join(', ') + '.');
+}
+
+// The File System Access backend. The handle is shared with the Step 4 palette,
+// so there is one open folder per session and the per-photo project write lands
+// in the same place "Save here" does.
+async function queueIngestFolder(handle, label) {
+  if (!handle) return null;
+  if (!await ensurePermission(handle, 'read')) {
+    toast('That folder was not shared with this page.');
+    return null;
+  }
+  const name = label || handle.name || 'folder';
+  layFolderHandle = handle;
+  layRemembered = { label: name, handle };
+  syncFolderButtons();
+  const pairs = await walkFolder(handle);
+  const got = await queueIngestPairs(pairs, name);
+  syncFolderButtons();
+  await rememberFolder(handle, name);
+  return got;
+}
+
 // ---------- drag and drop of several files, or a folder ----------
 //
 // A drop hands over DataTransferItems, not a file list, when a folder is in
@@ -876,19 +967,36 @@ async function queueDropPairs(entries, files) {
   return pairs;
 }
 
-async function queueDrop(entries, files) {
-  const pairs = await queueDropPairs(entries, files);
-  const added = await queueAddFiles(pairs);
-  if (!added.length) { toast('No new photos in that drop.'); return added; }
-  toast(`${added.length} photo${added.length === 1 ? '' : 's'} added to the queue.`);
-  if (!state.image && !state.rect) {
-    const first = added.find(q => q.status === 'pending');
-    if (first) queueLoad(first);
+// A drop of a folder gets the same resume rule and the same palette read a
+// picked folder does. What it cannot get is a writable handle: a drop hands
+// over entries, not a directory handle. So a drop that replaces the palette
+// also drops the handle, and "Save here" goes out of reach until a folder is
+// picked again, rather than silently writing into the wrong folder.
+function queueDropLabel(pairs) {
+  for (const p of pairs) {
+    const parts = String(p.path).split('/');
+    if (parts.length > 1) return parts[0];
   }
-  return added;
+  return 'dropped photos';
 }
 
-// ---------- wiring: the strip and "Add photos…" ----------
+async function queueDrop(entries, files) {
+  const pairs = await queueDropPairs(entries, files);
+  const label = queueDropLabel(pairs);
+  if (pairs.some(p => /\.json$/i.test(p.path))) {
+    layFolderHandle = null;
+    syncFolderButtons();
+  }
+  const got = await queueIngestPairs(pairs, label);
+  queueIngestToast(got, label);
+  if (!state.image && !state.rect) {
+    const first = got.added.find(q => q.status === 'pending');
+    if (first) queueLoad(first);
+  }
+  return got;
+}
+
+// ---------- wiring: the strip, "Add photos…" and "Add folder…" ----------
 
 $('queueToggle').addEventListener('click', () => {
   queueCollapsed = !queueCollapsed;
@@ -912,6 +1020,38 @@ $('queueClearDoneBtn').addEventListener('click', () => {
 });
 
 $('queueAddPhotosBtn').addEventListener('click', () => $('queuePhotosInput').click());
+
+$('queueAddFolderBtn').addEventListener('click', async () => {
+  if (hasDirectoryPicker()) {
+    let handle = null;
+    try {
+      handle = await pickFolder();
+    } catch {
+      // The API is there but unusable here (an iframe, a policy). Fall back.
+      $('queueFolderInput').click();
+      return;
+    }
+    if (!handle) return; // cancelled: do not pop the input open behind it
+    const got = await queueIngestFolder(handle, null);
+    queueIngestToast(got, handle.name || 'folder');
+    return;
+  }
+  $('queueFolderInput').click();
+});
+
+// The baseline backend: one shot, every file already read, no handle to keep,
+// so the per-photo project write falls back to a download.
+$('queueFolderInput').addEventListener('change', async e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  const label = (files[0].webkitRelativePath || '').split('/')[0] || 'folder';
+  layFolderHandle = null;
+  syncFolderButtons();
+  const pairs = files.map(f => ({ path: f.webkitRelativePath || f.name, file: f }));
+  const got = await queueIngestPairs(pairs, label);
+  queueIngestToast(got, label);
+});
 
 $('queuePhotosInput').addEventListener('change', async e => {
   const files = Array.from(e.target.files || []);
@@ -4768,6 +4908,8 @@ window.__app = {
     add: queueAddFiles, load: queueLoad, clear: queueClear,
     render: renderQueue, next: queueNextPending,
     dropPairs: queueDropPairs, drop: queueDrop,
+    ingestPairs: queueIngestPairs, ingestFolder: queueIngestFolder,
+    resume: queueResume,
     get items() { return state.queue; },
   },
   libFitThumbs,
