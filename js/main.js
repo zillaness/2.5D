@@ -51,6 +51,13 @@ const $ = id => document.getElementById(id);
 const state = {
   image: null,
   fileName: 'object',
+  // Batch ingest: the photo queue. [{ id, name, path, file, status, thumb,
+  // picked }] with status 'pending' | 'traced' | 'skipped' | 'unsupported'.
+  // Session-only and never serialised: the Files are held by reference and the
+  // thumbs are 160 px data URLs, so a hundred phone photos costs tens of
+  // megabytes and only the photo being worked on is ever decoded full size.
+  queue: [],
+  queueCurrentId: null,   // the queue item loaded into Step 1, if any
   corners: null,          // [{x,y} x4] source-image px, TL TR BR BL
   // 'rect' (paper/card, perspective-corrected) | 'grid' (graph/dot paper,
   // perspective-corrected off counted squares) | 'coin' (scale only)
@@ -298,6 +305,10 @@ function goStep(n) {
   }
   if (n === 3) rebuildMesh(true);
   if (split) openLayoutPanel(); else $('layoutModal').hidden = true;
+  // The photo queue rides along on Steps 1 to 3 and collapses on Step 4, where
+  // the drawer, not the next photo, is what the user is looking at.
+  queueCollapsed = n === 4;
+  queueSyncVisible();
   updateStepButtons();
 }
 
@@ -512,6 +523,409 @@ function doRectify() {
   if (state.back.showing) exitUnderside(); else backUISync();
   return true;
 }
+
+// ---------- batch ingest: the photo queue ----------
+//
+// The queue sits beside the existing single-photo state rather than replacing
+// it. Loading a queue item goes through loadFile, the very same path the file
+// picker uses, so nothing downstream learns that a queue exists.
+//
+// Memory is the constraint that shapes this file. A drawer is a hundred phone
+// photos; decoding a hundred of those at full size would sink the tab. So
+// ingest is strictly sequential, each photo is decoded only long enough to
+// draw a 160 px thumbnail, and the only full-size decode alive at any moment
+// is state.image, the photo being worked on.
+
+const QUEUE_THUMB_PX = 160;
+const QUEUE_THUMB_QUALITY = 0.7;
+
+// HEIC is the one format a browser canvas still cannot open. Rather than
+// silently dropping half an iPhone folder, the photo joins the queue marked
+// unsupported and says what to do about it.
+const QUEUE_HEIC_MSG =
+  'HEIC photos cannot be opened by the browser — export them as JPEG first ' +
+  '(on iPhone: Settings › Camera › Formats › Most Compatible).';
+
+const QUEUE_BADGES = {
+  pending: { text: 'pending', color: 'var(--muted)' },
+  traced: { text: 'traced', color: 'var(--good)' },
+  skipped: { text: 'skipped', color: 'var(--warn)' },
+  unsupported: { text: 'unsupported', color: 'var(--warn)' },
+};
+
+// Ids are a plain counter, so the same ingest always yields the same ids and
+// the tests can name them. No clock and no randomness anywhere in here.
+let queueSeq = 0;
+// The strip's own collapsed flag. goStep drives it to true on Step 4; the
+// toggle button overrides it either way on any step.
+let queueCollapsed = false;
+
+function queuePathOf(item, file) {
+  if (item && typeof item === 'object' && typeof item.path === 'string' && item.path) return item.path;
+  return (file && (file.webkitRelativePath || file.name)) || '';
+}
+
+function queueBaseName(path) {
+  const last = String(path || '').split('/').pop() || '';
+  return last.replace(/\.[^.]+$/, '') || last;
+}
+
+function queueIsHeic(path, file) {
+  const type = (file && file.type) || '';
+  return /\.hei[cf]$/i.test(String(path || '')) || /^image\/hei[cf]/i.test(type);
+}
+
+// What counts as a photo for the queue. A folder of traces holds project JSON
+// and stray text files too; those are not photos and are silently passed over
+// here (the folder ingest hands them to the palette reader instead).
+function queueIsPhoto(path, file) {
+  const type = (file && file.type) || '';
+  if (type.startsWith('image/')) return true;
+  return /\.(jpe?g|png|webp|gif|bmp|avif|hei[cf])$/i.test(String(path || ''));
+}
+
+// One photo -> a 160 px JPEG data URL. The full-size decode lives only inside
+// this promise: the Image is dropped and its blob URL revoked before the
+// caller moves on to the next file, which is what keeps a hundred-photo ingest
+// inside a phone's memory budget.
+function queueMakeThumb(file) {
+  return new Promise(resolve => {
+    if (typeof Image === 'undefined' || typeof document === 'undefined') { resolve(null); return; }
+    let url = null;
+    try { url = URL.createObjectURL(file); } catch { resolve(null); return; }
+    const im = new Image();
+    const finish = out => {
+      im.onload = null;
+      im.onerror = null;
+      try { URL.revokeObjectURL(url); } catch { /* already gone */ }
+      resolve(out);
+    };
+    im.onload = () => {
+      let out = null;
+      try {
+        const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
+        if (iw > 0 && ih > 0) {
+          const s = Math.min(1, QUEUE_THUMB_PX / Math.max(iw, ih));
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(iw * s));
+          c.height = Math.max(1, Math.round(ih * s));
+          const ctx = c.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(im, 0, 0, c.width, c.height);
+            out = c.toDataURL('image/jpeg', QUEUE_THUMB_QUALITY);
+          }
+        }
+      } catch { out = null; }
+      finish(out);
+    };
+    im.onerror = () => finish(null);
+    im.src = url;
+  });
+}
+
+// files: a FileList, an array of File, or an array of { path, file } — the
+// same three shapes tracesFromFiles accepts, so a folder walk feeds this
+// unchanged. Returns the items actually appended, in order.
+async function queueAddFiles(files) {
+  const list = Array.from(files || []);
+  const added = [];
+  for (const it of list) {
+    const file = it && typeof it === 'object' && it.file ? it.file : it;
+    if (!file || typeof file.name !== 'string') continue;
+    const path = queuePathOf(it, file);
+    if (!queueIsPhoto(path, file)) continue;
+    // The same photo twice (a folder re-opened, a drop repeated) is one item.
+    if (state.queue.some(q => q.path === path)) continue;
+    const heic = queueIsHeic(path, file);
+    added.push({
+      id: 'q' + (++queueSeq),
+      name: queueBaseName(path),
+      path,
+      file,
+      status: heic ? 'unsupported' : 'pending',
+      thumb: null,
+      picked: !heic,
+    });
+  }
+  if (!added.length) return added;
+  state.queue.push(...added);
+  renderQueue();
+  // Sequential on purpose: one decode alive at a time.
+  for (const item of added) {
+    if (item.status === 'unsupported') continue;
+    item.thumb = await queueMakeThumb(item.file);
+    queueRefreshThumb(item);
+  }
+  renderQueue();
+  return added;
+}
+
+// The next photo the queue would hand to Step 1: the first ticked pending item
+// after the one loaded now, wrapping to the start. Step 3 of the plan (Next
+// and Skip) is the caller this exists for.
+function queueNextPending(afterId) {
+  const at = state.queue.findIndex(q => q.id === (afterId === undefined ? state.queueCurrentId : afterId));
+  const n = state.queue.length;
+  for (let k = 1; k <= n; k++) {
+    const item = state.queue[(at + k + n) % n];
+    if (item && item.picked && item.status === 'pending') return item;
+  }
+  return null;
+}
+
+// Clicking a thumbnail loads that photo. The load is the picker's own path, so
+// the corner auto-detect, the step buttons and the file label all follow.
+function queueLoad(item) {
+  if (!item) return false;
+  if (item.status === 'unsupported') { toast(QUEUE_HEIC_MSG); return false; }
+  state.queueCurrentId = item.id;
+  loadFile(item.file);
+  if (state.step !== 1) goStep(1);
+  renderQueue();
+  return true;
+}
+
+function queueClear() {
+  state.queue.length = 0;
+  state.queueCurrentId = null;
+  renderQueue();
+}
+
+// ---------- the strip ----------
+
+function queueCounts() {
+  let picked = 0, traced = 0, pending = 0;
+  for (const q of state.queue) {
+    if (q.picked) picked++;
+    if (q.status === 'traced') traced++;
+    if (q.status === 'pending') pending++;
+  }
+  return { total: state.queue.length, picked, traced, pending };
+}
+
+// Every item that could be traced. HEIC cannot, so Select all leaves it alone.
+function queueSelectable() {
+  return state.queue.filter(q => q.status !== 'unsupported');
+}
+
+function queueSyncHeader() {
+  const c = queueCounts();
+  const parts = [`${c.total} photo${c.total === 1 ? '' : 's'}`, `${c.picked} ticked`];
+  if (c.traced) parts.push(`${c.traced} traced`);
+  $('queueCount').textContent = parts.join(' · ');
+  const sel = queueSelectable();
+  const all = sel.length > 0 && sel.every(q => q.picked);
+  const btn = $('queueSelectAllBtn');
+  btn.textContent = all ? 'Select none' : 'Select all';
+  btn.disabled = sel.length === 0;
+  $('queueClearDoneBtn').disabled =
+    !state.queue.some(q => q.status === 'traced' || q.status === 'skipped');
+}
+
+// Visible on Steps 1 to 3, collapsed on Step 4, and gone entirely while the
+// queue is empty so the single-photo flow looks exactly as it did before.
+function queueSyncVisible() {
+  $('queueStrip').hidden = state.queue.length === 0;
+  $('queueBody').hidden = queueCollapsed;
+  $('queueToggle').textContent = queueCollapsed ? '▸' : '▾';
+}
+
+function queueTileFor(id) {
+  return $('queueList').querySelector(`.queue-item[data-id="${id}"]`);
+}
+
+// A thumbnail landing mid-ingest repaints one tile, not the whole strip, so a
+// folder of a hundred photos is not a hundred full rebuilds.
+function queueRefreshThumb(item) {
+  const tile = queueTileFor(item.id);
+  const img = tile && tile.querySelector('.queue-thumb');
+  if (img && item.thumb) img.src = item.thumb;
+}
+
+function renderQueue() {
+  const list = $('queueList');
+  list.textContent = '';
+  for (const item of state.queue) {
+    const badge = QUEUE_BADGES[item.status] || QUEUE_BADGES.pending;
+    const current = item.id === state.queueCurrentId;
+    const tile = document.createElement('div');
+    tile.className = 'queue-item';
+    tile.dataset.id = item.id;
+    tile.dataset.status = item.status;
+    tile.dataset.name = item.name;
+    tile.style.cssText =
+      'flex:0 0 auto; width:160px; padding:4px; border-radius:6px; cursor:pointer; ' +
+      `border:1px solid ${current ? 'var(--accent2)' : 'var(--border)'}`;
+    tile.title = item.path;
+
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex; align-items:center; gap:4px';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'queue-pick';
+    box.checked = !!item.picked;
+    box.disabled = item.status === 'unsupported';
+    box.title = 'Trace this photo';
+    box.addEventListener('click', e => e.stopPropagation());
+    box.addEventListener('change', () => { item.picked = box.checked; queueSyncHeader(); });
+    const name = document.createElement('span');
+    name.className = 'queue-name';
+    name.textContent = item.name;
+    name.style.cssText = 'flex:1; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap';
+    head.append(box, name);
+
+    const img = document.createElement('img');
+    img.className = 'queue-thumb';
+    img.alt = item.name;
+    img.style.cssText =
+      'display:block; width:100%; height:110px; object-fit:contain; margin:3px 0; ' +
+      'background:var(--bg2); border-radius:4px';
+    if (item.thumb) img.src = item.thumb;
+
+    const foot = document.createElement('span');
+    foot.className = 'queue-badge';
+    foot.textContent = badge.text;
+    foot.style.cssText = `font-size:10px; text-transform:uppercase; letter-spacing:1px; color:${badge.color}`;
+
+    tile.append(head, img, foot);
+    tile.addEventListener('click', () => queueLoad(item));
+    list.appendChild(tile);
+  }
+  queueSyncHeader();
+  queueSyncVisible();
+}
+
+// ---------- drag and drop of several files, or a folder ----------
+//
+// A drop hands over DataTransferItems, not a file list, when a folder is in
+// play. webkitGetAsEntry turns each into a FileSystemEntry tree, which walks
+// into the same { path, file } pairs folderAccess.js's walkFolder produces, so
+// a dropped folder and a picked folder are indistinguishable downstream.
+
+// The same caps folderAccess.js uses, for the same reason: a mis-dropped home
+// directory must not hang the tab.
+const QUEUE_MAX_DEPTH = 12;
+const QUEUE_MAX_FILES = 5000;
+
+// Must be called synchronously inside the drop event: the DataTransfer is
+// emptied as soon as the handler yields.
+function queueEntriesFrom(dt) {
+  const out = [];
+  const items = dt && dt.items ? Array.from(dt.items) : [];
+  for (const it of items) {
+    if (it.kind && it.kind !== 'file') continue;
+    const en = typeof it.webkitGetAsEntry === 'function' ? it.webkitGetAsEntry() : null;
+    if (en) out.push(en);
+  }
+  return out;
+}
+
+function queueEntryFile(entry) {
+  return new Promise(resolve => {
+    try { entry.file(f => resolve(f || null), () => resolve(null)); }
+    catch { resolve(null); }
+  });
+}
+
+// readEntries hands over one batch at a time and signals the end with an empty
+// batch, so a directory of hundreds needs the loop.
+function queueEntryChildren(dir) {
+  return new Promise(resolve => {
+    const all = [];
+    let reader = null;
+    try { reader = dir.createReader(); } catch { resolve(all); return; }
+    const step = () => reader.readEntries(batch => {
+      // An empty batch is the end of the directory. The file cap is the other
+      // way out, so a reader that never empties cannot spin forever.
+      if (!batch || !batch.length || all.length >= QUEUE_MAX_FILES) { resolve(all); return; }
+      all.push(...batch);
+      step();
+    }, () => resolve(all));
+    step();
+  });
+}
+
+async function queueWalkEntry(entry, prefix, out, depth = 0) {
+  if (!entry || out.length >= QUEUE_MAX_FILES) return out;
+  const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+  if (entry.isDirectory) {
+    if (depth >= QUEUE_MAX_DEPTH) return out;
+    const kids = await queueEntryChildren(entry);
+    // Sorted by name, so the same folder always ingests in the same order.
+    kids.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const k of kids) await queueWalkEntry(k, path, out, depth + 1);
+  } else {
+    const f = await queueEntryFile(entry);
+    if (f) out.push({ path, file: f });
+  }
+  return out;
+}
+
+// entries: what queueEntriesFrom read out of the drop. files: the plain
+// fallback for a browser without the entry API.
+async function queueDropPairs(entries, files) {
+  const pairs = [];
+  if (entries && entries.length) {
+    for (const en of entries) await queueWalkEntry(en, '', pairs);
+  }
+  if (!pairs.length) {
+    for (const f of Array.from(files || [])) {
+      pairs.push({ path: f.webkitRelativePath || f.name, file: f });
+    }
+  }
+  return pairs;
+}
+
+async function queueDrop(entries, files) {
+  const pairs = await queueDropPairs(entries, files);
+  const added = await queueAddFiles(pairs);
+  if (!added.length) { toast('No new photos in that drop.'); return added; }
+  toast(`${added.length} photo${added.length === 1 ? '' : 's'} added to the queue.`);
+  if (!state.image && !state.rect) {
+    const first = added.find(q => q.status === 'pending');
+    if (first) queueLoad(first);
+  }
+  return added;
+}
+
+// ---------- wiring: the strip and "Add photos…" ----------
+
+$('queueToggle').addEventListener('click', () => {
+  queueCollapsed = !queueCollapsed;
+  queueSyncVisible();
+});
+
+$('queueSelectAllBtn').addEventListener('click', () => {
+  const sel = queueSelectable();
+  const all = sel.length > 0 && sel.every(q => q.picked);
+  for (const q of sel) q.picked = !all;
+  renderQueue();
+});
+
+$('queueClearDoneBtn').addEventListener('click', () => {
+  const keep = state.queue.filter(q => q.status !== 'traced' && q.status !== 'skipped');
+  if (keep.length === state.queue.length) { toast('Nothing traced or skipped yet.'); return; }
+  if (!keep.some(q => q.id === state.queueCurrentId)) state.queueCurrentId = null;
+  state.queue.length = 0;
+  state.queue.push(...keep);
+  renderQueue();
+});
+
+$('queueAddPhotosBtn').addEventListener('click', () => $('queuePhotosInput').click());
+
+$('queuePhotosInput').addEventListener('change', async e => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  const added = await queueAddFiles(files);
+  if (!added.length) { toast('Those photos are already in the queue.'); return; }
+  toast(`${added.length} photo${added.length === 1 ? '' : 's'} added to the queue.`);
+  // A first ingest with nothing loaded yet goes straight to work.
+  if (!state.image && !state.rect) {
+    const first = added.find(q => q.status === 'pending');
+    if (first) queueLoad(first);
+  }
+});
 
 // ---------- step 2: segmentation + trace ----------
 
@@ -2760,9 +3174,22 @@ for (const ev of ['dragenter', 'dragover']) {
 for (const ev of ['dragleave', 'drop']) {
   stage1.addEventListener(ev, e => { e.preventDefault(); $('dropHint').classList.remove('dragover'); });
 }
+// One file dropped is the old behaviour: load it. Several files, or a folder,
+// go into the queue instead, which is what "bring all the tools in first"
+// means from the drop target.
 stage1.addEventListener('drop', e => {
-  const file = e.dataTransfer.files && e.dataTransfer.files[0];
-  if (file) loadFile(file);
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  // webkitGetAsEntry has to be read inside the event, before any await, or the
+  // DataTransfer is emptied out from under us.
+  const entries = queueEntriesFrom(dt);
+  const files = Array.from(dt.files || []);
+  const folders = entries.some(en => en && en.isDirectory);
+  if (!folders && files.length <= 1) {
+    if (files[0]) loadFile(files[0]);
+    return;
+  }
+  queueDrop(entries, files);
 });
 
 // ---------- wiring: step 2 ----------
@@ -4337,6 +4764,12 @@ window.__app = {
   },
   layoutExports: { stl: layoutStlExport, svg: layoutSvgExport },
   palette: { setFolder: laySetFolder, refresh: refreshLayPalette, get folder() { return layFolder; } },
+  queue: {
+    add: queueAddFiles, load: queueLoad, clear: queueClear,
+    render: renderQueue, next: queueNextPending,
+    dropPairs: queueDropPairs, drop: queueDrop,
+    get items() { return state.queue; },
+  },
   libFitThumbs,
   folderBackend: {
     use: layUseHandle, sync: syncFolderButtons,

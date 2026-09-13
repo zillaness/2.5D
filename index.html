@@ -37,6 +37,24 @@
 <main>
   <aside id="sidebar">
 
+    <!-- ============ Photo queue (batch ingest) ============ -->
+    <!-- Above Step 1, collapsible, and collapsed on Step 4 so a drawer's worth
+         of thumbnails never pushes the photo below the fold on a phone. -->
+    <section id="queueStrip" class="panel" hidden style="margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid var(--border)">
+      <div style="display:flex; align-items:center; gap:6px">
+        <button id="queueToggle" class="btn small" title="Collapse or expand the photo queue" style="padding:2px 7px">▾</button>
+        <b style="font-size:13px">Photo queue</b>
+        <span id="queueCount" class="hint" style="margin:0; flex:1; text-align:right"></span>
+      </div>
+      <div id="queueBody">
+        <div id="queueList" style="display:flex; gap:8px; overflow-x:auto; padding:8px 0"></div>
+        <div class="btn-row">
+          <button id="queueSelectAllBtn" class="btn small" style="flex:1" title="Tick every photo that can be traced">Select all</button>
+          <button id="queueClearDoneBtn" class="btn small" style="flex:1" title="Drop the traced and skipped photos from the queue">Clear done</button>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ Step 1 ============ -->
     <section id="panel1" class="panel">
       <h2>Photo &amp; reference</h2>
@@ -48,6 +66,11 @@
         <input type="file" id="fileInput" accept="image/*">
         <span id="fileLabelText">Choose photo…</span>
       </label>
+
+      <div class="btn-row">
+        <button id="queueAddPhotosBtn" class="btn small" style="flex:1" title="Add several photos to the queue and trace them one after another">➕ Add photos…</button>
+      </div>
+      <input type="file" id="queuePhotosInput" accept="image/*" multiple hidden>
 
       <div class="field">
         <label for="refType">Reference</label>

@@ -7193,6 +7193,298 @@ await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 300));
 });
 
+// ---------- batch ingest: the photo queue (Part A) ----------
+// Everything this lane adds lives in this one contiguous block, and it puts
+// the page back the way it found it before the blocks below run.
+
+const queueOne = await page.evaluate(async () => {
+  const app = window.__app;
+  // A photo that looks like the real thing: a white sheet on a dark ground with
+  // an object on it, so the corner auto-detect on load behaves as it would for
+  // a user rather than falling over on a flat colour.
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    const f = new File([blob], String(name).split('/').pop(), { type: 'image/jpeg' });
+    if (String(name).includes('/')) {
+      Object.defineProperty(f, 'webkitRelativePath', { value: name });
+    }
+    return f;
+  };
+  const dims = dataUrl => new Promise(r => {
+    if (!dataUrl) { r(null); return; }
+    const im = new Image();
+    im.onload = () => r({ w: im.naturalWidth, h: im.naturalHeight });
+    im.onerror = () => r(null);
+    im.src = dataUrl;
+  });
+
+  // Everything Step 1 owns, so the blocks after this one get it all back.
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    orient: app.state.paper.orientation,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+  };
+
+  app.queue.clear();
+  const files = [
+    await photoFile('hammer.jpg', 600, 450),
+    await photoFile('round rasp.jpg', 450, 600),
+    await photoFile('vise grips.jpg', 500, 500),
+  ];
+  const added = await app.queue.add(files);
+  const items = app.state.queue;
+
+  const strip = document.getElementById('queueStrip');
+  const body = document.getElementById('queueBody');
+  const tiles = () => Array.from(document.querySelectorAll('#queueList .queue-item'));
+
+  const ingest = {
+    addedN: added.length,
+    n: items.length,
+    names: items.map(q => q.name),
+    paths: items.map(q => q.path),
+    statuses: items.map(q => q.status),
+    picked: items.filter(q => q.picked).length,
+    ids: items.map(q => q.id),
+    uniqueIds: new Set(items.map(q => q.id)).size,
+    thumbs: items.filter(q => typeof q.thumb === 'string' && /^data:image\//.test(q.thumb)).length,
+    holdsFile: items.every(q => q.file instanceof File),
+    // Memory: a queue item never holds a decoded image, only a File handle and
+    // a small data URL.
+    noDecoded: items.every(q => !(q.thumb instanceof Image) && q.thumb !== app.state.image),
+  };
+  // 160 px thumbnails, per the PRD's memory constraint.
+  const sizes = await Promise.all(items.map(q => dims(q.thumb)));
+  ingest.thumbMax = Math.max(...sizes.map(d => (d ? Math.max(d.w, d.h) : 0)));
+  ingest.thumbBytes = items.reduce((a, q) => a + (q.thumb ? q.thumb.length : 0), 0);
+
+  // The strip: a tile per photo, each with a tick box and a status badge.
+  const strip1 = {
+    shown: !strip.hidden,
+    tiles: tiles().length,
+    boxes: document.querySelectorAll('#queueList .queue-pick').length,
+    checked: tiles().filter(t => t.querySelector('.queue-pick').checked).length,
+    badges: tiles().map(t => t.querySelector('.queue-badge').textContent),
+    labels: tiles().map(t => t.querySelector('.queue-name').textContent),
+    count: document.getElementById('queueCount').textContent,
+  };
+
+  // Re-adding the same three photos is a no-op: paths are the identity.
+  const again = await app.queue.add(files);
+  const dedupe = { added: again.length, n: app.state.queue.length };
+
+  // HEIC joins the queue but cannot be traced: marked unsupported, unticked,
+  // and its box disabled so Select all cannot arm it.
+  const heic = new File(['not really an image'], 'clamp.heic', { type: '' });
+  await app.queue.add([heic]);
+  const heicItem = app.state.queue.find(q => q.name === 'clamp');
+  const unsupported = {
+    status: heicItem && heicItem.status,
+    picked: heicItem && heicItem.picked,
+    boxDisabled: !!document.querySelector('#queueList .queue-item[data-status="unsupported"] .queue-pick').disabled,
+  };
+
+  // Select all is a toggle, and it never arms the unsupported photo.
+  const selBtn = document.getElementById('queueSelectAllBtn');
+  const selectAll = { startLabel: selBtn.textContent };
+  selBtn.click();                       // all three already ticked -> clear
+  selectAll.afterClear = app.state.queue.filter(q => q.picked).length;
+  selectAll.clearLabel = selBtn.textContent;
+  selBtn.click();                       // -> tick every traceable photo
+  selectAll.afterAll = app.state.queue.filter(q => q.picked).length;
+  selectAll.heicStillOff = !app.state.queue.find(q => q.name === 'clamp').picked;
+
+  // Untick one by hand through its own box, the way a user chooses.
+  const hammer = tiles().find(t => t.dataset.name === 'hammer');
+  const box = hammer.querySelector('.queue-pick');
+  box.checked = false;
+  box.dispatchEvent(new Event('change', { bubbles: true }));
+  selectAll.afterHandUntick = app.state.queue.filter(q => q.picked).length;
+  // The walk starts at the first ticked pending photo, so an unticked one is
+  // passed over rather than traced.
+  selectAll.nextSkipsUnticked = !!app.queue.next(null) &&
+    app.queue.next(null).name === 'round rasp';
+
+  // Clear done drops the traced and the skipped and keeps the rest.
+  app.state.queue[0].status = 'traced';
+  app.state.queue[1].status = 'skipped';
+  app.queue.render();
+  const doneBadges = tiles().map(t => t.dataset.status);
+  document.getElementById('queueClearDoneBtn').click();
+  const cleared = {
+    badges: doneBadges,
+    left: app.state.queue.map(q => q.name),
+    tiles: tiles().length,
+  };
+
+  // Clicking a thumbnail loads that photo into Step 1.
+  app.goStep(3);
+  const vise = tiles().find(t => t.dataset.name === 'vise grips');
+  vise.click();
+  await new Promise(r => setTimeout(r, 600));
+  const loaded = {
+    step: app.state.step,
+    fileName: app.state.fileName,
+    label: document.getElementById('fileLabelText').textContent,
+    currentId: app.state.queueCurrentId,
+    marked: app.state.queueCurrentId ===
+      app.state.queue.find(q => q.name === 'vise grips').id,
+    swapped: app.state.image !== before.image,
+    wide: app.state.image ? app.state.image.naturalWidth : 0,
+  };
+
+  // Visible on Steps 1 to 3, collapsed on Step 4.
+  const visible = {};
+  app.goStep(1); visible.s1 = { shown: !strip.hidden, open: !body.hidden };
+  app.goStep(3); visible.s3 = { shown: !strip.hidden, open: !body.hidden };
+  app.goStep(4);
+  await new Promise(r => setTimeout(r, 200));
+  visible.s4 = { shown: !strip.hidden, open: !body.hidden };
+  document.getElementById('queueToggle').click();   // the toggle still wins
+  visible.s4open = !body.hidden;
+  app.goStep(3);
+  visible.backTo3 = !body.hidden;
+
+  // Drag and drop: several loose files, and a folder, both append. The folder
+  // arrives as a FileSystemEntry tree, exactly as a real drop delivers it.
+  app.queue.clear();
+  const fileEntry = (name, file) => ({
+    isFile: true, isDirectory: false, name,
+    file: cb => cb(file),
+  });
+  const dirEntry = (name, kids) => ({
+    isFile: false, isDirectory: true, name,
+    createReader: () => {
+      let sent = false;
+      // readEntries signals the end of the directory with an empty batch.
+      return { readEntries: cb => { const batch = sent ? [] : kids; sent = true; cb(batch); } };
+    },
+  });
+  const loose = [await photoFile('awl.jpg', 300, 240), await photoFile('file.jpg', 240, 300)];
+  await app.queue.drop([], loose);
+  const dropLoose = app.state.queue.map(q => q.path);
+
+  const tree = dirEntry('drawer', [
+    fileEntry('spanner.jpg', await photoFile('spanner.jpg', 320, 240)),
+    fileEntry('readme.txt', new File(['hi'], 'readme.txt', { type: 'text/plain' })),
+    dirEntry('deep', [fileEntry('chisel.jpg', await photoFile('chisel.jpg', 260, 200))]),
+  ]);
+  const pairs = await app.queue.dropPairs([tree], []);
+  await app.queue.drop([tree], []);
+  const dropFolder = {
+    pairs: pairs.map(p => p.path),
+    queued: app.state.queue.map(q => q.path),
+  };
+
+  // Put Step 1 and the queue back for the blocks below.
+  app.queue.clear();
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  app.state.paper.orientation = before.orient;
+  document.getElementById('paperOrient').value = before.orient;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await new Promise(r => setTimeout(r, 300));
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    stripHidden: strip.hidden,
+    queue: app.state.queue.length,
+  };
+
+  return { ingest, strip1, dedupe, unsupported, selectAll, cleared, loaded, visible, dropLoose, dropFolder, restored };
+});
+
+check('three photos ingest as three pending queue items named from their files',
+  queueOne.ingest.addedN === 3 && queueOne.ingest.n === 3 &&
+  JSON.stringify(queueOne.ingest.names) === JSON.stringify(['hammer', 'round rasp', 'vise grips']) &&
+  JSON.stringify(queueOne.ingest.paths) === JSON.stringify(['hammer.jpg', 'round rasp.jpg', 'vise grips.jpg']) &&
+  queueOne.ingest.statuses.every(s => s === 'pending') && queueOne.ingest.picked === 3 &&
+  queueOne.ingest.uniqueIds === 3 && queueOne.ingest.holdsFile,
+  `${queueOne.ingest.n} items ${JSON.stringify(queueOne.ingest.names)} as ${JSON.stringify(queueOne.ingest.statuses)}, ids ${JSON.stringify(queueOne.ingest.ids)}`);
+
+check('every queue item carries a 160 px thumbnail and no decoded photo',
+  queueOne.ingest.thumbs === 3 && queueOne.ingest.thumbMax > 0 &&
+  queueOne.ingest.thumbMax <= 160 && queueOne.ingest.noDecoded &&
+  queueOne.ingest.thumbBytes < 3 * 40000,
+  `${queueOne.ingest.thumbs} thumbs, longest side ${queueOne.ingest.thumbMax} px, ${queueOne.ingest.thumbBytes} data-URL bytes`);
+
+check('the strip shows a ticked tile per photo with a status badge and a count',
+  queueOne.strip1.shown && queueOne.strip1.tiles === 3 && queueOne.strip1.boxes === 3 &&
+  queueOne.strip1.checked === 3 &&
+  queueOne.strip1.badges.every(b => b === 'pending') &&
+  JSON.stringify(queueOne.strip1.labels) === JSON.stringify(['hammer', 'round rasp', 'vise grips']) &&
+  /3 photos/.test(queueOne.strip1.count) && /3 ticked/.test(queueOne.strip1.count),
+  `${queueOne.strip1.tiles} tiles, ${queueOne.strip1.checked} ticked, count “${queueOne.strip1.count}”`);
+
+check('the same photo added twice is one queue item',
+  queueOne.dedupe.added === 0 && queueOne.dedupe.n === 3,
+  `re-add appended ${queueOne.dedupe.added}, queue still ${queueOne.dedupe.n}`);
+
+check('a HEIC photo is queued as unsupported and cannot be ticked',
+  queueOne.unsupported.status === 'unsupported' && queueOne.unsupported.picked === false &&
+  queueOne.unsupported.boxDisabled,
+  `status ${queueOne.unsupported.status}, picked ${queueOne.unsupported.picked}, box disabled ${queueOne.unsupported.boxDisabled}`);
+
+check('Select all toggles every traceable photo and leaves the unsupported one alone',
+  queueOne.selectAll.startLabel === 'Select none' && queueOne.selectAll.afterClear === 0 &&
+  queueOne.selectAll.clearLabel === 'Select all' && queueOne.selectAll.afterAll === 3 &&
+  queueOne.selectAll.heicStillOff && queueOne.selectAll.afterHandUntick === 2 &&
+  queueOne.selectAll.nextSkipsUnticked,
+  `“${queueOne.selectAll.startLabel}” → ${queueOne.selectAll.afterClear} ticked → ${queueOne.selectAll.afterAll} ticked, ` +
+  `hand-untick leaves ${queueOne.selectAll.afterHandUntick}`);
+
+check('Clear done drops the traced and skipped photos and keeps the rest',
+  JSON.stringify(queueOne.cleared.badges) === JSON.stringify(['traced', 'skipped', 'pending', 'unsupported']) &&
+  JSON.stringify(queueOne.cleared.left) === JSON.stringify(['vise grips', 'clamp']) &&
+  queueOne.cleared.tiles === 2,
+  `${JSON.stringify(queueOne.cleared.badges)} → ${JSON.stringify(queueOne.cleared.left)}`);
+
+check('clicking a queue thumbnail loads that photo into Step 1',
+  queueOne.loaded.step === 1 && queueOne.loaded.fileName === 'vise grips' &&
+  queueOne.loaded.label === 'vise grips.jpg' && queueOne.loaded.swapped &&
+  queueOne.loaded.wide === 500 && queueOne.loaded.marked &&
+  typeof queueOne.loaded.currentId === 'string',
+  `step ${queueOne.loaded.step}, fileName “${queueOne.loaded.fileName}”, ${queueOne.loaded.wide} px wide, current ${queueOne.loaded.currentId}`);
+
+check('the queue strip rides Steps 1 to 3 and collapses on Step 4',
+  queueOne.visible.s1.shown && queueOne.visible.s1.open &&
+  queueOne.visible.s3.shown && queueOne.visible.s3.open &&
+  queueOne.visible.s4.shown && !queueOne.visible.s4.open &&
+  queueOne.visible.s4open && queueOne.visible.backTo3,
+  `step 1 open ${queueOne.visible.s1.open}, step 3 open ${queueOne.visible.s3.open}, ` +
+  `step 4 open ${queueOne.visible.s4.open}, re-openable ${queueOne.visible.s4open}`);
+
+check('dropping several photos, or a folder of them, appends to the queue',
+  JSON.stringify(queueOne.dropLoose) === JSON.stringify(['awl.jpg', 'file.jpg']) &&
+  JSON.stringify(queueOne.dropFolder.pairs) ===
+    JSON.stringify(['drawer/deep/chisel.jpg', 'drawer/readme.txt', 'drawer/spanner.jpg']) &&
+  JSON.stringify(queueOne.dropFolder.queued) ===
+    JSON.stringify(['awl.jpg', 'file.jpg', 'drawer/deep/chisel.jpg', 'drawer/spanner.jpg']),
+  `loose ${JSON.stringify(queueOne.dropLoose)}, folder pairs ${JSON.stringify(queueOne.dropFolder.pairs)}, ` +
+  `queued ${JSON.stringify(queueOne.dropFolder.queued)}`);
+
+check('the queue block leaves Step 1 and the strip as it found them',
+  queueOne.restored.image && queueOne.restored.queue === 0 &&
+  queueOne.restored.stripHidden && queueOne.restored.step === 3,
+  `step ${queueOne.restored.step}, photo restored ${queueOne.restored.image}, strip hidden ${queueOne.restored.stripHidden}`);
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {
