@@ -2285,7 +2285,11 @@ const labelPlace = await page.evaluate(async () => {
   // Drag the first label up and to the left, well clear of every pocket.
   const moveKind = drag({ x: auto.a.x, y: auto.a.y }, { x: 40, y: 20 });
   const moved = { a: at(0), labelAt: structuredClone(st.layout.items[0].labelAt),
-    sel: ed.sel, selLabel: ed.selLabel, panel: !$('laySelPanel').hidden };
+    sel: ed.sel, selLabel: ed.selLabel, panel: !$('laySelPanel').hidden,
+    // Read straight after the gesture, with no hand-run resync: the Auto
+    // button is what undoes the drag, so it has to be live the moment there
+    // is something to undo.
+    autoLive: !$('laySelLabelAuto').disabled };
 
   // A rebuild recomputes every pocket from scratch: manual position wins.
   app.refreshLayoutEditor();
@@ -2353,8 +2357,82 @@ const labelPlace = await page.evaluate(async () => {
   drag(eh, { x: st.layout.labels.extra[0].x + 14, y: st.layout.labels.extra[0].y });
   const extraTurned = st.layout.labels.extra[0].rot;
 
+  // A label's box is the box of the whole string, so it is routinely wider
+  // than the pocket it names and, on a layered build, sits right on top of
+  // it. The tool underneath still takes the press: dragging is the only way
+  // to move a tool, so a label that wins it strands the tool for good.
+  st.layout.labels.extra = [];
+  const constrBefore = st.layout.construction;
+  const contBefore = structuredClone(st.layout.container);
+  // A Gridfinity container is a printed bin whatever the select says, so the
+  // base-label case needs a plain rectangular drawer under it.
+  st.layout.container = { ...st.layout.container, type: 'rect', w: 220, h: 140, r: 6 };
+  st.layout.construction = 'layered';
+  st.layout.labels.onBase = true;
+  st.layout.items = [
+    { name: 'TORX T25 DRIVER', outer: rect(20, 8), holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 60, y: 45 },
+  ];
+  ed.sel = -1; ed.selLabel = -1;
+  app.refreshLayoutEditor();
+  const cover = { inside: !!ed.labels[0].inside, box: { ...ed.labels[0].bounds } };
+  // The label really is in the way: its box holds the point pressed below.
+  cover.covers = ed._hitLabel({ x: 60, y: 45 }) === 0;
+  cover.kind = drag({ x: 60, y: 45 }, { x: 100, y: 80 });
+  cover.item = { x: st.layout.items[0].x, y: st.layout.items[0].y };
+  cover.auto = ed.labels[0].auto;
+
+  // Same rule in a plain pocket build, where a long label lies across the NEXT
+  // tool along: pressing that tool moves that tool, and does not quietly pin
+  // its neighbour's label to a manual position behind the user's back.
+  st.layout.construction = 'pocket';
+  st.layout.items = [
+    { name: 'ADJUSTABLE', outer: rect(40, 12), holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 80, y: 40 },
+    { name: 'B', outer: rect(50, 20), holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 80, y: 58 },
+  ];
+  ed.sel = -1; ed.selLabel = -1;
+  app.refreshLayoutEditor();
+  const band = { ...ed.labels[0].bounds };
+  const neighbour = { band, onB: band.minX < 80 && band.maxX > 80 && band.minY > 48 && band.maxY < 68 };
+  neighbour.kind = drag({ x: 80, y: 52 }, { x: 110, y: 52 });
+  neighbour.b = { x: st.layout.items[1].x, y: st.layout.items[1].y };
+  neighbour.aLabelAt = st.layout.items[0].labelAt;
+  neighbour.sel = ed.sel;
+
+  // A tap on a label is not a drag. Pens and touchscreens emit a pointermove
+  // on essentially every tap, and a label that recorded one would leave
+  // auto-placement with nothing on screen moving to say so.
+  st.layout.items = [
+    { name: '13 mm', outer: rect(50, 16), holes: [], circles: [], thickness: 5, depth: null, rot: 0, x: 60, y: 45 },
+  ];
+  ed.sel = -1; ed.selLabel = -1;
+  app.refreshLayoutEditor();
+  const tapPt = client({ x: ed.labels[0].at.x, y: ed.labels[0].at.y });
+  ev('pointerdown', tapPt); ev('pointermove', tapPt); ev('pointerup', tapPt);
+  const tap = { labelAt: st.layout.items[0].labelAt, auto: ed.labels[0].auto,
+    sel: ed.sel, selLabel: ed.selLabel, dead: $('laySelLabelAuto').disabled };
+
+  // Labels ride along live while a tool is dragged, and that has to cost a
+  // pointermove's worth of work: eight labelled tools, ten moves. Re-tracing
+  // every glyph per move put this in the seconds per move.
+  st.layout.items = Array.from({ length: 8 }, (_, i) => ({
+    name: '13 mm', outer: rect(50, 16), holes: [], circles: [], thickness: 5,
+    depth: null, rot: 0, x: 60 + (i % 2) * 80, y: 30 + Math.floor(i / 2) * 40,
+  }));
+  ed.sel = -1; ed.selLabel = -1;
+  app.refreshLayoutEditor();
+  ev('pointerdown', client({ x: 60, y: 30 }));
+  const live = { kind: ed._drag && ed._drag.kind, n: ed.labels.length };
+  const t0 = performance.now();
+  for (let i = 1; i <= 10; i++) ev('pointermove', client({ x: 60 + i, y: 30 + i }));
+  live.perMove = (performance.now() - t0) / 10;
+  live.at = { x: ed.labels[0].at.x, y: ed.labels[0].at.y };
+  ev('pointerup', client({ x: 70, y: 40 }));
+  live.item = { x: st.layout.items[0].x, y: st.layout.items[0].y };
+
   // Put the page back: no items, no labels, nothing selected, same step.
   cv.setPointerCapture = cap; cv.releasePointerCapture = rel;
+  st.layout.construction = constrBefore;
+  st.layout.container = contBefore;
   st.layout.items = before.items;
   st.layout.labels = before.labels;
   ed.sel = -1; ed.selLabel = -1; ed.bedSel = false;
@@ -2366,7 +2444,7 @@ const labelPlace = await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 150));
   return { auto, moveKind, moved, rebuilt, relaid, rotKind, turned, snapped, followed,
     clash, resetLive, reset, extraIdx, extraSrc, extraMoved, extraTurned, cleared,
-    step: st.step, stepBefore: before.step };
+    cover, neighbour, tap, live, step: st.step, stepBefore: before.step };
 });
 
 console.log('\nLabelling step 6 — drag and rotate a placed label');
@@ -2419,6 +2497,34 @@ check('a free-floating drawer label drags and turns into the layout’s own arra
   near(labelPlace.extraMoved.y, 132, 1.5) && near(labelPlace.extraTurned, -90, 2),
   `moved to ${labelPlace.extraMoved.x.toFixed(1)}, ${labelPlace.extraMoved.y.toFixed(1)}, ` +
   `turned ${labelPlace.extraTurned}°`);
+check('a label covering its own tool on a layered build still leaves the tool draggable',
+  labelPlace.cover.inside && labelPlace.cover.covers && labelPlace.cover.kind === 'move' &&
+  near(labelPlace.cover.item.x, 100, 1.5) && near(labelPlace.cover.item.y, 80, 1.5) &&
+  labelPlace.cover.auto === true,
+  `kind ${labelPlace.cover.kind}, tool at ${labelPlace.cover.item.x.toFixed(1)}, ` +
+  `${labelPlace.cover.item.y.toFixed(1)}, inside ${labelPlace.cover.inside}, ` +
+  `covers ${labelPlace.cover.covers}, auto ${labelPlace.cover.auto}, box ` +
+  `${labelPlace.cover.box.minX.toFixed(1)}..${labelPlace.cover.box.maxX.toFixed(1)} x ` +
+  `${labelPlace.cover.box.minY.toFixed(1)}..${labelPlace.cover.box.maxY.toFixed(1)}`);
+check('a neighbour’s label lying across a tool does not steal that tool’s press',
+  labelPlace.neighbour.onB && labelPlace.neighbour.kind === 'move' &&
+  near(labelPlace.neighbour.b.x, 110, 1.5) && near(labelPlace.neighbour.b.y, 58, 1e-6) &&
+  labelPlace.neighbour.aLabelAt === undefined && labelPlace.neighbour.sel === 1,
+  `kind ${labelPlace.neighbour.kind}, B at ${labelPlace.neighbour.b.x.toFixed(1)}, ` +
+  `A label ${JSON.stringify(labelPlace.neighbour.aLabelAt)}, sel ${labelPlace.neighbour.sel}`);
+check('a tap on a label selects its tool without pinning the label off auto-placement',
+  labelPlace.tap.labelAt === undefined && labelPlace.tap.auto === true &&
+  labelPlace.tap.sel === 0 && labelPlace.tap.dead,
+  `labelAt ${JSON.stringify(labelPlace.tap.labelAt)}, auto ${labelPlace.tap.auto}, ` +
+  `sel ${labelPlace.tap.sel}, Auto dead ${labelPlace.tap.dead}`);
+check('Auto goes live the moment a drag gives it something to undo',
+  labelPlace.moved.autoLive, `live ${labelPlace.moved.autoLive}`);
+check('dragging a tool with eight labels on keeps the labels live and the move cheap',
+  labelPlace.live.kind === 'move' && labelPlace.live.n === 8 &&
+  labelPlace.live.perMove < 150 && near(labelPlace.live.at.x, 70, 1.5) &&
+  near(labelPlace.live.item.x, 70, 1.5) && near(labelPlace.live.item.y, 40, 1.5),
+  `${labelPlace.live.n} labels, ${labelPlace.live.perMove.toFixed(1)} ms per pointermove, ` +
+  `label at ${labelPlace.live.at.x.toFixed(1)}, tool at ${labelPlace.live.item.x.toFixed(1)}`);
 check('the block leaves an unlabelled, empty layout behind',
   labelPlace.cleared.labels === 0 && labelPlace.cleared.items === 0 &&
   labelPlace.cleared.enabled === false && labelPlace.cleared.readout === '' &&

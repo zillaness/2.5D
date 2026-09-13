@@ -1289,7 +1289,11 @@ $('exportFoamSvgBtn').addEventListener('click', () => {
 
 const layoutEditor = new LayoutEditor($('layoutCanvas'), {
   onSelect: i => syncLaySelPanel(i),
-  onChange: final => { if (final) updateLayoutInfo(); },
+  // A finished gesture can have changed what the selection panel reports:
+  // dragging or turning a label writes item.labelAt / item.labelRot, which is
+  // what the Auto button undoes, and onSelect never fires when the selection
+  // did not change. So the panel is resynced from the item as it now stands.
+  onChange: final => { if (final) { updateLayoutInfo(); syncLaySelPanel(layoutEditor.sel); } },
 });
 
 // The container loop in layout mm space (origin margin 5, like the library).

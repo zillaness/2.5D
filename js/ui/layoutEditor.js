@@ -202,9 +202,9 @@ export class LayoutEditor {
           rot0: L.src === 'item'
             ? (Number.isFinite(target.labelRot) ? target.labelRot : 0)
             : (target.rot || 0),
-          a0: Math.atan2(mm.y - L.at.y, mm.x - L.at.x) }
+          a0: Math.atan2(mm.y - L.at.y, mm.x - L.at.x), x0: mm.x, y0: mm.y }
       : { kind: 'labelMove', src: L.src, target,
-          gx: L.at.x - mm.x, gy: L.at.y - mm.y };
+          gx: L.at.x - mm.x, gy: L.at.y - mm.y, x0: mm.x, y0: mm.y };
     this.canvas.setPointerCapture(e.pointerId);
     if (L.src === 'item' && this.sel !== L.i) {
       this.sel = L.i;
@@ -219,6 +219,16 @@ export class LayoutEditor {
   // "Auto-placement is a starting point, never a lock").
   _labelMove(mm, shift) {
     const d = this._drag;
+    // A press that has not travelled yet writes nothing. Pens and touchscreens
+    // emit a pointermove on essentially every tap, and without this a tap
+    // meant to select the tool would quietly store the label's own auto
+    // position as a manual one and drop it out of auto-placement for good,
+    // with nothing on screen moving to say so.
+    if (!d.moved) {
+      const slop = 2 / this.view.scale; // 2 screen px, in mm
+      if (Math.hypot(mm.x - d.x0, mm.y - d.y0) <= slop) return;
+      d.moved = true;
+    }
     if (d.kind === 'labelMove') {
       const at = { x: mm.x + d.gx, y: mm.y + d.gy };
       if (d.src === 'item') d.target.labelAt = { dx: at.x - d.target.x, dy: at.y - d.target.y };
@@ -382,18 +392,23 @@ export class LayoutEditor {
         return;
       }
     }
-    // A label's own glyphs. Checked before the tools because a label is a
-    // small box sitting in the gap beside its pocket (or, on a layered build,
-    // inside it), and it is the thing the pointer is on.
-    const labelHit = this._hitLabel(mm);
-    if (labelHit >= 0 && this._labelDown(e, mm, labelHit, 'move')) return;
-    // Topmost item under the pointer, found before the plate is offered the
-    // press. Once a layout has to be tiled the plate's edge necessarily runs
-    // through the drawer, and a tool sitting on a seam has to stay selectable
-    // and draggable; the plate keeps every other point of its edge.
+    // Topmost item under the pointer, found before the plate OR a label is
+    // offered the press. Once a layout has to be tiled the plate's edge
+    // necessarily runs through the drawer, and a tool sitting on a seam has to
+    // stay selectable and draggable; the plate keeps every other point of its
+    // edge. The same rule settles labels: a label's box is the box of the
+    // whole string, which is routinely wider than the pocket it names and, on
+    // a layered build, sits right on top of it, so letting it take the press
+    // would leave the tool underneath impossible to drag.
     let hit = -1;
     for (let i = this.items.length - 1; i >= 0; i--) {
       if (pointInPolygon(mm, placeLoop(this.items[i].outer, this.items[i]))) { hit = i; break; }
+    }
+    // A label's own glyphs, wherever no tool is under the pointer. Labels are
+    // auto-placed in the gap beside their pocket, so this is where they are.
+    if (hit < 0) {
+      const labelHit = this._hitLabel(mm);
+      if (labelHit >= 0 && this._labelDown(e, mm, labelHit, 'move')) return;
     }
     // The plate outline, grabbed anywhere along its edge that is not a tool.
     const bl = hit < 0 ? this.bedLoop() : null;

@@ -532,7 +532,11 @@ and it tracks that pocket as the tool moves. Auto-placement is only a starting
 point: drag the letters in the layout editor to put a label where you want it.
 A round handle sits below the selected label, and dragging that turns it, with
 Shift snapping the angle to 15 degree steps. Dragging a label also selects the
-tool it names, so the panel on the left shows whose label is moving.
+tool it names, so the panel on the left shows whose label is moving. A press
+that lands on a tool always moves that tool, because dragging is the only way
+to place one, so grab a label where it lies clear of the tools. On a layered
+build, where labels sit inside their own pockets, that means the part of the
+label sticking out past the pocket.
 
 From then on your position wins. It is kept as an offset from the tool, so the
 label rides along when the tool is moved or turned, and it survives a rebuild
