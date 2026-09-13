@@ -10,8 +10,17 @@ ai_update: Update last_updated and version. Rename file to match. Append changel
 
 # PRD: Batch ingest, snap to grid, and the nesting lane
 
-Status: **DRAFT, awaiting sign-off. Nothing here is built.** · 2026-09-12 ·
+Status: **SIGNED OFF by Sam, 2026-09-13. Build in progress.** · 2026-09-12 ·
 target branch `claude/2.5d-photo-stl-s3-y0oodn`
+
+Sam signed off Parts A and B and the Part C lane plan as written, with no
+overrides. Every open question takes its stated recommendation, including Part
+A open question 1 (auto-advance after save), the only one that changes what
+gets built.
+
+Prerequisite met on 2026-09-13: the first session merged Parts A, B and D of
+selection_and_organize_prd_v1.2.md and deployed them as v1.24.0, so Step 4
+Organize and the folder backends are on this branch.
 
 This is the second half of the work that `docs/selection_and_organize_prd_v1.2.md`
 started. That document was signed off on 2026-09-10 and is being built by
