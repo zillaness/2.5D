@@ -4712,6 +4712,165 @@ check('every generated drawer nests to the identical answer on a second run',
   nestProp.badRepeats.length === 0,
   nestProp.badRepeats.length ? `sets ${nestProp.badRepeats.join(',')}` : `${nestProp.sets} drawers`);
 
+// Step 3 of the same PRD: minimum web and finger-notch reach. These are the
+// two placement constraints layoutConflicts cannot see. It only knows whether
+// two pockets overlap, so it says nothing about HOW MUCH foam is left between
+// them and nothing at all about whether a finger notch still opens onto clear
+// foam. So this block measures the geometry independently of the nester: the
+// true distance between pocket outlines, segment by segment, and the distance
+// from each resolved notch centre outward to every other pocket and to the
+// border inset.
+const nestWeb = await page.evaluate(async () => {
+  const { nestLayout, applyNest, layoutPockets, layoutConflicts, offsetLoop, roundedRect } =
+    await import('/js/holders.js');
+  const P = (x, y) => ({ x, y });
+  const rect = (w, h) => [P(0, 0), P(w, 0), P(w, h), P(0, h)];
+  const ell = (w, h, t) => [P(0, 0), P(w, 0), P(w, t), P(t, t), P(t, h), P(0, h)];
+  // A three-pronged blade. Sharp convex corners and a deep bite are the worst
+  // case for a web enforced by offsetting, because the round joins there turn
+  // into long arcs.
+  const spike = (w, h) => [P(0, h / 2), P(w * 0.3, 0), P(w, h * 0.12),
+    P(w * 0.45, h * 0.5), P(w, h * 0.88), P(w * 0.3, h)];
+  const mk = (name, outer, extra = {}) => ({
+    name, outer, holes: [], circles: [], x: 0, y: 0, rot: 0, depth: null,
+    thickness: 6, ...extra,
+  });
+  const drawer = (w, h) => roundedRect(w / 2, h / 2, w, h, 4);
+  // Point to segment, and loop to loop / point to loop on top of it. Nested
+  // pockets are disjoint whenever the nester did its job, so the minimum over
+  // the vertex-to-segment pairs is the exact distance between two outlines.
+  const ptSeg = (p, a, b) => {
+    const dx = b.x - a.x, dy = b.y - a.y, L = dx * dx + dy * dy;
+    let t = L ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  };
+  const ptLoop = (p, L) => {
+    let m = Infinity;
+    for (let i = 0; i < L.length; i++) m = Math.min(m, ptSeg(p, L[i], L[(i + 1) % L.length]));
+    return m;
+  };
+  const loopDist = (A, B) => {
+    let m = Infinity;
+    for (let i = 0; i < A.length; i++) {
+      const a = A[i], b = A[(i + 1) % A.length];
+      for (let j = 0; j < B.length; j++) {
+        const c = B[j], d = B[(j + 1) % B.length];
+        m = Math.min(m, ptSeg(a, c, d), ptSeg(b, c, d), ptSeg(c, a, b), ptSeg(d, a, b));
+      }
+    }
+    return m;
+  };
+
+  // ---- minimum web, measured rather than taken on trust ----
+  const webItems = [mk('r1', rect(60, 34)), mk('r2', rect(54, 38)),
+    mk('L1', ell(66, 44, 16)), mk('L2', ell(58, 40, 14)),
+    mk('s1', spike(70, 40)), mk('s2', spike(56, 34)), mk('r3', rect(40, 40))];
+  const webC = drawer(300, 220);
+  const webInner = offsetLoop(webC, -5)[0];
+  const webRow = (minWeb) => {
+    const o = { minWeb, border: 5, clearance: 0.5, rotationStep: 15, notchClear: 0 };
+    const res = nestLayout(webC, webItems, o);
+    const moved = applyNest(webItems, res);
+    const geo = layoutPockets(res.placements.map(p => moved[p.i]), 0.5);
+    const cf = layoutConflicts(webC, geo, 5);
+    let pair = Infinity, edge = Infinity;
+    for (let i = 0; i < geo.length; i++) {
+      edge = Math.min(edge, loopDist(geo[i].pocket, webInner));
+      for (let j = i + 1; j < geo.length; j++) {
+        pair = Math.min(pair, loopDist(geo[i].pocket, geo[j].pocket));
+      }
+    }
+    return { minWeb, n: res.placements.length, pair, edge,
+      clash: cf.collisions.size + cf.escaped.size };
+  };
+  const webs = [2, 4, 8, 12].map(webRow);
+
+  // ---- finger-notch reach ----
+  // A plate whose notch opens to the RIGHT, so the next tool down lands
+  // straight across it under top-left gravity. That is the adversarial case
+  // the PRD names: a notch sealed not by a wall but by a LATER placement.
+  const plate = mk('notched plate', rect(80, 60), { notch: { dia: 10, x: 80, y: 30 } });
+  const slab = mk('slab', rect(70, 50));
+  // And one whose notch opens UPWARD, straight into the border inset the
+  // moment top-left gravity pushes it against the back of the drawer.
+  const wallPlate = mk('wall plate', rect(60, 40), { notch: { dia: 10, x: 30, y: 0 } });
+  const NOTCH_CLEAR = 15;
+  const reachRun = (items, w, h, notchPolicy) => {
+    const C = drawer(w, h);
+    const o = { minWeb: 4, border: 5, clearance: 0.5, rotationStep: 90,
+      notchClear: NOTCH_CLEAR, notchPolicy };
+    const res = nestLayout(C, items, o);
+    const moved = applyNest(items, res);
+    const geo = layoutPockets(res.placements.map(p => moved[p.i]), 0.5);
+    const inner = offsetLoop(C, -5)[0];
+    const cf = layoutConflicts(C, geo, 5);
+    // Criterion 3, measured the way it is worded: clear foam outward from the
+    // notch CENTRE, against the border inset and against every other pocket.
+    let reach = Infinity;
+    geo.forEach((g, k) => {
+      if (!g.notchAt) return;
+      let m = ptLoop(g.notchAt, inner);
+      geo.forEach((q, j) => { if (j !== k) m = Math.min(m, ptLoop(g.notchAt, q.pocket)); });
+      reach = Math.min(reach, m);
+    });
+    return {
+      n: res.placements.length,
+      rots: res.placements.map(p => p.rot).join(','),
+      ys: res.placements.map(p => Math.round(p.y * 10) / 10).join(','),
+      warnings: res.stats.notchWarnings.join(','),
+      left: res.unplaced.map(u => `${u.name}/${u.reason}`).join(','),
+      reach: Number.isFinite(reach) ? reach : -1,
+      clash: cf.collisions.size + cf.escaped.size,
+    };
+  };
+  const pair = [plate, slab];
+  return {
+    webs, notchClear: NOTCH_CLEAR,
+    sealWarn: reachRun(pair, 200, 200, 'warn'),
+    sealReq: reachRun(pair, 200, 200, 'require'),
+    tightWarn: reachRun(pair, 100, 260, 'warn'),
+    tightReq: reachRun(pair, 100, 260, 'require'),
+    wallWarn: reachRun([wallPlate], 120, 160, 'warn'),
+    wallReq: reachRun([wallPlate], 120, 160, 'require'),
+  };
+});
+
+// Four round-join offsets stand between a stated web and a measured one: each
+// pocket's own clearance offset, plus each pocket's half-web inflation.
+// ClipperLib is configured with an arc tolerance of 0.05 mm per offset, so up
+// to 0.2 mm of chord error is arithmetic rather than a web the nester lost.
+const WEB_TOL = 0.2;
+const webSpread = nestWeb.webs.map(r => r.pair);
+check('every nested pocket keeps at least the minimum web from its neighbours',
+  nestWeb.webs.every(r => r.n === 7 && r.pair >= r.minWeb - WEB_TOL),
+  nestWeb.webs.map(r => `${r.minWeb} mm asked, ${r.pair.toFixed(2)} measured`).join('; '));
+check('every nested pocket keeps at least the minimum web off the border inset',
+  nestWeb.webs.every(r => r.edge >= r.minWeb - WEB_TOL && r.clash === 0),
+  nestWeb.webs.map(r => `${r.minWeb} mm asked, ${r.edge.toFixed(2)} measured`).join('; '));
+check('raising the minimum web widens every gap, so the setting has real teeth',
+  webSpread.every((v, k) => k === 0 || v > webSpread[k - 1] + 1.5),
+  webSpread.map(v => v.toFixed(2)).join(' < '));
+check('warn: a notch sealed by a later placement is packed anyway and reported',
+  nestWeb.sealWarn.n === 2 && nestWeb.sealWarn.warnings === '0' &&
+  nestWeb.sealWarn.reach < nestWeb.notchClear && nestWeb.sealWarn.clash === 0,
+  `${nestWeb.sealWarn.n} placed, ${nestWeb.sealWarn.reach.toFixed(2)} mm of reach left, warned on [${nestWeb.sealWarn.warnings}]`);
+check('require: the same drawer moves the later tool below instead of sealing the notch',
+  nestWeb.sealReq.n === 2 && nestWeb.sealReq.warnings === '' &&
+  nestWeb.sealReq.reach >= nestWeb.notchClear - 1e-6 && nestWeb.sealReq.clash === 0,
+  `${nestWeb.sealReq.n} placed, ${nestWeb.sealReq.reach.toFixed(2)} mm of reach (asked ${nestWeb.notchClear}), ys ${nestWeb.sealReq.ys}`);
+check('require: a notch that would open onto the drawer wall turns 180° instead',
+  nestWeb.wallWarn.rots === '0' && nestWeb.wallWarn.warnings === '0' &&
+  nestWeb.wallWarn.reach < nestWeb.notchClear &&
+  nestWeb.wallReq.rots === '180' && nestWeb.wallReq.warnings === '' &&
+  nestWeb.wallReq.reach >= nestWeb.notchClear - 1e-6,
+  `warn ${nestWeb.wallWarn.rots}° with ${nestWeb.wallWarn.reach.toFixed(2)} mm, require ${nestWeb.wallReq.rots}° with ${nestWeb.wallReq.reach.toFixed(2)} mm`);
+check('require: with nowhere legal left the tool is refused rather than sealing the notch',
+  nestWeb.tightWarn.n === 2 && nestWeb.tightWarn.warnings === '0' &&
+  nestWeb.tightReq.n === 1 && nestWeb.tightReq.left === 'slab/noRoom' &&
+  nestWeb.tightReq.reach >= nestWeb.notchClear - 1e-6 && nestWeb.tightReq.clash === 0,
+  `warn placed ${nestWeb.tightWarn.n} and warned on [${nestWeb.tightWarn.warnings}], require placed ${nestWeb.tightReq.n} and reported ${nestWeb.tightReq.left}`);
+
 // ---------- Gridfinity bin (holders.js) ----------
 
 const grid = await page.evaluate(async () => {
