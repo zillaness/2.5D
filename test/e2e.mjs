@@ -4403,6 +4403,840 @@ check('leaving the layered build restores the pocket panel',
   layRestore.labels === false && layRestore.onBase === true,
   JSON.stringify(layRestore));
 
+// ---------- nesting / auto-sort (holders.js, docs/nesting_prd_v1.1.md) ----------
+//
+// nestLayout() is pure geometry and deliberately has no UI yet: the Nest
+// button, the profile panel and the custom-profile store are that PRD's later
+// steps. So this block drives the module straight and touches no page state at
+// all — there is nothing here to set up, and nothing for it to restore for the
+// blocks that follow.
+
+const nestFix = await page.evaluate(async () => {
+  const { nestLayout, applyNest, layoutPockets, layoutConflicts, roundedRect } =
+    await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  // An L with arm thickness t: a w × h bbox with a big bite out of the top
+  // right, so two of them only both fit once one turns round and tucks in.
+  const ell = (w, h, t) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: t },
+    { x: t, y: t }, { x: t, y: h }, { x: 0, y: h }];
+  const mk = (name, outer, extra = {}) => ({
+    name, outer, holes: [], circles: [], x: 0, y: 0, rot: 0, depth: null,
+    thickness: 6, ...extra,
+  });
+  const drawer = (w, h) => roundedRect(w / 2, h / 2, w, h, 4);
+  const bbox = pts => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  };
+  // The pockets for exactly what the nester says it placed, rebuilt the way
+  // the editor would after applying the result.
+  const boxesOf = (items, res) => {
+    const moved = applyNest(items, res);
+    return layoutPockets(res.placements.map(p => moved[p.i]), 0.5);
+  };
+  const clash = (outer, items, res, border = 5) => {
+    const cf = layoutConflicts(outer, boxesOf(items, res), border);
+    return [cf.collisions.size, cf.escaped.size];
+  };
+  // A mixed 12-tool set, fabricated rather than traced, so the fixtures do not
+  // depend on the photo pipeline at all.
+  const mixed = () => {
+    const out = [];
+    for (let k = 0; k < 12; k++) {
+      out.push(k % 3 === 0 ? mk('L' + k, ell(50 + k, 30 + k, 12))
+        : k % 3 === 1 ? mk('r' + k, rect(60 - k, 18 + k))
+          : mk('s' + k, rect(24 + k, 24 + k)));
+    }
+    return out;
+  };
+
+  // 1. Two rectangles that cannot sit side by side have to take a second row,
+  //    and the settle pass must leave exactly minWeb between the rows rather
+  //    than whatever the coarse anchor grid handed it.
+  const stackItems = [mk('a', rect(40, 20)), mk('b', rect(40, 20))];
+  const stackC = drawer(60, 120);
+  const stack = nestLayout(stackC, stackItems, { rotationStep: 90 });
+  const sb = boxesOf(stackItems, stack).map(g => bbox(g.pocket))
+    .sort((p, q) => p.minY - q.minY);
+  const stackGap = sb.length === 2 ? sb[1].minY - sb[0].maxY : -1;
+
+  // 2. Two Ls: the greedy true-outline test has to let the second one tuck
+  //    into the first one's concavity, which bbox packing cannot do.
+  const tuckItems = [mk('L1', ell(60, 40, 14)), mk('L2', ell(60, 40, 14))];
+  const tuckC = drawer(200, 140);
+  const before = JSON.stringify(tuckItems);
+  const tuck = nestLayout(tuckC, tuckItems, {});
+  const tb = boxesOf(tuckItems, tuck).map(g => bbox(g.pocket));
+  const tuckOverlap = tb.length === 2 &&
+    Math.min(tb[0].maxX, tb[1].maxX) - Math.max(tb[0].minX, tb[1].minX) > 1 &&
+    Math.min(tb[0].maxY, tb[1].maxY) - Math.max(tb[0].minY, tb[1].minY) > 1;
+  const tuckMoved = applyNest(tuckItems, tuck);
+
+  // 3. An L that is too wide for the drawer flat has to turn to fit.
+  const spinItems = [mk('L', ell(60, 40, 14))];
+  const spin = nestLayout(drawer(62, 82), spinItems, { rotationStep: 90 });
+
+  // 4 + 5. Honest failure: too large in every orientation vs. simply no room.
+  const hugeItems = [mk('crowbar', rect(200, 200))];
+  const huge = nestLayout(drawer(60, 60), hugeItems, { rotationStep: 90 });
+  const fullItems = Array.from({ length: 8 }, (_, k) => mk('c' + k, rect(50, 30)));
+  const fullC = drawer(150, 110);
+  const full = nestLayout(fullC, fullItems, { rotationStep: 90 });
+
+  // 6. Determinism, and 7. pins as fixed obstacles.
+  const detItems = mixed();
+  const detC = drawer(300, 200);
+  const det1 = nestLayout(detC, detItems, {});
+  const det2 = nestLayout(detC, detItems, {});
+  const pinItems = mixed().map((it, i) =>
+    i === 0 ? { ...it, pin: true, x: 200, y: 150, rot: 30 } : it);
+  const pin = nestLayout(detC, pinItems, {});
+  const pinned = pin.placements.find(p => p.i === 0);
+
+  // 8. Per-item rotation policy: locked to current, locked to an angle, free.
+  const lockItems = mixed().map((it, i) =>
+    i < 3 ? { ...it, rotLock: 'current', rot: 90 }
+      : i < 6 ? { ...it, rotLock: 45 } : it);
+  const lock = nestLayout(detC, lockItems, {});
+  const lockRots = new Map(lock.placements.map(p => [p.i, p.rot]));
+
+  // 9. Bounded restarts: two shapes with the same pocket area but different
+  //    outlines are one equal-area group, so the seeded shuffles really do
+  //    produce different orders — and the answer is still reproducible.
+  const eqItems = [mk('wide', rect(40, 20)), mk('tall', rect(20, 40)),
+    mk('wide2', rect(40, 20)), mk('tall2', rect(20, 40))];
+  const eqC = drawer(140, 120);
+  const eq1 = nestLayout(eqC, eqItems, { rotationStep: 90, restarts: 20 });
+  const eq2 = nestLayout(eqC, eqItems, { rotationStep: 90, restarts: 20 });
+
+  // 10. Criterion 7 on a NON-CONVEX container. The API takes a container loop
+  //     rather than a rectangle on purpose, so a traced tote or a compartmented
+  //     tray is a legal drawer, and for those the reason half of the answer is
+  //     easy to get wrong: the middle of a U-shaped loop is the divider, not
+  //     foam, so a tool that fits the left leg perfectly well fails a probe
+  //     parked at the bbox centre. It must still come back as 'noRoom'. Each of
+  //     these items is checked to fit the empty tote on its own, which is
+  //     exactly what 'tooLarge' claims is impossible.
+  const uLoop = [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 160 }, { x: 130, y: 160 },
+    { x: 130, y: 40 }, { x: 70, y: 40 }, { x: 70, y: 160 }, { x: 0, y: 160 }];
+  const uOpts = { minWeb: 4, border: 5, clearance: 0.5, rotationStep: 90, notchClear: 0 };
+  const uItems = [mk('leg tool 1', rect(50, 100)), mk('leg tool 2', rect(50, 100)),
+    mk('long bar', rect(180, 20)), mk('spare', rect(40, 60))];
+  const uRes = nestLayout(uLoop, uItems, uOpts);
+  const uSolo = uItems.map(it => nestLayout(uLoop, [it], uOpts).placements.length);
+  // The same tote turned round, so the bite is at the top rather than the
+  // bottom and one lucky corner probe would not rescue it either.
+  const uFlip = uLoop.map(p => ({ x: 200 - p.x, y: 160 - p.y })).reverse();
+  const uFlipRes = nestLayout(uFlip, uItems, uOpts);
+  // The control, so the reason is not simply always 'noRoom' now: a slab that
+  // genuinely fits neither leg of an L-shaped tray is still tooLarge.
+  const lLoop = [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 60 },
+    { x: 60, y: 60 }, { x: 60, y: 200 }, { x: 0, y: 200 }];
+  const lRes = nestLayout(lLoop, [mk('big slab', rect(150, 150))], uOpts);
+
+  // 11. A container loop that does not reach its own bounding box corner.
+  //     Every candidate anchor after the first is derived from an
+  //     already-placed pocket, so the one seeded position has to be foam
+  //     rather than thin air or nothing is ever placed at all. It is thin air
+  //     for a tray traced a degree or two off the paper's axis, for a tray
+  //     with large corner radii, for an oval tote, and for an L whose bite is
+  //     at the top left. Seeded from the bounding box corner alone the FIRST
+  //     tool fails there in every allowed rotation, no second anchor is ever
+  //     derived, and a completely empty drawer comes back with every tool
+  //     marked 'noRoom', which the module's own probes have just disproved.
+  //     Each container here is empty and roomy, so each must take all three.
+  const turn = (loop, deg, cx, cy) => {
+    const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+    return loop.map(p => ({ x: cx + (p.x - cx) * c - (p.y - cy) * s,
+      y: cy + (p.x - cx) * s + (p.y - cy) * c }));
+  };
+  const ovalLoop = (cx, cy, w, h, n) => {
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      const t = 2 * Math.PI * k / n;
+      out.push({ x: cx + w / 2 * Math.cos(t), y: cy + h / 2 * Math.sin(t) });
+    }
+    return out;
+  };
+  const offItems = [mk('a', rect(60, 30)), mk('b', rect(50, 25)), mk('c', rect(40, 40))];
+  const offOpts = { minWeb: 4, border: 5, clearance: 0.5, rotationStep: 15, notchClear: 0 };
+  const off = [
+    ['traced 2 deg off axis', turn(roundedRect(275, 190, 550, 380, 6), 2, 275, 190)],
+    ['90 mm corner radii', roundedRect(275, 190, 550, 380, 90)],
+    ['oval tote', ovalLoop(150, 100, 300, 200, 128)],
+    ['L with the bite at the top left', [{ x: 60, y: 0 }, { x: 200, y: 0 },
+      { x: 200, y: 200 }, { x: 0, y: 200 }, { x: 0, y: 60 }, { x: 60, y: 60 }]],
+  ].map(([label, loop]) => {
+    const r = nestLayout(loop, offItems, offOpts);
+    const cf = clash(loop, offItems, r, offOpts.border);
+    return { label, n: r.placements.length, clash: cf[0] + cf[1] };
+  });
+
+  return {
+    stack: { n: stack.placements.length, gap: stackGap, clash: clash(stackC, stackItems, stack) },
+    tuck: {
+      rots: tuck.placements.map(p => p.rot).sort((a, b) => a - b),
+      overlap: tuckOverlap, w: tuck.stats.bbox ? tuck.stats.bbox.w : -1,
+      clash: clash(tuckC, tuckItems, tuck),
+      untouched: JSON.stringify(tuckItems) === before,
+      fresh: tuckMoved[0] !== tuckItems[0] && tuckMoved[0].x === tuck.placements[0].x,
+    },
+    spin: { n: spin.placements.length, rot: spin.placements.length ? spin.placements[0].rot : -1 },
+    huge: { n: huge.placements.length, reason: huge.unplaced.map(u => u.reason).join(','),
+      name: huge.unplaced.map(u => u.name).join(',') },
+    full: { n: full.placements.length, left: full.unplaced.length,
+      reasons: Array.from(new Set(full.unplaced.map(u => u.reason))).join(','),
+      clash: clash(fullC, fullItems, full) },
+    det: { same: JSON.stringify(det1.placements) === JSON.stringify(det2.placements),
+      n: det1.placements.length, clash: clash(detC, detItems, det1) },
+    pin: { at: pinned || null, n: pin.placements.length,
+      pinnedFlag: !!(pinned && pinned.pinned), clash: clash(detC, pinItems, pin),
+      list: pin.stats.pinned.join(',') },
+    lock: { cur: [0, 1, 2].map(i => lockRots.get(i)).join(','),
+      at45: [3, 4, 5].map(i => lockRots.get(i)).join(','),
+      freeStepped: [6, 7, 8, 9, 10, 11].every(i => {
+        const r = lockRots.get(i);
+        return r === undefined || Math.abs(r % 15) < 1e-9;
+      }) },
+    eq: { passes: eq1.stats.passes, n: eq1.placements.length,
+      same: JSON.stringify(eq1.placements) === JSON.stringify(eq2.placements) },
+    tote: {
+      solo: uSolo.join(','), left: uRes.unplaced.length,
+      reasons: uRes.unplaced.map(u => u.reason).join(','),
+      flip: uFlipRes.unplaced.map(u => u.reason).join(','),
+      flipLeft: uFlipRes.unplaced.length,
+      clash: clash(uLoop, uItems, uRes),
+      control: lRes.unplaced.map(u => u.reason).join(','),
+      legs: uRes.placements.filter(p => p.x < 70).length +
+        ',' + uRes.placements.filter(p => p.x > 130).length,
+    },
+    off: off.map(r => `${r.label} ${r.n}/${offItems.length} placed, ${r.clash} conflicts`),
+    offOk: off.every(r => r.n === offItems.length && r.clash === 0),
+  };
+});
+
+console.log('\nNesting / auto-sort (holders.js)');
+check('two rectangles that cannot sit side by side take a second row, exactly minWeb apart',
+  nestFix.stack.n === 2 && near(nestFix.stack.gap, 4, 0.35) &&
+  nestFix.stack.clash[0] === 0 && nestFix.stack.clash[1] === 0,
+  `${nestFix.stack.n} placed, ${nestFix.stack.gap.toFixed(2)} mm web`);
+check('the second L turns round and tucks into the first one\'s concavity',
+  nestFix.tuck.rots.join(',') === '0,180' && nestFix.tuck.overlap && nestFix.tuck.w < 100,
+  `rots ${nestFix.tuck.rots.join(',')}, bbox ${nestFix.tuck.w.toFixed(1)} mm wide, overlap ${nestFix.tuck.overlap}`);
+check('the interleaved pair is still conflict-free',
+  nestFix.tuck.clash[0] === 0 && nestFix.tuck.clash[1] === 0,
+  `${nestFix.tuck.clash[0]} colliding, ${nestFix.tuck.clash[1]} escaped`);
+check('nestLayout leaves the items it was handed untouched, and applyNest copies',
+  nestFix.tuck.untouched && nestFix.tuck.fresh, `untouched ${nestFix.tuck.untouched}`);
+check('an L too wide for the drawer flat rotates 90° to fit',
+  nestFix.spin.n === 1 && (nestFix.spin.rot === 90 || nestFix.spin.rot === 270),
+  `${nestFix.spin.n} placed at ${nestFix.spin.rot}°`);
+check('a tool too big in every orientation comes back named, as tooLarge',
+  nestFix.huge.n === 0 && nestFix.huge.reason === 'tooLarge' && nestFix.huge.name === 'crowbar',
+  `${nestFix.huge.n} placed, ${nestFix.huge.reason} for ${nestFix.huge.name}`);
+check('a full drawer packs 2 × 2, names the leftovers as noRoom, stays conflict-free',
+  nestFix.full.n === 4 && nestFix.full.left === 4 && nestFix.full.reasons === 'noRoom' &&
+  nestFix.full.clash[0] === 0 && nestFix.full.clash[1] === 0,
+  `${nestFix.full.n} placed, ${nestFix.full.left} left (${nestFix.full.reasons})`);
+check('12 mixed tools nest identically twice over — no clock, no Math.random',
+  nestFix.det.same && nestFix.det.n === 12 &&
+  nestFix.det.clash[0] === 0 && nestFix.det.clash[1] === 0,
+  `${nestFix.det.n} placed, identical ${nestFix.det.same}`);
+check('a pinned tool keeps its exact x, y and rot and the pack routes around it',
+  !!nestFix.pin.at && nestFix.pin.at.x === 200 && nestFix.pin.at.y === 150 &&
+  nestFix.pin.at.rot === 30 && nestFix.pin.pinnedFlag && nestFix.pin.list === '0' &&
+  nestFix.pin.n === 12 && nestFix.pin.clash[0] === 0 && nestFix.pin.clash[1] === 0,
+  nestFix.pin.at ? `at ${nestFix.pin.at.x},${nestFix.pin.at.y} @ ${nestFix.pin.at.rot}°, ${nestFix.pin.n} placed` : 'pin dropped');
+check('rotation policy: locked to current, locked to an angle, or free on the step',
+  nestFix.lock.cur === '90,90,90' && nestFix.lock.at45 === '45,45,45' &&
+  nestFix.lock.freeStepped,
+  `current ${nestFix.lock.cur}, locked ${nestFix.lock.at45}, stepped ${nestFix.lock.freeStepped}`);
+check('bounded restarts shuffle the equal-area group and still reproduce',
+  nestFix.eq.passes > 1 && nestFix.eq.n === 4 && nestFix.eq.same,
+  `${nestFix.eq.passes} distinct passes, identical ${nestFix.eq.same}`);
+check('a tool that fits one leg of a U-shaped tote is noRoom, never tooLarge',
+  nestFix.tote.solo === '1,1,1,1' && nestFix.tote.left === 2 &&
+  nestFix.tote.reasons === 'noRoom,noRoom' &&
+  nestFix.tote.flipLeft === 2 && nestFix.tote.flip === 'noRoom,noRoom' &&
+  nestFix.tote.clash[0] === 0 && nestFix.tote.clash[1] === 0,
+  `${nestFix.tote.left} left as [${nestFix.tote.reasons}], flipped [${nestFix.tote.flip}], each fits alone ${nestFix.tote.solo}`);
+// And it fills BOTH legs, which is the placement half of the same story: the
+// right leg is only reachable from an anchor the container loop supplies, so
+// while the seed was the bounding box corner alone one leg of this tote was
+// unreachable and the tool that belonged in it was reported as 'noRoom'.
+check('and the tote is packed leg and leg, not one leg and a pile of noRoom',
+  nestFix.tote.legs === '1,1', `left leg / right leg placements ${nestFix.tote.legs}`);
+check('a container that never reaches its own bounding box corner still nests',
+  nestFix.offOk, nestFix.off.join('; '));
+check('and a slab that fits neither leg of an L-shaped tray is still tooLarge',
+  nestFix.tote.control === 'tooLarge', nestFix.tote.control);
+
+// Step 2 of the same PRD: the conflict-freeness property. Success criterion 1
+// says a nested result must come back `collisions.size === 0 &&
+// escaped.size === 0` from the SAME layoutConflicts() the editor validates
+// with, not "usually", and that this is the test that gates the feature. So
+// rather than a handful of hand-drawn cases, generate item sets and settings
+// from a seeded generator, nest each one, apply the result the way the editor
+// would, and hold every single one to that predicate. The generator is seeded,
+// so a failure here is a case anybody can reproduce exactly.
+const nestProp = await page.evaluate(async () => {
+  const { nestLayout, applyNest, layoutPockets, layoutConflicts, roundedRect } =
+    await import('/js/holders.js');
+  const rnd = seed => {
+    let a = seed >>> 0 || 1;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const pick = (R, arr) => arr[Math.floor(R() * arr.length)];
+
+  // One generated drawer: 3 to 10 tools drawn from four outline families (a
+  // plain rectangle, an L with a real concavity, a lopsided convex blob with a
+  // hole in it, and a rectangle with a finger notch), a quarter of them with a
+  // rotation lock, sometimes one pinned, and a settings bag that ranges over
+  // every web, rotation step and notch policy the profiles can produce.
+  // `tight` halves the drawer so the honest-failure path gets exercised too.
+  function genSet(seed, tight) {
+    const R = rnd(seed);
+    const n = 3 + Math.floor(R() * 8);
+    const items = [];
+    for (let k = 0; k < n; k++) {
+      const w = 16 + Math.round(R() * 54), h = 12 + Math.round(R() * 33);
+      const kind = Math.floor(R() * 4);
+      let outer, notch = null, holes = [];
+      if (kind === 0) outer = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+      else if (kind === 1) outer = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h * 0.4 },
+        { x: w * 0.35, y: h * 0.4 }, { x: w * 0.35, y: h }, { x: 0, y: h }];
+      else if (kind === 2) {
+        outer = [{ x: 0, y: h / 2 }, { x: w * 0.35, y: 0 }, { x: w, y: h * 0.2 },
+          { x: w * 0.85, y: h }, { x: w * 0.2, y: h * 0.95 }];
+        holes = [[{ x: w * 0.4, y: h * 0.4 }, { x: w * 0.6, y: h * 0.4 },
+          { x: w * 0.6, y: h * 0.6 }, { x: w * 0.4, y: h * 0.6 }]];
+      } else {
+        outer = [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+        notch = { dia: 10, x: w / 2, y: 0 };
+      }
+      const it = { name: `s${seed}t${k}`, outer, holes, circles: [],
+        x: 6 + k * 4, y: 6 + k * 3, rot: 0, depth: null, thickness: 6 };
+      if (notch) it.notch = notch;
+      if (R() < 0.25) it.rotLock = pick(R, ['current', 0, 90]);
+      items.push(it);
+    }
+    const opts = {
+      minWeb: pick(R, [2, 4, 6, 8]), rotationStep: pick(R, [15, 45, 90]),
+      rotationFree: R() < 0.75, border: pick(R, [4, 5, 8]),
+      clearance: pick(R, [0.3, 0.5, 1]), restarts: pick(R, [1, 5, 20]),
+      notchPolicy: pick(R, ['warn', 'require']), notchClear: 8,
+    };
+    let cw = 200 + Math.round(R() * 140), ch = 140 + Math.round(R() * 90);
+    if (tight) { cw = Math.round(cw * 0.5); ch = Math.round(ch * 0.5); }
+    else if (R() < 0.5) items[0] = { ...items[0], pin: true, x: cw / 2, y: ch / 2, rot: 90 };
+    return { items, opts, outer: roundedRect(cw / 2, ch / 2, cw, ch, 4), cw, ch };
+  }
+
+  const SETS = 16;
+  const rows = [];
+  for (let s = 1; s <= SETS; s++) {
+    const g = genSet(s * 1009, s % 4 === 0);
+    const res = nestLayout(g.outer, g.items, g.opts);
+    // Apply it exactly as the editor would, then re-derive the pockets from
+    // the moved items rather than trusting anything the nester kept.
+    const moved = applyNest(g.items, res);
+    const pockets = layoutPockets(res.placements.map(p => moved[p.i]), g.opts.clearance);
+    const cf = layoutConflicts(g.outer, pockets, g.opts.border);
+    const again = nestLayout(g.outer, g.items, g.opts);
+    const pi = g.items.findIndex(it => it.pin);
+    const pp = pi >= 0 ? res.placements.find(p => p.i === pi) : null;
+    rows.push({
+      s, n: g.items.length, placed: res.placements.length, left: res.unplaced.length,
+      collisions: cf.collisions.size, escaped: cf.escaped.size,
+      accounted: res.placements.length + res.unplaced.length === g.items.length &&
+        new Set(res.placements.map(p => p.i).concat(res.unplaced.map(u => u.i))).size === g.items.length,
+      finite: res.placements.every(p =>
+        Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.rot)),
+      named: res.unplaced.every(u => !!u.name && (u.reason === 'tooLarge' || u.reason === 'noRoom')),
+      repeats: JSON.stringify(res.placements) === JSON.stringify(again.placements),
+      pinOk: pi < 0 ? true : !!pp && pp.x === g.cw / 2 && pp.y === g.ch / 2 && pp.rot === 90,
+      pins: pi >= 0 ? 1 : 0,
+    });
+  }
+  const bad = k => rows.filter(r => (typeof r[k] === 'boolean' ? !r[k] : r[k] > 0)).map(r => r.s);
+  return {
+    sets: rows.length,
+    items: rows.reduce((a, r) => a + r.n, 0),
+    placed: rows.reduce((a, r) => a + r.placed, 0),
+    left: rows.reduce((a, r) => a + r.left, 0),
+    crowded: rows.filter(r => r.left > 0).length,
+    pinnedSets: rows.reduce((a, r) => a + r.pins, 0),
+    badCollisions: bad('collisions'), badEscaped: bad('escaped'),
+    badAccounted: bad('accounted'), badFinite: bad('finite'), badNamed: bad('named'),
+    badRepeats: bad('repeats'), badPins: bad('pinOk'),
+  };
+});
+
+check(`no nested layout collides, across ${nestProp.sets} generated drawers`,
+  nestProp.badCollisions.length === 0,
+  nestProp.badCollisions.length ? `sets ${nestProp.badCollisions.join(',')}` : `${nestProp.placed} pockets`);
+check('no nested pocket crosses the border inset, in any generated drawer',
+  nestProp.badEscaped.length === 0,
+  nestProp.badEscaped.length ? `sets ${nestProp.badEscaped.join(',')}` : `${nestProp.placed} pockets`);
+check('every generated item comes back exactly once, placed or named as unplaced',
+  nestProp.badAccounted.length === 0 && nestProp.badFinite.length === 0 &&
+  nestProp.badNamed.length === 0 &&
+  nestProp.placed + nestProp.left === nestProp.items,
+  `${nestProp.placed} placed + ${nestProp.left} unplaced of ${nestProp.items}`);
+check('the property is not vacuous: drawers that overflow are in the sample',
+  nestProp.placed > 60 && nestProp.crowded >= 3 && nestProp.left > 0,
+  `${nestProp.crowded} of ${nestProp.sets} drawers overflowed, ${nestProp.left} tools left over`);
+check('generated pins all came back on their exact millimetre',
+  nestProp.badPins.length === 0 && nestProp.pinnedSets >= 3,
+  nestProp.badPins.length ? `sets ${nestProp.badPins.join(',')}` : `${nestProp.pinnedSets} pinned drawers`);
+check('every generated drawer nests to the identical answer on a second run',
+  nestProp.badRepeats.length === 0,
+  nestProp.badRepeats.length ? `sets ${nestProp.badRepeats.join(',')}` : `${nestProp.sets} drawers`);
+
+// Step 3 of the same PRD: minimum web and finger-notch reach. These are the
+// two placement constraints layoutConflicts cannot see. It only knows whether
+// two pockets overlap, so it says nothing about HOW MUCH foam is left between
+// them and nothing at all about whether a finger notch still opens onto clear
+// foam. So this block measures the geometry independently of the nester: the
+// true distance between pocket outlines, segment by segment, and the distance
+// from each resolved notch centre outward to every other pocket and to the
+// border inset.
+const nestWeb = await page.evaluate(async () => {
+  const { nestLayout, applyNest, layoutPockets, layoutConflicts, offsetLoop, roundedRect } =
+    await import('/js/holders.js');
+  const P = (x, y) => ({ x, y });
+  const rect = (w, h) => [P(0, 0), P(w, 0), P(w, h), P(0, h)];
+  const ell = (w, h, t) => [P(0, 0), P(w, 0), P(w, t), P(t, t), P(t, h), P(0, h)];
+  // A three-pronged blade. Sharp convex corners and a deep bite are the worst
+  // case for a web enforced by offsetting, because the round joins there turn
+  // into long arcs.
+  const spike = (w, h) => [P(0, h / 2), P(w * 0.3, 0), P(w, h * 0.12),
+    P(w * 0.45, h * 0.5), P(w, h * 0.88), P(w * 0.3, h)];
+  const mk = (name, outer, extra = {}) => ({
+    name, outer, holes: [], circles: [], x: 0, y: 0, rot: 0, depth: null,
+    thickness: 6, ...extra,
+  });
+  const drawer = (w, h) => roundedRect(w / 2, h / 2, w, h, 4);
+  // Point to segment, and loop to loop / point to loop on top of it. Nested
+  // pockets are disjoint whenever the nester did its job, so the minimum over
+  // the vertex-to-segment pairs is the exact distance between two outlines.
+  const ptSeg = (p, a, b) => {
+    const dx = b.x - a.x, dy = b.y - a.y, L = dx * dx + dy * dy;
+    let t = L ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+  };
+  const ptLoop = (p, L) => {
+    let m = Infinity;
+    for (let i = 0; i < L.length; i++) m = Math.min(m, ptSeg(p, L[i], L[(i + 1) % L.length]));
+    return m;
+  };
+  const loopDist = (A, B) => {
+    let m = Infinity;
+    for (let i = 0; i < A.length; i++) {
+      const a = A[i], b = A[(i + 1) % A.length];
+      for (let j = 0; j < B.length; j++) {
+        const c = B[j], d = B[(j + 1) % B.length];
+        m = Math.min(m, ptSeg(a, c, d), ptSeg(b, c, d), ptSeg(c, a, b), ptSeg(d, a, b));
+      }
+    }
+    return m;
+  };
+
+  // ---- minimum web, measured rather than taken on trust ----
+  const webItems = [mk('r1', rect(60, 34)), mk('r2', rect(54, 38)),
+    mk('L1', ell(66, 44, 16)), mk('L2', ell(58, 40, 14)),
+    mk('s1', spike(70, 40)), mk('s2', spike(56, 34)), mk('r3', rect(40, 40))];
+  const webC = drawer(300, 220);
+  const webInner = offsetLoop(webC, -5)[0];
+  const webRow = (minWeb) => {
+    const o = { minWeb, border: 5, clearance: 0.5, rotationStep: 15, notchClear: 0 };
+    const res = nestLayout(webC, webItems, o);
+    const moved = applyNest(webItems, res);
+    const geo = layoutPockets(res.placements.map(p => moved[p.i]), 0.5);
+    const cf = layoutConflicts(webC, geo, 5);
+    let pair = Infinity, edge = Infinity;
+    for (let i = 0; i < geo.length; i++) {
+      edge = Math.min(edge, loopDist(geo[i].pocket, webInner));
+      for (let j = i + 1; j < geo.length; j++) {
+        pair = Math.min(pair, loopDist(geo[i].pocket, geo[j].pocket));
+      }
+    }
+    return { minWeb, n: res.placements.length, pair, edge,
+      clash: cf.collisions.size + cf.escaped.size };
+  };
+  const webs = [2, 4, 8, 12].map(webRow);
+
+  // ---- finger-notch reach ----
+  // A plate whose notch opens to the RIGHT, so the next tool down lands
+  // straight across it under top-left gravity. That is the adversarial case
+  // the PRD names: a notch sealed not by a wall but by a LATER placement.
+  const plate = mk('notched plate', rect(80, 60), { notch: { dia: 10, x: 80, y: 30 } });
+  const slab = mk('slab', rect(70, 50));
+  // And one whose notch opens UPWARD, straight into the border inset the
+  // moment top-left gravity pushes it against the back of the drawer.
+  const wallPlate = mk('wall plate', rect(60, 40), { notch: { dia: 10, x: 30, y: 0 } });
+  const NOTCH_CLEAR = 15;
+  const reachRun = (items, w, h, notchPolicy) => {
+    const C = drawer(w, h);
+    const o = { minWeb: 4, border: 5, clearance: 0.5, rotationStep: 90,
+      notchClear: NOTCH_CLEAR, notchPolicy };
+    const res = nestLayout(C, items, o);
+    const moved = applyNest(items, res);
+    const geo = layoutPockets(res.placements.map(p => moved[p.i]), 0.5);
+    const inner = offsetLoop(C, -5)[0];
+    const cf = layoutConflicts(C, geo, 5);
+    // Criterion 3, measured the way it is worded: clear foam outward from the
+    // notch CENTRE, against the border inset and against every other pocket.
+    let reach = Infinity;
+    geo.forEach((g, k) => {
+      if (!g.notchAt) return;
+      let m = ptLoop(g.notchAt, inner);
+      geo.forEach((q, j) => { if (j !== k) m = Math.min(m, ptLoop(g.notchAt, q.pocket)); });
+      reach = Math.min(reach, m);
+    });
+    return {
+      n: res.placements.length,
+      rots: res.placements.map(p => p.rot).join(','),
+      ys: res.placements.map(p => Math.round(p.y * 10) / 10).join(','),
+      warnings: res.stats.notchWarnings.join(','),
+      left: res.unplaced.map(u => `${u.name}/${u.reason}`).join(','),
+      reach: Number.isFinite(reach) ? reach : -1,
+      clash: cf.collisions.size + cf.escaped.size,
+      pins: res.stats.pinned.join(','),
+      pinAt: res.placements.filter(p => p.pinned)
+        .map(p => `${p.x},${p.y},${p.rot}`).join(';'),
+    };
+  };
+  const pair = [plate, slab];
+
+  // A PINNED tool with a notch. Criterion 5 says a pinned item keeps its exact
+  // x / y / rot, so the nester never gets to move it and 'require' never gets
+  // to refuse it: validAt() only ever runs on free placements. That leaves the
+  // one case where the stricter policy could say less about the geometry than
+  // the looser one, and criterion 3 is worded "every item's finger notch", not
+  // every free one. This plate is pinned with its notch 6 mm off the back wall
+  // against a 15 mm reach, and the layout is otherwise entirely legal, so
+  // stats.notchWarnings is the only channel that can report it.
+  const pinPlate = mk('pinned plate', rect(60, 40),
+    { notch: { dia: 10, x: 30, y: 0 }, pin: true, x: 60, y: 31.5 });
+  const pinPair = [pinPlate, mk('small slab', rect(40, 30))];
+  return {
+    webs, notchClear: NOTCH_CLEAR,
+    sealWarn: reachRun(pair, 200, 200, 'warn'),
+    sealReq: reachRun(pair, 200, 200, 'require'),
+    tightWarn: reachRun(pair, 100, 260, 'warn'),
+    tightReq: reachRun(pair, 100, 260, 'require'),
+    wallWarn: reachRun([wallPlate], 120, 160, 'warn'),
+    wallReq: reachRun([wallPlate], 120, 160, 'require'),
+    pinWarn: reachRun(pinPair, 120, 160, 'warn'),
+    pinReq: reachRun(pinPair, 120, 160, 'require'),
+  };
+});
+
+// Four round-join offsets stand between a stated web and a measured one: each
+// pocket's own clearance offset, plus each pocket's half-web inflation.
+// ClipperLib is configured with an arc tolerance of 0.05 mm per offset, so up
+// to 0.2 mm of chord error is arithmetic rather than a web the nester lost.
+const WEB_TOL = 0.2;
+const webSpread = nestWeb.webs.map(r => r.pair);
+check('every nested pocket keeps at least the minimum web from its neighbours',
+  nestWeb.webs.every(r => r.n === 7 && r.pair >= r.minWeb - WEB_TOL),
+  nestWeb.webs.map(r => `${r.minWeb} mm asked, ${r.pair.toFixed(2)} measured`).join('; '));
+check('every nested pocket keeps at least the minimum web off the border inset',
+  nestWeb.webs.every(r => r.edge >= r.minWeb - WEB_TOL && r.clash === 0),
+  nestWeb.webs.map(r => `${r.minWeb} mm asked, ${r.edge.toFixed(2)} measured`).join('; '));
+check('raising the minimum web widens every gap, so the setting has real teeth',
+  webSpread.every((v, k) => k === 0 || v > webSpread[k - 1] + 1.5),
+  webSpread.map(v => v.toFixed(2)).join(' < '));
+check('warn: a notch sealed by a later placement is packed anyway and reported',
+  nestWeb.sealWarn.n === 2 && nestWeb.sealWarn.warnings === '0' &&
+  nestWeb.sealWarn.reach < nestWeb.notchClear && nestWeb.sealWarn.clash === 0,
+  `${nestWeb.sealWarn.n} placed, ${nestWeb.sealWarn.reach.toFixed(2)} mm of reach left, warned on [${nestWeb.sealWarn.warnings}]`);
+check('require: the same drawer moves the later tool below instead of sealing the notch',
+  nestWeb.sealReq.n === 2 && nestWeb.sealReq.warnings === '' &&
+  nestWeb.sealReq.reach >= nestWeb.notchClear - 1e-6 && nestWeb.sealReq.clash === 0,
+  `${nestWeb.sealReq.n} placed, ${nestWeb.sealReq.reach.toFixed(2)} mm of reach (asked ${nestWeb.notchClear}), ys ${nestWeb.sealReq.ys}`);
+check('require: a notch that would open onto the drawer wall turns 180° instead',
+  nestWeb.wallWarn.rots === '0' && nestWeb.wallWarn.warnings === '0' &&
+  nestWeb.wallWarn.reach < nestWeb.notchClear &&
+  nestWeb.wallReq.rots === '180' && nestWeb.wallReq.warnings === '' &&
+  nestWeb.wallReq.reach >= nestWeb.notchClear - 1e-6,
+  `warn ${nestWeb.wallWarn.rots}° with ${nestWeb.wallWarn.reach.toFixed(2)} mm, require ${nestWeb.wallReq.rots}° with ${nestWeb.wallReq.reach.toFixed(2)} mm`);
+check('require: with nowhere legal left the tool is refused rather than sealing the notch',
+  nestWeb.tightWarn.n === 2 && nestWeb.tightWarn.warnings === '0' &&
+  nestWeb.tightReq.n === 1 && nestWeb.tightReq.left === 'slab/noRoom' &&
+  nestWeb.tightReq.reach >= nestWeb.notchClear - 1e-6 && nestWeb.tightReq.clash === 0,
+  `warn placed ${nestWeb.tightWarn.n} and warned on [${nestWeb.tightWarn.warnings}], require placed ${nestWeb.tightReq.n} and reported ${nestWeb.tightReq.left}`);
+check('a pinned tool keeps its millimetre and its sealed notch is reported under BOTH policies',
+  nestWeb.pinWarn.pinAt === '60,31.5,0' && nestWeb.pinReq.pinAt === '60,31.5,0' &&
+  nestWeb.pinWarn.n === 2 && nestWeb.pinReq.n === 2 &&
+  nestWeb.pinReq.reach < nestWeb.notchClear && nestWeb.pinWarn.warnings === '0' &&
+  nestWeb.pinReq.warnings === '0' && nestWeb.pinReq.clash === 0 &&
+  nestWeb.pinReq.left === '',
+  `warn [${nestWeb.pinWarn.warnings}], require [${nestWeb.pinReq.warnings}], ${nestWeb.pinReq.reach.toFixed(2)} mm of reach against ${nestWeb.notchClear}, pin at ${nestWeb.pinReq.pinAt}`);
+
+// Step 4 of the same PRD: the reference fixture behind success criterion 2. A
+// set of 12 hand tools in a 550 x 380 mm drawer, and the claim that the nester
+// fits at least as many of them as a careful manual arrangement, in no more
+// than the same bounding area.
+//
+// The outlines are fabricated rather than traced, on purpose: a fixture that
+// needed twelve photographs through the whole ingest pipeline would be testing
+// the pipeline, not the nester. What matters is that they are tool-shaped, with
+// the fat ends, thin shafts and open handles that give a real nester something
+// to interleave.
+//
+// The manual arrangement is the other half of the fixture, and it is the part
+// that is frozen. It was laid out once by hand, the way a person actually does
+// it: rows of long tools sorted by height, the tape measure filling the gap
+// beside the hammer head, a small wrench slipped into the dead space under the
+// hammer handle. Its numbers are written down below as constants, and the test
+// re-derives them and checks they still hold, so the baseline cannot drift
+// quietly and make the comparison easy.
+const HAND_W = 486, HAND_H = 307, HAND_AREA = HAND_W * HAND_H;
+const nestRef = await page.evaluate(async () => {
+  const { nestLayout, applyNest, layoutPockets, layoutConflicts, roundedRect } =
+    await import('/js/holders.js');
+  const P = (x, y) => ({ x, y });
+  // Combination wrench: fat ring and open ends, narrow shaft between them.
+  const wrench = (L, j) => [P(0, j * 0.15), P(L * 0.11, 0), P(L * 0.2, 0), P(L * 0.28, j * 0.3),
+    P(L * 0.72, j * 0.3), P(L * 0.8, 0), P(L * 0.9, 0), P(L, j * 0.18), P(L, j * 0.82),
+    P(L * 0.9, j), P(L * 0.8, j), P(L * 0.72, j * 0.7), P(L * 0.28, j * 0.7), P(L * 0.2, j),
+    P(L * 0.11, j), P(0, j * 0.85)];
+  // Screwdriver: fat handle at the left, tapering into a thin blade.
+  const driver = (L, h) => [P(0, h * 0.25), P(L * 0.06, 0), P(L * 0.34, 0), P(L * 0.4, h * 0.3),
+    P(L, h * 0.42), P(L, h * 0.58), P(L * 0.4, h * 0.7), P(L * 0.34, h), P(L * 0.06, h),
+    P(0, h * 0.75)];
+  // Pliers: jaws at the right, two handles at the left with the gap between
+  // them open, which is the concavity another tool can tuck into.
+  const pliers = (L, h) => [P(L, h * 0.45), P(L * 0.62, h * 0.16), P(L * 0.26, h * 0.04),
+    P(0, 0), P(0, h * 0.28), P(L * 0.32, h * 0.43), P(L * 0.32, h * 0.57), P(0, h * 0.72),
+    P(0, h), P(L * 0.26, h * 0.96), P(L * 0.62, h * 0.84), P(L, h * 0.55)];
+  // Hammer: a T, head at the left, thin handle running right.
+  const hammer = (L, H, hw, th) => [P(0, 0), P(hw, 0), P(hw, (H - th) / 2), P(L, (H - th) / 2 + 3),
+    P(L, (H + th) / 2 - 3), P(hw, (H + th) / 2), P(hw, H), P(0, H)];
+  const knife = (L, h) => [P(0, h * 0.2), P(L * 0.1, 0), P(L * 0.62, 0), P(L, h * 0.34),
+    P(L, h * 0.5), P(L * 0.62, h * 0.8), P(L * 0.1, h), P(0, h * 0.8)];
+  const tape = s => [P(s * 0.18, 0), P(s * 0.82, 0), P(s, s * 0.18), P(s, s * 0.82),
+    P(s * 0.82, s), P(s * 0.18, s), P(0, s * 0.82), P(0, s * 0.18)];
+  const bbox = pts => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  };
+  const unionBB = loops => loops.reduce((acc, l) => {
+    const b = bbox(l);
+    return acc ? {
+      minX: Math.min(acc.minX, b.minX), minY: Math.min(acc.minY, b.minY),
+      maxX: Math.max(acc.maxX, b.maxX), maxY: Math.max(acc.maxY, b.maxY),
+    } : b;
+  }, null);
+
+  // name, outline, and the left / top corner it was hand-placed at. Every row
+  // is 5 mm clear of the next, which is 4 mm of foam once the 0.5 mm clearance
+  // offset on each pocket is counted, and 12 mm in from the drawer edge, which
+  // clears the 5 mm border inset plus the same 4 mm web.
+  const HAND = [
+    ['ball-pein hammer', hammer(300, 112, 46, 26), 12, 12],
+    ['tape measure', tape(72), 317, 12],
+    ['combination wrench 10', wrench(150, 26), 63, 90],
+    ['adjustable wrench', wrench(210, 52), 12, 129],
+    ['needle-nose pliers', pliers(185, 46), 227, 129],
+    ['side cutters', pliers(150, 58), 12, 186],
+    ['combination pliers', pliers(165, 52), 167, 186],
+    ['utility knife', knife(160, 34), 337, 186],
+    ['flat screwdriver', driver(230, 30), 12, 249],
+    ['combination wrench 17', wrench(190, 34), 247, 249],
+    ['phillips screwdriver', driver(205, 28), 12, 288],
+    ['combination wrench 13', wrench(170, 30), 222, 288],
+  ];
+  // x / y are the outline bbox CENTRE, which is what placeLoop moves.
+  const items = HAND.map(([name, outer, left, top]) => {
+    const b = bbox(outer);
+    return { name, outer, holes: [], circles: [], depth: null, thickness: 8,
+      rot: 0, x: left + b.w / 2, y: top + b.h / 2 };
+  });
+
+  const DW = 550, DH = 380;
+  const drawer = roundedRect(DW / 2, DH / 2, DW, DH, 6);
+  const opts = { minWeb: 4, border: 5, clearance: 0.5, rotationStep: 15, notchClear: 0 };
+
+  const handGeo = layoutPockets(items, opts.clearance);
+  const handCf = layoutConflicts(drawer, handGeo, opts.border);
+  const hb = unionBB(handGeo.map(g => g.pocket));
+
+  const res = nestLayout(drawer, items, opts);
+  const moved = applyNest(items, res);
+  const nestGeo = layoutPockets(res.placements.map(p => moved[p.i]), opts.clearance);
+  const nestCf = layoutConflicts(drawer, nestGeo, opts.border);
+  const nb = unionBB(nestGeo.map(g => g.pocket));
+
+  // Criterion 2 on the same drawer and the same twelve tools, with the
+  // container traced rather than typed in: a tray photographed on a sheet of
+  // paper comes back a degree or two off axis, and that is the drawer the
+  // library hands the nester. Nothing about the foam has changed, so nothing
+  // about the answer may either. Two degrees of skew used to take this
+  // fixture from 12 placed to none at all, every tool reported 'noRoom' in a
+  // completely empty drawer, because the only seeded anchor was the inner
+  // bounding box corner and a skewed tray does not reach it.
+  const skewDeg = 2, sa = skewDeg * Math.PI / 180;
+  const skewC = drawer.map(p => ({
+    x: DW / 2 + (p.x - DW / 2) * Math.cos(sa) - (p.y - DH / 2) * Math.sin(sa),
+    y: DH / 2 + (p.x - DW / 2) * Math.sin(sa) + (p.y - DH / 2) * Math.cos(sa),
+  }));
+  const skewRes = nestLayout(skewC, items, opts);
+  const skewMoved = applyNest(items, skewRes);
+  const skewCf = layoutConflicts(skewC,
+    layoutPockets(skewRes.placements.map(p => skewMoved[p.i]), opts.clearance), opts.border);
+
+  // Success criterion 6, kept deliberately loose. The PRD's budget is 2 s for
+  // 30 items on a mid-range laptop; a headless browser in a container is not
+  // that, so this only has to catch the difference between a nester that runs
+  // and one that has gone quadratic. The measured figure is printed either way.
+  const many = [];
+  for (let k = 0; k < 30; k++) {
+    many.push({ ...items[k % 12], name: `bulk ${k}`, x: 20 + k * 3, y: 20 + k * 2 });
+  }
+  const bulkC = roundedRect(450, 350, 900, 700, 6);
+  const t0 = performance.now();
+  const bulk = nestLayout(bulkC, many, opts);
+  const bulkMs = performance.now() - t0;
+
+  // That fixture alone is not criterion 6, and it took a while to notice why.
+  // It is twelve distinct shapes repeated out to thirty, so every equal-area
+  // group holds nothing but interchangeable copies, every seeded shuffle
+  // re-serialises to the same shapeKey order, and the restart loop collapses
+  // to a SINGLE pass however many restarts are configured. The number it
+  // prints is therefore one twentieth of what the module's own defaults can
+  // cost on thirty items, and a regression in the restart path cannot move it
+  // at all. So here is the same thirty-item size built so the restarts really
+  // run: each tool is paired with a rotation-locked twin, which shares its
+  // pocket area (rotation does not change area, so they land in one group) but
+  // not its allowed angles, so the shuffles survive de-duplication. Unbounded,
+  // this ran for tens of seconds; testBudget is what makes the ceiling a
+  // property of the module rather than of the input.
+  const twins = [];
+  for (let k = 0; k < 30; k++) {
+    const src = { ...items[Math.floor(k / 2) % 12], name: `twin ${k}`,
+      x: 20 + k * 3, y: 20 + k * 2 };
+    twins.push(k % 2 ? { ...src, rotLock: 'current', rot: 90 } : src);
+  }
+  const t1 = performance.now();
+  const twin = nestLayout(bulkC, twins, opts);
+  const twinMs = performance.now() - t1;
+  const twinMoved = applyNest(twins, twin);
+  const twinCf = layoutConflicts(bulkC,
+    layoutPockets(twin.placements.map(p => twinMoved[p.i]), opts.clearance), opts.border);
+  // One pass of the same set, so the work the default 20 restarts would have
+  // spent without a budget is a measured number rather than an assertion.
+  const one = nestLayout(bulkC, twins, { ...opts, restarts: 1 });
+
+  // What the budget is NOT allowed to spend. The loose fixture above is one
+  // where every tool places on pass 0, so cancelling restarts there can only
+  // cost bounding area. Here is the other case: a drawer tight enough that
+  // the restarts are the only thing that finds room for the last two tools.
+  // The budget is set far below what those passes cost, so a ceiling that
+  // simply stopped at the counter would return the single-pass answer and
+  // report two tools as 'noRoom' in a drawer the same module fills given its
+  // own configured restarts. Best is kept by placed count first, so a
+  // truncated run is a prefix and can only ever place fewer.
+  const tightTwins = [];
+  for (let k = 0; k < 12; k++) {
+    const src = { ...items[Math.floor(k / 2) % 12], name: `tight ${k}`,
+      x: 20 + k * 3, y: 20 + k * 2 };
+    tightTwins.push(k % 2 ? { ...src, rotLock: 'current', rot: 90 } : src);
+  }
+  const tightC = roundedRect(230, 160, 460, 320, 6);
+  const cutOpts = { ...opts, restarts: 8, testBudget: 2000 };
+  const cut = nestLayout(tightC, tightTwins, cutOpts);
+  const whole = nestLayout(tightC, tightTwins, { ...cutOpts, testBudget: 0 });
+  const once = nestLayout(tightC, tightTwins, { ...cutOpts, restarts: 1 });
+
+  return {
+    hand: { clash: handCf.collisions.size + handCf.escaped.size,
+      w: hb.maxX - hb.minX, h: hb.maxY - hb.minY,
+      area: (hb.maxX - hb.minX) * (hb.maxY - hb.minY) },
+    nest: { placed: res.placements.length, left: res.unplaced.length,
+      clash: nestCf.collisions.size + nestCf.escaped.size,
+      w: nb.maxX - nb.minX, h: nb.maxY - nb.minY,
+      area: (nb.maxX - nb.minX) * (nb.maxY - nb.minY),
+      names: res.unplaced.map(u => u.name).join(','),
+      rots: Array.from(new Set(res.placements.map(p => p.rot))).sort((a, b) => a - b).join(',') },
+    skew: { placed: skewRes.placements.length, left: skewRes.unplaced.length,
+      clash: skewCf.collisions.size + skewCf.escaped.size,
+      names: skewRes.unplaced.map(u => u.name).join(','),
+      reasons: Array.from(new Set(skewRes.unplaced.map(u => u.reason))).join(','),
+      deg: skewDeg },
+    bulk: { placed: bulk.placements.length, ms: Math.round(bulkMs),
+      passes: bulk.stats.passes },
+    cut: { placed: cut.placements.length, whole: whole.placements.length,
+      once: once.placements.length, tests: cut.stats.tests,
+      budget: cutOpts.testBudget, hit: cut.stats.budgetHit,
+      same: JSON.stringify(cut.placements) === JSON.stringify(whole.placements) },
+    twin: { placed: twin.placements.length, left: twin.unplaced.length,
+      ms: Math.round(twinMs), passes: twin.stats.passes, tests: twin.stats.tests,
+      budget: twin.stats.testBudget, budgetHit: twin.stats.budgetHit,
+      onePass: one.stats.tests, restarts: 20,
+      clash: twinCf.collisions.size + twinCf.escaped.size },
+  };
+});
+
+check('the hand-laid 12-tool reference drawer is legal, and measures the frozen 486 x 307 mm',
+  nestRef.hand.clash === 0 && near(nestRef.hand.w, HAND_W, 0.01) &&
+  near(nestRef.hand.h, HAND_H, 0.01) && near(nestRef.hand.area, HAND_AREA, 20),
+  `${nestRef.hand.w.toFixed(1)} x ${nestRef.hand.h.toFixed(1)} mm, ${Math.round(nestRef.hand.area)} mm2, ${nestRef.hand.clash} conflicts`);
+check('the nester fits all 12 reference tools in the 550 x 380 drawer, conflict-free',
+  nestRef.nest.placed === 12 && nestRef.nest.left === 0 && nestRef.nest.clash === 0,
+  `${nestRef.nest.placed} placed, ${nestRef.nest.left} left over (${nestRef.nest.names || 'none'}), angles used ${nestRef.nest.rots}`);
+check('and uses no more bounding area than the careful hand arrangement',
+  nestRef.nest.area <= HAND_AREA + 1e-6,
+  `${Math.round(nestRef.nest.area)} mm2 nested (${nestRef.nest.w.toFixed(1)} x ${nestRef.nest.h.toFixed(1)}) vs ${HAND_AREA} by hand, ${(100 - 100 * nestRef.nest.area / HAND_AREA).toFixed(1)}% less`);
+check('the same 12 tools still all place when the drawer is traced 2 degrees off axis',
+  nestRef.skew.placed === 12 && nestRef.skew.left === 0 && nestRef.skew.clash === 0,
+  `${nestRef.skew.placed} placed at ${nestRef.skew.deg} deg of skew, ${nestRef.skew.left} left over (${nestRef.skew.names || 'none'}${nestRef.skew.reasons ? ': ' + nestRef.skew.reasons : ''})`);
+check('30 tools nest without the run running away (criterion 6, generous ceiling)',
+  nestRef.bulk.placed === 30 && nestRef.bulk.ms < 8000,
+  `${nestRef.bulk.placed} placed in ${nestRef.bulk.ms} ms`);
+check('that 30-item fixture measures ONE pass, so criterion 6 needs a second one',
+  nestRef.bulk.passes === 1 && nestRef.twin.passes > 1,
+  `repeated shapes ran ${nestRef.bulk.passes} pass, live restarts ran ${nestRef.twin.passes}`);
+check('30 tools whose restarts really fire still nest completely and conflict-free',
+  nestRef.twin.placed === 30 && nestRef.twin.left === 0 && nestRef.twin.clash === 0,
+  `${nestRef.twin.placed} placed, ${nestRef.twin.left} left, ${nestRef.twin.clash} conflicts`);
+// The work counter is a pure count of candidate tests, so unlike the
+// millisecond figures it means the same thing on every machine. It is the half
+// of criterion 6 this suite can actually hold to a number.
+check('the work budget bounds the restart loop instead of letting 20 passes run away',
+  nestRef.twin.budgetHit && nestRef.twin.passes < nestRef.twin.restarts &&
+  nestRef.twin.tests < 2 * nestRef.twin.budget &&
+  nestRef.twin.onePass * nestRef.twin.restarts > 4 * nestRef.twin.tests,
+  `${nestRef.twin.tests} tests over ${nestRef.twin.passes} passes against a ${nestRef.twin.budget} budget, vs ~${nestRef.twin.onePass * nestRef.twin.restarts} for the ${nestRef.twin.restarts} unbounded`);
+// The other half of the same budget: it may cost density, and it may never
+// cost a placement. This drawer is tight enough that the restarts are what
+// place the last two tools, and the budget is set far below what they cost.
+check('the work budget costs bounding area, never a placement',
+  nestRef.cut.placed === nestRef.cut.whole && nestRef.cut.same &&
+  nestRef.cut.whole > nestRef.cut.once && !nestRef.cut.hit &&
+  nestRef.cut.tests > nestRef.cut.budget,
+  `${nestRef.cut.placed} placed against a ${nestRef.cut.budget} budget and ${nestRef.cut.tests} tests spent, vs ${nestRef.cut.whole} unbudgeted and ${nestRef.cut.once} in one pass`);
+check('30 tools with live restarts nest inside the ceiling too (criterion 6)',
+  nestRef.twin.ms < 8000,
+  `${nestRef.twin.ms} ms for ${nestRef.twin.passes} passes`);
+
 // ---------- Gridfinity bin (holders.js) ----------
 
 const grid = await page.evaluate(async () => {

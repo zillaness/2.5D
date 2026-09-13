@@ -456,6 +456,532 @@ export function layoutConflicts(containerOuter, pockets, border) {
   return { collisions, escaped };
 }
 
+// ---------- nesting / auto-sort (docs/nesting_prd_v1.1.md, plan steps 1-4) ----------
+//
+// nestLayout() is pure geometry: it takes the container loop, the item list and
+// a bag of settings, and reports where each item WOULD go. It never touches the
+// items it was handed, so the caller keeps the whole undo story.
+//
+// What it packs is the POCKET, exactly as layoutPockets() builds it, not the
+// raw outline. The clearance offset and the finger notch are already part of
+// the shape the foam has to accommodate, so packing the pocket is honest about
+// the space actually consumed, and a tool with a notch reserves the notch lobe
+// for free.
+//
+// Each pocket is then inflated by minWeb / 2 for collision purposes. Two
+// inflated pockets that do not overlap leave at least minWeb of foam between
+// them, and the container's border inset is shrunk by the same half-web so a
+// pocket also keeps minWeb off the edge. Both tests use the SAME Clipper
+// booleans and the same 0.05 mm^2 slack that layoutConflicts() validates with,
+// which is what makes a nested layout unable to come back red.
+//
+// Determinism is a hard requirement: the restart shuffles run off a seeded
+// generator, and nothing in here reads the clock.
+//
+// Which is also why the runtime ceiling is a WORK budget and not a time
+// budget. The restarts are what dominate a large nest, and the cost of one
+// pass grows with the item count faster than linearly, so "20 restarts" is a
+// promise about iterations and not about seconds: a 30-item drawer whose
+// equal-area groups hold shapes the packer can tell apart runs every one of
+// the 20 and spends tens of seconds doing it. testBudget caps the total number
+// of candidate validity tests the restarts may spend instead, measured in the
+// same unit stats.tests reports.
+//
+// What the budget may spend is density, and only density. The restart loop
+// keeps the best run by placed count first, so a restart it cancels can be
+// the one that would have placed one more tool: the budget is a prefix of the
+// pass sequence, and the best of a prefix is never better than the best of
+// the whole. Reporting a tool as 'noRoom' because the work counter ran out,
+// in a drawer that had room, would be exactly the dishonesty criterion 7
+// forbids, and criterion 6's own escape hatch is to yield with progress, not
+// to drop placements. So the ceiling only applies once every item is already
+// placed, which is the case where a further restart can win nothing but a
+// tighter bounding box. While anything is still unplaced the configured
+// restarts all run, because those are the passes that can change the answer.
+// A clock would bound the other case too and break determinism, which is not
+// a trade this module is allowed to make.
+
+export const NEST_DEFAULTS = {
+  clearance: 0.5,      // pocket offset, same units/meaning as layoutPockets
+  border: 5,           // container border inset, same as layoutConflicts
+  minWeb: 4,           // least foam between two pockets, and pocket to border
+  rotationStep: 15,    // candidate angle step, matching the editor Shift-snap
+  rotationFree: true,  // false restricts every free item to 0 / 180
+  notchClear: 10,      // radius of clear foam a finger notch wants, mm
+  notchPolicy: 'warn', // 'warn' records it in stats; 'require' rejects
+  restarts: 20,        // bounded seeded restarts over the equal-area groups
+  testBudget: 40000,   // work ceiling for those restarts, in candidate tests
+  seed: 1,             // fixed: same input, same result, every time
+  settleRounds: 6,     // slide up / slide left alternations
+  settleTol: 0.25,     // mm, the binary-search floor for a slide
+  keepTop: 3,          // best-scoring valid candidates that get settled
+};
+
+const NEST_EPS = 1e-6;
+const NEST_TOL = 0.05; // mm^2 — layoutConflicts' own tolerance, deliberately
+
+const shiftLoop = (loop, dx, dy) => loop.map(p => ({ x: p.x + dx, y: p.y + dy }));
+const bbShift = (b, dx, dy) => ({
+  minX: b.minX + dx, minY: b.minY + dy, maxX: b.maxX + dx, maxY: b.maxY + dy,
+  w: b.w, h: b.h,
+});
+// Touching counts as disjoint: two pockets sharing a boundary have zero
+// intersection area, which is exactly what layoutConflicts lets through.
+const bbHit = (a, b) =>
+  a.minX < b.maxX - NEST_EPS && b.minX < a.maxX - NEST_EPS &&
+  a.minY < b.maxY - NEST_EPS && b.minY < a.maxY - NEST_EPS;
+// A bbox extreme is attained by a real vertex, so a bbox that pokes out of the
+// limit's bbox proves a point of the loop is outside. That makes this a sound
+// cheap reject, not a guess.
+const bbIn = (a, b) =>
+  a.minX >= b.minX - NEST_EPS && a.maxX <= b.maxX + NEST_EPS &&
+  a.minY >= b.minY - NEST_EPS && a.maxY <= b.maxY + NEST_EPS;
+
+// mulberry32. A fixed seed in, a fixed stream out — the restarts are shuffled
+// but the run is reproducible, which success criterion "deterministic output"
+// requires and which Math.random cannot give.
+function nestRandom(seed) {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const nestNorm = a => ((Number(a) || 0) % 360 + 360) % 360;
+
+// Per-item rotation policy. `item.rotLock` is additive and optional:
+//   absent      — free, stepped by opts.rotationStep (or 0/180 when
+//                 opts.rotationFree is false)
+//   'free'      — free regardless of the profile
+//   'current'   — exactly one variant, the angle the item already has
+//   a number    — exactly one variant, locked to that angle
+export function nestAngles(item, opts = {}) {
+  const o = { ...NEST_DEFAULTS, ...opts };
+  const lock = item ? item.rotLock : undefined;
+  if (Number.isFinite(lock)) return [nestNorm(lock)];
+  if (lock === 'current') return [nestNorm(item && item.rot)];
+  const free = lock === 'free' ? true : !!o.rotationFree;
+  if (!free) return [0, 180];
+  const step = Math.max(1, Number(o.rotationStep) || 15);
+  const n = Math.max(1, Math.round(360 / step));
+  const out = [];
+  for (let i = 0; i < n; i++) out.push((i * 360) / n);
+  return out;
+}
+
+// One (item, angle) pocket, built at the origin so every placement of it is a
+// pure translation. offsetLoop of a rotated outline is NOT the rotation of the
+// offset for a non-convex shape, so this really is rebuilt per angle.
+function nestVariant(item, angle, o) {
+  if (!item || !item.outer || item.outer.length < 3) return null;
+  const geo = layoutPockets([{ ...item, x: 0, y: 0, rot: angle }], o.clearance)[0];
+  const pocket = geo && geo.pocket;
+  if (!pocket || pocket.length < 3) return null;
+  const h = Math.max(0, o.minWeb) / 2;
+  const infl = h > 0 ? (offsetLoop(pocket, h)[0] || pocket) : pocket;
+  return {
+    angle, pocket, infl,
+    bb: bboxOf(infl),
+    pbb: bboxOf(pocket),
+    area: Math.abs(signedArea(pocket)),
+    notch: geo.notchAt || null,
+  };
+}
+
+const nestDisc = (c, r) => circleToPolygon(c.x, c.y, Math.max(0.1, r) * 2, 32);
+
+// Placement for one container + item list. Returns
+//   { placements: [{ i, x, y, rot, pinned }], unplaced: [{ i, name, reason }],
+//     stats: {...} }
+// and never mutates `items`. `reason` is 'tooLarge' (does not fit the empty
+// container in any allowed orientation) or 'noRoom' (would fit, nothing left).
+export function nestLayout(containerOuter, items, opts = {}) {
+  const o = { ...NEST_DEFAULTS, ...opts };
+  const list = Array.isArray(items) ? items.slice() : [];
+  const ClipperLib = CL();
+  const CT = ClipperLib.ClipType;
+  const h = Math.max(0, Number(o.minWeb) || 0) / 2;
+  const nameOf = i => String((list[i] && (list[i].name || list[i].label)) || `item ${i + 1}`);
+  const statsBase = {
+    placed: 0, unplaced: list.length, passes: 0, tests: 0,
+    budgetHit: false, testBudget: o.testBudget,
+    bbox: null, area: 0,
+    clearance: o.clearance, border: o.border, minWeb: o.minWeb,
+    rotationStep: o.rotationStep, rotationFree: !!o.rotationFree,
+    notchPolicy: o.notchPolicy, notchClear: o.notchClear,
+    notchWarnings: [], pinned: [],
+  };
+
+  const inner = containerOuter && containerOuter.length >= 3
+    ? offsetLoop(containerOuter, -Math.max(0.5, o.border))[0] : null;
+  const limit = !inner ? null : (h > 0 ? (offsetLoop(inner, -h)[0] || null) : inner);
+  if (!limit) {
+    return {
+      placements: [],
+      unplaced: list.map((it, i) => ({ i, name: nameOf(i), reason: 'tooLarge' })),
+      stats: { ...statsBase },
+    };
+  }
+  const limitBB = bboxOf(limit);
+  // An axis-aligned rectangle IS its bbox, so the cheap reject is then also
+  // the exact containment test and Clipper never has to run for it.
+  const limitIsRect = limit.length === 4 && limit.every(p =>
+    (Math.abs(p.x - limitBB.minX) < NEST_EPS || Math.abs(p.x - limitBB.maxX) < NEST_EPS) &&
+    (Math.abs(p.y - limitBB.minY) < NEST_EPS || Math.abs(p.y - limitBB.maxY) < NEST_EPS));
+
+  // pack_poly seeds its candidate anchors with the sheet's top-left corner,
+  // which is sound for a rectangular sheet and wrong for a container LOOP.
+  // A traced tray sitting a degree off axis on the paper, a tray with large
+  // corner radii, an oval tote, an L whose bite is at the top left: none of
+  // them reach their own bounding box corner, so that one seeded position is
+  // outside the foam. The FIRST item then fails there in every allowed
+  // rotation, and because every other anchor is derived from an
+  // already-placed pocket, no second position is ever generated: nothing is
+  // placed in a completely empty drawer, and every tool comes back 'noRoom'
+  // from probes that have just proved it fits. So seed from the limit LOOP
+  // as well as from its bounding box. A loop's own vertices are positions
+  // that exist whatever shape it is, and settle() slides whatever starts
+  // there back toward the top left, so the pack stays the same one the bbox
+  // corner would have produced wherever that corner is real. A rectangle IS
+  // its bounding box, so the common case keeps exactly one seed and costs
+  // nothing; a traced outline can carry hundreds of vertices, so the seed is
+  // deduplicated and capped, evenly around the loop, at a count that keeps
+  // the candidate list the same order of size as the rotation set.
+  const SEED_CAP = 128;  // vertices sampled off a traced loop
+  const SEED_GRID = 8;   // interior sample columns and rows
+  const seedAnchors = (() => {
+    const out = [], seen = new Set();
+    const add = (x, y) => {
+      const k = `${Math.round(x * 100)},${Math.round(y * 100)}`;
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push([x, y]);
+    };
+    add(limitBB.minX, limitBB.minY);
+    if (!limitIsRect) {
+      const step = Math.max(1, Math.ceil(limit.length / SEED_CAP));
+      for (let k = 0; k < limit.length; k += step) add(limit[k].x, limit[k].y);
+      // A vertex is a point ON the boundary, so it only works where the foam
+      // opens down and to the right of it. It does not on the top edge of a
+      // tray that sits a degree off axis, which is the commonest traced
+      // container there is. So sample the inside as well, coarsely: one
+      // position per cell of a fixed grid over the limit's bounding box.
+      // Cell centres, so this never re-proposes the bbox corner, and coarse
+      // on purpose, because settle() slides a candidate that starts here
+      // back to the top left anyway. Positions that land in a hole or
+      // outside the loop cost one cheap rejection each.
+      for (let gy = 0; gy < SEED_GRID; gy++) {
+        for (let gx = 0; gx < SEED_GRID; gx++) {
+          add(limitBB.minX + (gx + 0.5) * limitBB.w / SEED_GRID,
+            limitBB.minY + (gy + 0.5) * limitBB.h / SEED_GRID);
+        }
+      }
+    }
+    return out;
+  })();
+
+  const cache = list.map(() => new Map());
+  const variantOf = (i, angle) => {
+    const key = String(Math.round(nestNorm(angle) * 1e6));
+    const m = cache[i];
+    if (!m.has(key)) m.set(key, nestVariant(list[i], nestNorm(angle), o));
+    return m.get(key);
+  };
+
+  let tests = 0;
+  const wantNotch = o.notchPolicy === 'require' && Number(o.notchClear) > 0;
+
+  // Is the variant placeable with its item origin at (X, Y)?
+  function validAt(v, X, Y, placed) {
+    tests++;
+    const bb = bbShift(v.bb, X, Y);
+    if (!bbIn(bb, limitBB)) return false;
+    let loop = null;
+    if (!limitIsRect) {
+      loop = shiftLoop(v.infl, X, Y);
+      if (clipArea(loop, limit, CT.ctDifference) > NEST_TOL) return false;
+    }
+    for (const p of placed) {
+      if (!bbHit(bb, p.bb)) continue;
+      if (!loop) loop = shiftLoop(v.infl, X, Y);
+      if (clipArea(loop, p.infl, CT.ctIntersection) > NEST_TOL) return false;
+    }
+    if (wantNotch) {
+      const pk = shiftLoop(v.pocket, X, Y);
+      if (v.notch) {
+        const disc = nestDisc({ x: v.notch.x + X, y: v.notch.y + Y }, o.notchClear);
+        if (clipArea(disc, inner, CT.ctDifference) > NEST_TOL) return false;
+        for (const p of placed) {
+          if (clipArea(disc, p.pocket, CT.ctIntersection) > NEST_TOL) return false;
+        }
+      }
+      // The adversarial case: this placement must not seal an EARLIER notch.
+      for (const p of placed) {
+        if (!p.disc) continue;
+        if (clipArea(pk, p.disc, CT.ctIntersection) > NEST_TOL) return false;
+      }
+    }
+    return true;
+  }
+
+  // Binary-search slide toward the top-left, one axis at a time.
+  function slide(v, X, Y, axis, placed) {
+    let a = axis === 'y' ? limitBB.minY - v.bb.minY : limitBB.minX - v.bb.minX;
+    let b = axis === 'y' ? Y : X;
+    if (b - a <= o.settleTol) return b;
+    while (b - a > o.settleTol) {
+      const m = (a + b) / 2;
+      const ok = axis === 'y' ? validAt(v, X, m, placed) : validAt(v, m, Y, placed);
+      if (ok) b = m; else a = m;
+    }
+    return b;
+  }
+
+  function settle(v, X0, Y0, placed) {
+    let X = X0, Y = Y0;
+    for (let r = 0; r < Math.max(0, o.settleRounds); r++) {
+      const y1 = slide(v, X, Y, 'y', placed);
+      const x1 = slide(v, X, y1, 'x', placed);
+      const moved = Math.abs(y1 - Y) + Math.abs(x1 - X);
+      X = x1; Y = y1;
+      if (moved <= o.settleTol) break;
+    }
+    return { X, Y, bb: bbShift(v.bb, X, Y) };
+  }
+
+  const record = (i, v, X, Y, pinned) => ({
+    i, v, X, Y, pinned: !!pinned,
+    bb: bbShift(v.bb, X, Y),
+    pbb: bbShift(v.pbb, X, Y),
+    infl: shiftLoop(v.infl, X, Y),
+    pocket: shiftLoop(v.pocket, X, Y),
+    disc: v.notch && Number(o.notchClear) > 0
+      ? nestDisc({ x: v.notch.x + X, y: v.notch.y + Y }, o.notchClear) : null,
+  });
+
+  // Pinned items are not nested: they keep their exact x / y / rot and become
+  // fixed obstacles the rest of the pack has to route around.
+  const pinIdx = [], freeIdx = [];
+  list.forEach((it, i) => ((it && it.pin) ? pinIdx : freeIdx).push(i));
+  const pinBase = [];
+  const pinFailed = [];
+  for (const i of pinIdx) {
+    const v = variantOf(i, nestNorm(list[i].rot));
+    if (!v) { pinFailed.push(i); continue; }
+    pinBase.push(record(i, v, Number(list[i].x) || 0, Number(list[i].y) || 0, true));
+  }
+
+  // Descending pocket area: big awkward things first, small things fill gaps.
+  const areaOf = i => {
+    const v = variantOf(i, nestAngles(list[i], o)[0]);
+    return v ? v.area : 0;
+  };
+  const sorted = freeIdx.slice().sort((a, b) => (areaOf(b) - areaOf(a)) || (a - b));
+  // Two items are interchangeable when the packer cannot tell them apart, so
+  // shuffles that only swap those produce the same geometry and are skipped.
+  const shapeKey = i => {
+    const v = variantOf(i, nestAngles(list[i], o)[0]);
+    return v
+      ? `${v.pocket.length}:${Math.round(v.area * 10)}:${Math.round(v.pbb.w * 100)}x${Math.round(v.pbb.h * 100)}:${nestAngles(list[i], o).join(',')}`
+      : 'x';
+  };
+  const groupKey = i => Math.round(areaOf(i) * 10);
+
+  const rand = nestRandom(Number(o.seed) || 1);
+  function orderFor(pass) {
+    if (pass === 0) return sorted;
+    const out = sorted.slice();
+    let s = 0;
+    while (s < out.length) {
+      let e = s + 1;
+      while (e < out.length && groupKey(out[e]) === groupKey(out[s])) e++;
+      for (let k = e - 1; k > s; k--) {
+        const j = s + Math.floor(rand() * (k - s + 1));
+        const t = out[k]; out[k] = out[j]; out[j] = t;
+      }
+      s = e;
+    }
+    return out;
+  }
+
+  function runPass(order) {
+    const placed = pinBase.slice();
+    const missed = [];
+    for (const i of order) {
+      // pack_poly's anchor set, and it is what lets a part tuck into the
+      // notch of an earlier one. Its `h` gap is already baked in here: these
+      // are the INFLATED bboxes, each carrying minWeb / 2 on every side, so
+      // butting two of them up against each other leaves exactly minWeb of
+      // foam. Adding another h on top would overshoot every slot by a web and
+      // strand the fourth item of a 2 x 2 pack with nowhere legal to start.
+      const anchors = seedAnchors.slice();
+      for (const p of placed) {
+        anchors.push([p.bb.maxX, p.bb.minY]);
+        anchors.push([p.bb.minX, p.bb.maxY]);
+        anchors.push([p.bb.maxX, limitBB.minY]);
+        anchors.push([limitBB.minX, p.bb.maxY]);
+      }
+      const cands = [];
+      for (const a of nestAngles(list[i], o)) {
+        const v = variantOf(i, a);
+        if (!v) continue;
+        for (let k = 0; k < anchors.length; k++) {
+          const X = anchors[k][0] - v.bb.minX, Y = anchors[k][1] - v.bb.minY;
+          const bb = bbShift(v.bb, X, Y);
+          // Top-left gravity in the editor's y-down space; ties break toward
+          // the smaller rotation so the result looks deliberate.
+          cands.push({ v, X, Y, sy: bb.maxY, sx: bb.maxX, a: v.angle, k });
+        }
+      }
+      cands.sort((p, q) => (p.sy - q.sy) || (p.sx - q.sx) || (p.a - q.a) || (p.k - q.k));
+      const keep = [];
+      for (const c of cands) {
+        if (keep.length >= Math.max(1, o.keepTop)) break;
+        if (validAt(c.v, c.X, c.Y, placed)) keep.push(c);
+      }
+      if (!keep.length) { missed.push(i); continue; }
+      let bestC = null;
+      for (const c of keep) {
+        const s = settle(c.v, c.X, c.Y, placed);
+        const cand = { v: c.v, X: s.X, Y: s.Y, sy: s.bb.maxY, sx: s.bb.maxX, a: c.v.angle };
+        if (!bestC || cand.sy < bestC.sy - NEST_EPS ||
+            (Math.abs(cand.sy - bestC.sy) <= NEST_EPS &&
+              (cand.sx < bestC.sx - NEST_EPS ||
+                (Math.abs(cand.sx - bestC.sx) <= NEST_EPS && cand.a < bestC.a)))) {
+          bestC = cand;
+        }
+      }
+      placed.push(record(i, bestC.v, bestC.X, bestC.Y, false));
+    }
+    let bb = null;
+    for (const p of placed) {
+      bb = bb ? {
+        minX: Math.min(bb.minX, p.pbb.minX), minY: Math.min(bb.minY, p.pbb.minY),
+        maxX: Math.max(bb.maxX, p.pbb.maxX), maxY: Math.max(bb.maxY, p.pbb.maxY),
+      } : { minX: p.pbb.minX, minY: p.pbb.minY, maxX: p.pbb.maxX, maxY: p.pbb.maxY };
+    }
+    if (bb) { bb.w = bb.maxX - bb.minX; bb.h = bb.maxY - bb.minY; }
+    return { placed, missed, bbox: bb, area: bb ? bb.w * bb.h : 0 };
+  }
+
+  let best = null;
+  let budgetHit = false;
+  const seen = new Set();
+  const passes = Math.min(200, Math.max(1, Math.round(Number(o.restarts) || 1)));
+  const budget = Math.max(0, Number(o.testBudget) || 0);
+  for (let r = 0; r < passes; r++) {
+    // The work ceiling, checked before a restart is started rather than during
+    // one, so a pass is never left half finished and pass 0 always runs. It
+    // only bites once the best run so far has placed everything: from there a
+    // restart can only improve density, so cancelling one cannot cost a
+    // placement. With items still unplaced the restarts are the only thing
+    // that can place them, and they run however much work they take.
+    if (r > 0 && budget > 0 && tests >= budget && best && !best.missed.length) {
+      budgetHit = true; break;
+    }
+    const order = orderFor(r);
+    const key = order.map(shapeKey).join('>');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const run = runPass(order);
+    // More placed wins outright; density only breaks a tie in the count.
+    if (!best || run.placed.length > best.placed.length ||
+        (run.placed.length === best.placed.length && run.area < best.area - NEST_EPS)) {
+      best = run;
+    }
+  }
+
+  // Why an item did not make it: does it fit the EMPTY container in any
+  // allowed orientation? One probe cannot answer that. Parking the variant in
+  // the middle of the container is the most forgiving single position only
+  // while the container is convex; the bbox centre of a U or an L shaped
+  // container loop is not even inside the loop, so a tool that fits the left
+  // leg perfectly well would come back as 'too large in every orientation',
+  // which is the wrong half of the answer. Probe the four inner-bbox corners
+  // as well: between them and the centre they reach every leg of the
+  // non-convex container shapes a traced tray or a compartmented tote makes.
+  const probesFor = v => [
+    [(limitBB.minX + limitBB.maxX) / 2 - (v.bb.minX + v.bb.maxX) / 2,
+      (limitBB.minY + limitBB.maxY) / 2 - (v.bb.minY + v.bb.maxY) / 2],
+    [limitBB.minX - v.bb.minX, limitBB.minY - v.bb.minY],
+    [limitBB.maxX - v.bb.maxX, limitBB.minY - v.bb.minY],
+    [limitBB.minX - v.bb.minX, limitBB.maxY - v.bb.maxY],
+    [limitBB.maxX - v.bb.maxX, limitBB.maxY - v.bb.maxY],
+  ];
+  function reasonFor(i) {
+    for (const a of nestAngles(list[i], o)) {
+      const v = variantOf(i, a);
+      if (!v) continue;
+      for (const [X, Y] of probesFor(v)) if (validAt(v, X, Y, [])) return 'noRoom';
+    }
+    return 'tooLarge';
+  }
+
+  const placements = best.placed
+    .map(p => ({ i: p.i, x: p.X, y: p.Y, rot: p.v.angle, pinned: p.pinned }))
+    .sort((a, b) => a.i - b.i);
+  const unplaced = best.missed.concat(pinFailed)
+    .sort((a, b) => a - b)
+    .map(i => ({ i, name: nameOf(i), reason: pinFailed.includes(i) ? 'tooLarge' : reasonFor(i) }));
+
+  // Under 'warn' a sealed notch is reported rather than refused, because a
+  // travel toolbox legitimately trades access away. Under 'require' validAt()
+  // has already refused every free placement that would seal one, so this pass
+  // finds nothing to say about them, but it still has to run, because a
+  // PINNED item never goes through validAt() at all. Its notch can be sealed
+  // by the drawer wall or by another pin, and skipping the pass under
+  // 'require' left the stricter policy reporting strictly less about the same
+  // geometry than the looser one did.
+  const notchWarnings = [];
+  if (Number(o.notchClear) > 0) {
+    for (const p of best.placed) {
+      if (!p.disc) continue;
+      let sealed = clipArea(p.disc, inner, CT.ctDifference) > NEST_TOL;
+      if (!sealed) {
+        for (const q of best.placed) {
+          if (q === p) continue;
+          if (clipArea(p.disc, q.pocket, CT.ctIntersection) > NEST_TOL) { sealed = true; break; }
+        }
+      }
+      if (sealed) notchWarnings.push(p.i);
+    }
+    notchWarnings.sort((a, b) => a - b);
+  }
+
+  return {
+    placements,
+    unplaced,
+    stats: {
+      ...statsBase,
+      placed: placements.length,
+      unplaced: unplaced.length,
+      passes: seen.size,
+      budgetHit,
+      tests,
+      bbox: best.bbox,
+      area: best.area,
+      notchWarnings,
+      pinned: pinIdx.slice(),
+    },
+  };
+}
+
+// Apply a nest result without mutating anything: a NEW array the same length,
+// placed items carrying their new x / y / rot, everything else copied as it
+// was. Unplaced items are deliberately left where the user put them, so an
+// undo is just throwing this array away.
+export function applyNest(items, res) {
+  const by = new Map(((res && res.placements) || []).map(p => [p.i, p]));
+  return (Array.isArray(items) ? items : []).map((it, i) => {
+    const p = by.get(i);
+    return p ? { ...it, x: p.x, y: p.y, rot: p.rot } : { ...it };
+  });
+}
+
 // A sheet thickness in mm: any real number is clamped to the thinnest sheet
 // worth cutting, and only a missing one falls back to the default. `|| dflt`
 // would read 0 and NaN as "not given" while the layout panel reads them as
