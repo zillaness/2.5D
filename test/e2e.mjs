@@ -7387,6 +7387,44 @@ const queueOne = await page.evaluate(async () => {
     queued: app.state.queue.map(q => q.path),
   };
 
+  // Two different photos that happen to share a file name are two photos. A
+  // plain multi-select and a drop of loose files carry no relative path, so
+  // the bare name is all the queue gets; the file behind it is what tells
+  // them apart, and the second tool must not vanish as a "duplicate".
+  app.queue.clear();
+  const twinA = await photoFile('wrench.jpg', 300, 240);
+  const twinB = await photoFile('wrench.jpg', 460, 360);
+  const twinFirst = await app.queue.add([twinA]);
+  const twinSecond = await app.queue.add([twinB]);
+  const twins = {
+    first: twinFirst.length,
+    second: twinSecond.length,
+    n: app.state.queue.length,
+    paths: app.state.queue.map(q => q.path),
+    sizes: app.state.queue.map(q => q.file.size),
+    distinct: twinA.size !== twinB.size,
+    // Re-adding a photo already queued is still a no-op.
+    again: (await app.queue.add([twinB])).length,
+    nAfter: app.state.queue.length,
+  };
+
+  // One sibling project is one traced photo. With two same-named photos in the
+  // queue it must retire the first and leave the second to be traced by hand.
+  const twinProject = JSON.stringify({
+    app: '2.5D', version: 1, fileName: 'wrench',
+    regions: [{ thickness: 6 }],
+    trace: { outer: [{ x: 5, y: 5 }, { x: 45, y: 5 }, { x: 45, y: 25 }, { x: 5, y: 25 }], holes: [], circles: [] },
+  });
+  const twinResumed = await app.queue.resume([{
+    path: 'wrench.json',
+    file: new File([twinProject], 'wrench.json', { type: 'application/json' }),
+  }]);
+  const twinResume = {
+    resumed: twinResumed,
+    statuses: app.state.queue.map(q => q.status),
+    picked: app.state.queue.map(q => q.picked),
+  };
+
   // Put Step 1 and the queue back for the blocks below.
   app.queue.clear();
   app.state.image = before.image;
@@ -7408,7 +7446,7 @@ const queueOne = await page.evaluate(async () => {
     queue: app.state.queue.length,
   };
 
-  return { ingest, strip1, dedupe, unsupported, selectAll, cleared, loaded, visible, dropLoose, dropFolder, restored };
+  return { ingest, strip1, dedupe, unsupported, selectAll, cleared, loaded, visible, dropLoose, dropFolder, twins, twinResume, restored };
 });
 
 check('three photos ingest as three pending queue items named from their files',
@@ -7436,6 +7474,21 @@ check('the strip shows a ticked tile per photo with a status badge and a count',
 check('the same photo added twice is one queue item',
   queueOne.dedupe.added === 0 && queueOne.dedupe.n === 3,
   `re-add appended ${queueOne.dedupe.added}, queue still ${queueOne.dedupe.n}`);
+
+check('two different photos sharing one bare file name are two queue items',
+  queueOne.twins.distinct && queueOne.twins.first === 1 && queueOne.twins.second === 1 &&
+  queueOne.twins.n === 2 &&
+  JSON.stringify(queueOne.twins.paths) === JSON.stringify(['wrench.jpg', 'wrench.jpg']) &&
+  queueOne.twins.sizes[0] !== queueOne.twins.sizes[1] &&
+  queueOne.twins.again === 0 && queueOne.twins.nAfter === 2,
+  `added ${queueOne.twins.first} then ${queueOne.twins.second}, queue ${queueOne.twins.n} ` +
+  `holding ${JSON.stringify(queueOne.twins.sizes)} bytes; re-add appended ${queueOne.twins.again}`);
+
+check('one sibling project marks one photo traced, not every photo of that name',
+  queueOne.twinResume.resumed === 1 &&
+  JSON.stringify(queueOne.twinResume.statuses) === JSON.stringify(['traced', 'pending']) &&
+  JSON.stringify(queueOne.twinResume.picked) === JSON.stringify([false, true]),
+  `resumed ${queueOne.twinResume.resumed}, statuses ${JSON.stringify(queueOne.twinResume.statuses)}`);
 
 check('a HEIC photo is queued as unsupported and cannot be ticked',
   queueOne.unsupported.status === 'unsupported' && queueOne.unsupported.picked === false &&

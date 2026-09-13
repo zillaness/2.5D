@@ -570,6 +570,17 @@ function queuePathOf(item, file) {
   return (file && (file.webkitRelativePath || file.name)) || '';
 }
 
+// Two File objects are the same photo when they are the same object, or when
+// name, size and last-modified all agree. A folder re-opened hands over fresh
+// File objects for the same bytes, so object identity on its own is not
+// enough; two different photos that merely share a name agree on none of the
+// three.
+function queueSameFile(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.name === b.name && a.size === b.size && a.lastModified === b.lastModified;
+}
+
 function queueBaseName(path) {
   const last = String(path || '').split('/').pop() || '';
   return last.replace(/\.[^.]+$/, '') || last;
@@ -640,7 +651,14 @@ async function queueAddFiles(files) {
     const path = queuePathOf(it, file);
     if (!queueIsPhoto(path, file)) continue;
     // The same photo twice (a folder re-opened, a drop repeated) is one item.
-    if (state.queue.some(q => q.path === path)) continue;
+    // The path alone is not the identity: a multi-select and a drop of loose
+    // files carry no relative path at all, so two genuinely different photos
+    // from two folders both arrive as "wrench.jpg". Identity is the path plus
+    // the file behind it, so the second one is queued rather than silently
+    // discarded as a duplicate. `added` is checked too: the batch is not in
+    // state.queue until the loop is done.
+    if (state.queue.some(q => q.path === path && queueSameFile(q.file, file))) continue;
+    if (added.some(q => q.path === path && queueSameFile(q.file, file))) continue;
     const heic = queueIsHeic(path, file);
     added.push({
       id: 'q' + (++queueSeq),
@@ -856,15 +874,23 @@ async function queueResume(pairs) {
   }
   if (!jsons.size) return 0;
   let resumed = 0;
+  // One project file is one traced photo. Two photos can share a path when
+  // they come in with no relative path of their own, and a single wrench.json
+  // is a trace of one of them, not of both, so a sibling that has already
+  // retired a photo does not retire the next one as well.
+  const spent = new Set();
   for (const item of state.queue) {
     if (item.status !== 'pending') continue;
-    const pair = jsons.get(queueSiblingJson(item.path).toLowerCase());
+    const key = queueSiblingJson(item.path).toLowerCase();
+    if (spent.has(key)) continue;
+    const pair = jsons.get(key);
     if (!pair) continue;
     let json = null;
     try { json = JSON.parse(await pair.file.text()); } catch { json = null; }
     // A library export beside a photo is not a trace OF that photo, so only a
     // project file counts.
     if (!isProject(json)) continue;
+    spent.add(key);
     item.status = 'traced';
     item.picked = false;
     resumed++;
