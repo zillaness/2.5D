@@ -718,10 +718,11 @@ pending and ticked again; its library entry stays saved, and tracing that photo
 again under the same name overwrites that entry rather than adding a second one.
 A name the library already holds takes the photo's folder as a suffix, so
 `wrench.jpg` from two different folders cannot overwrite one entry. Where the
-photo has no writable folder of its own, on the directory-input backend or
-after a drop of a folder the open one does not contain, the project is offered
-as a download instead, once per photo. A project is never written into a folder
-the photo does not sit in.
+photo has no writable folder of its own, on the directory-input backend, after
+a drop of a folder the open one does not contain, or for a loose photo from
+**➕ Add photos…** or a drop of single files, which carry no folder of their
+own at all, the project is offered as a download instead, once per photo. A
+project is never written into a folder the photo does not sit in.
 
 **Stop and organize.** **Organize what I have ▸** opens Step 4 with every tool
 traced this session ticked in the palette, so **Add all** places exactly those

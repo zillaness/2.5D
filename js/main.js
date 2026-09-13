@@ -1185,14 +1185,18 @@ function queueLibName(item, typed) {
 // download. Once a segment has resolved the photo really is in here, so a
 // subfolder gone since the ingest falls back to the deepest folder that did
 // resolve, which still keeps the project inside the tool collection. A photo
-// with no path at all (a multi-select hands over bare names) belongs to the
-// open folder by default, the way "Save here" does.
+// with no path at all ("Add photos…" and a drop of loose files hand over bare
+// names) says nothing about where it sits, so it is not this folder's photo
+// either: writing awl.json into the open folder for an awl.jpg picked off the
+// Desktop would truncate the project of the awl.jpg that really is in there.
+// Those take the download too.
 async function queueDirFor(path) {
   if (!layFolderHandle) return null;
   const parts = String(path || '').split('/');
   parts.pop();
-  let inside = !parts.length;
-  if (parts.length && parts[0] === layFolderHandle.name) { parts.shift(); inside = true; }
+  if (!parts.length) return null;
+  let inside = false;
+  if (parts[0] === layFolderHandle.name) { parts.shift(); inside = true; }
   let dir = layFolderHandle;
   for (const seg of parts) {
     if (!dir || typeof dir.getDirectoryHandle !== 'function') return inside ? dir : null;

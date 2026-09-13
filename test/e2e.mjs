@@ -8258,7 +8258,11 @@ const queueFive = await page.evaluate(async () => {
     g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
     g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
     const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
-    return new File([blob], name, { type: 'image/jpeg' });
+    const f = new File([blob], String(name).split('/').pop(), { type: 'image/jpeg' });
+    if (String(name).includes('/')) {
+      Object.defineProperty(f, 'webkitRelativePath', { value: name });
+    }
+    return f;
   };
 
   const before = {
@@ -8321,12 +8325,14 @@ const queueFive = await page.evaluate(async () => {
     next: app.queue.next(null),
   };
 
-  // One action, three photos, three pending items named from the files. A plain multi-select hands over File objects with no paths at all.
+  // One action, three photos, three pending items named from the files. These
+  // three sit in the folder the picker opened, so the per-photo project goes in
+  // beside them.
   app.queue.clear();
   const three = [
-    await photoFile('ratchet.jpg', 600, 450),
-    await photoFile('scriber.jpg', 460, 600),
-    await photoFile('tin snips.jpg', 520, 400),
+    await photoFile('kit/ratchet.jpg', 600, 450),
+    await photoFile('kit/scriber.jpg', 460, 600),
+    await photoFile('kit/tin snips.jpg', 520, 400),
   ];
   const added = await app.queue.add(three);
   const ingested = {
@@ -9046,6 +9052,145 @@ check('the Kind block leaves the library, the layout, the panel and Step 1 as it
   queueEight.restored.picks === 0 && queueEight.restored.items,
   `step ${queueEight.restored.step}, library restored ${queueEight.restored.lib}, ` +
   `kind restored ${queueEight.restored.kind}, queue ${queueEight.restored.queue}`);
+
+// ---------- a photo with no folder of its own writes into none ----------
+//
+// "Add photos…" and a drop of loose files hand over bare file names, which say
+// nothing about where the photo sits. Writing such a project into the folder
+// the picker happens to have open puts it beside a photo it has nothing to do
+// with, and truncates that photo's project when the names agree. The download
+// takes it instead.
+const queueNine = await page.evaluate(async () => {
+  const app = window.__app;
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+
+  const before = {
+    image: app.state.image,
+    rect: app.state.rect,
+    rectDirty: app.state.rectDirty,
+    corners: app.state.corners && app.state.corners.map(p => ({ x: p.x, y: p.y })),
+    fileName: app.state.fileName,
+    label: document.getElementById('fileLabelText').textContent,
+    step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    ref: app.queue.snapshot(),
+  };
+  localStorage.setItem('2p5d.library.v1', '[]');
+
+  const writes = [];
+  const fileHandle = (name, file) => ({ kind: 'file', name, getFile: async () => file });
+  const bench = {
+    kind: 'directory', name: 'bench',
+    children: [],
+    values: async function* () { for (const c of bench.children) yield c; },
+    queryPermission: async () => 'granted',
+    requestPermission: async () => 'granted',
+    getDirectoryHandle: async () => { throw new Error('no such folder'); },
+    getFileHandle: async n => ({
+      createWritable: async () => ({
+        write: async text => { writes.push({ dir: 'bench', name: n, text: String(text) }); },
+        close: async () => {},
+      }),
+    }),
+  };
+  // Last week's awl, photo and project, sitting in the folder the picker opens.
+  const benchProject = JSON.stringify({
+    app: '2.5D', version: 1, fileName: 'awl',
+    regions: [{ thickness: 6 }],
+    trace: { outer: rect(3, 3, 30, 14), holes: [], circles: [] },
+  });
+  bench.children = [
+    fileHandle('awl.jpg', await photoFile('awl.jpg', 320, 240)),
+    fileHandle('awl.json', new File([benchProject], 'awl.json', { type: 'application/json' })),
+  ];
+
+  app.queue.clear();
+  await app.queue.ingestFolder(bench, 'bench');
+  // A different awl, multi-selected off the Desktop, so it arrives with no
+  // path of its own and the same base name the folder already answers to.
+  await app.queue.add([await photoFile('awl.jpg', 600, 450)]);
+  const queued = {
+    paths: app.state.queue.map(q => q.path),
+    statuses: app.state.queue.map(q => q.status),
+  };
+
+  app.queue.load(app.state.queue[1]);
+  await wait(700);
+  app.traceEditor.setTrace(rect(5, 5, 20, 60), []);
+  const one = await app.queue.walk.next();
+  await wait(400);
+  const loose = {
+    wrote: one && one.wrote.kind,
+    name: one && one.wrote.name,
+    writes: writes.map(w => `${w.dir}/${w.name}`),
+    libNames: JSON.parse(localStorage.getItem('2p5d.library.v1')).map(o => o.name),
+    status: app.state.queue[1].status,
+    benchStatus: app.state.queue[0].status,
+  };
+
+  // Put the library, the folder, the queue and Step 1 back.
+  app.queue.clear();
+  app.palette.setFolder({ entries: [], skipped: [] }, '');
+  app.folderBackend.forget();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.palette.refresh();
+  app.queue.applyRef(before.ref);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles);
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  app.state.rectDirty = before.rectDirty;
+  app.state.corners = before.corners;
+  app.state.fileName = before.fileName;
+  document.getElementById('fileLabelText').textContent = before.label;
+  app.cornerEditor.setImage(before.image);
+  if (before.corners) app.cornerEditor.setCorners(before.corners);
+  app.goStep(before.step);
+  await wait(300);
+  const restored = {
+    step: app.state.step,
+    image: app.state.image === before.image,
+    lib: localStorage.getItem('2p5d.library.v1') === before.lib,
+    queue: app.state.queue.length,
+    handle: app.folderBackend.handle,
+    palette: app.palette.folder.entries.length,
+  };
+
+  return { queued, loose, restored };
+});
+
+check('a photo with no folder of its own never writes over a project in the open one',
+  JSON.stringify(queueNine.queued.paths) === JSON.stringify(['bench/awl.jpg', 'awl.jpg']) &&
+  JSON.stringify(queueNine.queued.statuses) === JSON.stringify(['traced', 'pending']) &&
+  queueNine.loose.wrote === 'download' && queueNine.loose.name === 'awl.json' &&
+  JSON.stringify(queueNine.loose.writes) === JSON.stringify([]) &&
+  JSON.stringify(queueNine.loose.libNames) === JSON.stringify(['awl']) &&
+  queueNine.loose.status === 'traced' && queueNine.loose.benchStatus === 'traced',
+  `queue ${JSON.stringify(queueNine.queued.paths)} with “bench” open; the loose photo went to ` +
+  `${queueNine.loose.wrote} as “${queueNine.loose.name}”, folder writes ` +
+  `${JSON.stringify(queueNine.loose.writes)}, library ${JSON.stringify(queueNine.loose.libNames)}`);
+
+check('the loose-photo block leaves the library, the folder and Step 1 as it found them',
+  queueNine.restored.step === 3 && queueNine.restored.image && queueNine.restored.lib &&
+  queueNine.restored.queue === 0 && queueNine.restored.handle === null &&
+  queueNine.restored.palette === 0,
+  `step ${queueNine.restored.step}, library restored ${queueNine.restored.lib}, ` +
+  `queue ${queueNine.restored.queue}, handle ${queueNine.restored.handle}`);
 
 // ---------- snap to grid in the layout editor (Part B) ----------
 // Snapping is a property of the gesture: a drag, an arrow-key nudge and a
