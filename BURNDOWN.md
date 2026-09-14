@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.6
+version: 1.7
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-12
@@ -69,6 +69,8 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - ✅ Merged suite: 593 checks, all passing, which is 472 plus 65, 39 and 17, so
   nothing was lost in the merge — 931657c
 - ✅ Deployed v1.25.0 to gh-pages — 90717c3
+- ✅ docs/resume_editing_prd_v1.0.md drafted (getting back to a traced tool:
+  queue re-edit, honest naming of the two project saves, autosave last)
 - ▶ NEXT: nesting steps 5-9 (the Nest button, profile picker, 2p5d.packprofiles.v1,
   label-space reservation, seam corridors) — the geometry is shipped but unreachable.
   Then autosave of trace progress, which Sam raised on 2026-09-13 and which wants a
@@ -89,6 +91,13 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - 3MF export — deferred, no decision.
 - Nesting implementation — needs sign-off on the PRD in item 3.
 
+## Needs Sam's call, still open
+- **Sign-off on `docs/resume_editing_prd_v1.0.md`** (drafted 2026-09-14). Open
+  questions 1 and 2 change the interaction, 3 decides which file is
+  authoritative when the sibling project and the library entry disagree.
+- **Em dashes in repo docs.** Flagged three times, still unresolved.
+- **Frontmatter on README.md.** Flagged twice, still unresolved.
+
 ## Notes
 - The handoff's "two e2e commit-message count assertions off by one" was
   mis-scoped. There are no such assertions in the suite. The `167/166` and
@@ -102,11 +111,11 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   Joining big pieces is a laser/router concern; Gridfinity covers the printed
   case. The fit-sign flip finding (laser removes material, printer adds it)
   still matters if it is ever revived.
-- **Sign-off on `docs/labelling_prd_v1.0.md`**, plus answers to its open
+- ~~Sign-off on `docs/labelling_prd_v1.0.md`~~ **signed off and shipped; steps 1-7 are in v1.25.0.** Original ask kept for the record:, plus answers to its open
   questions 1 (single-line fonts for routers, deferring is a real cost) and 4
   (a third `engrave` SVG layer, which changes the exported layer set). Those
   two change the shape of the work rather than a default.
-- **Sign-off on `docs/nesting_prd_v1.1.md`.** Steps 1-4 of its plan are the
+- ~~Sign-off on `docs/nesting_prd_v1.1.md`~~ **signed off; steps 1-4 shipped in v1.25.0 as unreachable geometry, steps 5-9 open.** Original ask: Steps 1-4 of its plan are the
   feature; nothing was built. Open questions carry recommendations: rotation
   step per profile, explicit button rather than auto-run, default webs (8 mm
   Access / 4 mm Dense, both unvalidated against a real cut), localStorage-only
@@ -171,3 +180,4 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.3 (2026-09-10): PRD widened to docs/selection_and_organize_prd_v1.2.md (Step 4 Organize, ultracode build plan).
 - v1.5 (2026-09-13): S5 shipped. Parts A, B and D built in parallel lanes, reviewed, merged and deployed as v1.24.0.
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
+- v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
