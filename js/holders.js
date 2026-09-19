@@ -799,8 +799,22 @@ function* nestCore(containerOuter, items, opts = {}) {
   // re-read for every later item and every later pass. The answer would then
   // depend on when the user happened to click, which is exactly the
   // determinism this module is built to refuse.
-  const list = (Array.isArray(items) ? items : [])
-    .map(it => (it && typeof it === 'object' ? { ...it } : it));
+  //
+  // The spread is shallow, which is enough for the scalars the packer reads off
+  // an item (rot, pin, rotLock) but not for `notch`, which is a live object the
+  // layout editor's notch handle drags IN PLACE: a nudge mid-run would be seen
+  // by nestVariant for every item not yet packed and not by those already
+  // placed, mixing two geometries in one answer. `labelAt` is dragged in place
+  // the same way and is read through itemLabelText when label space is
+  // reserved. The polygons are left aliased on purpose: they are large, and
+  // nothing reachable from Step 4 mutates one in place.
+  const list = (Array.isArray(items) ? items : []).map(it => {
+    if (!it || typeof it !== 'object') return it;
+    const copy = { ...it };
+    if (copy.notch && typeof copy.notch === 'object') copy.notch = { ...copy.notch };
+    if (copy.labelAt && typeof copy.labelAt === 'object') copy.labelAt = { ...copy.labelAt };
+    return copy;
+  });
   const ClipperLib = CL();
   const CT = ClipperLib.ClipType;
   const h = Math.max(0, Number(o.minWeb) || 0) / 2;

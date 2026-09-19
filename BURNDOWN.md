@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.13
+version: 1.14
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-19
@@ -159,6 +159,25 @@ landing position. Steps 1 to 6 and 8 shipped as v1.27.0; step 7 did not.
   are placed; what is missing is the independent measurement that would catch a
   mis-measured drawer. Also outstanding and named in the README: merging two
   candidates that were touching, and thumbnails in the review list.
+
+## The adversarial review, 2026-09-19
+An 87-agent review of this session's work: six lenses over the diff, then three
+independent skeptics per finding, each prompted to refute. **27 candidates, 9
+confirmed, 18 refuted.** Every confirmed one is fixed, with the reviewer's own
+reproduction as the test. Worth recording that two thirds were wrong: the
+skeptic pass is what made the nine worth acting on.
+
+The nine, and what they had in common: three were constants or comparisons
+chosen against one example rather than the worst case, five were the review and
+the single-tool edit borrowing Step 2 without thinking about being walked away
+from, and one was the generator rewrite's shallow snapshot.
+
+The sharpest was an artifact nobody would have traced to its cause: drag a
+corner half a millimetre wide, which the README's own instruction makes routine,
+and a band of WALL along one edge segments as an object. Being a strip it fills
+its own bounding box completely, so the sliver gate could not see it. It
+arrived as "Tool 1", ticked, renumbering every real tool beneath it, and placed
+as a full-width pocket hard against the wall that the build then refused.
 
 ## Noticed in passing, not fixed
 - **The Step 4 folder palette truncates tool names to two or three characters.**

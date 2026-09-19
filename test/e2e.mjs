@@ -13552,9 +13552,52 @@ const scanFixes = await page.evaluate(async () => {
   ge.fillRect(0, 0, 240, 3);                 // a stripe hard along the top edge
   ge.fillRect(60, 60, 80, 60);               // and a real tool well clear of it
   const edged = segmentObjects(computeDiffMap(e),
-    { threshold: 40, cleanupRadius: 3, marginPx: 2, minAreaPx: 100 });
+    { threshold: 40, cleanupRadius: 3, marginPx: 4, minAreaPx: 100 });
   const touchesEdge = edged.some(m => m.y0 < 2 || m.x0 < 2 ||
     m.x0 + m.w > 238 || m.y0 + m.h > 238);
+
+  // And the artifact this really has to survive: a corner dragged half a
+  // millimetre wide leaves a band of WALL along one edge of the rectified
+  // drawer. It is genuinely darker than the liner, so it segments; and being a
+  // strip it fills its own bounding box completely, so the sliver gate cannot
+  // see it. Left in, it arrives as "Tool 1", ticked, renumbering every real
+  // tool under it, and places as a full-width pocket hard against the wall
+  // that the build then refuses.
+  const wallCanvas = (bandPx, ppm) => {
+    const W = Math.round(400 * ppm), H = Math.round(300 * ppm);
+    const w = document.createElement('canvas');
+    w.width = W; w.height = H;
+    const gw = w.getContext('2d');
+    gw.fillStyle = '#b0b0b0'; gw.fillRect(0, 0, W, H);
+    gw.fillStyle = '#4a4034'; gw.fillRect(0, 0, W, bandPx);     // the wall
+    gw.fillStyle = '#2c2c2c';
+    gw.fillRect(Math.round(50 * ppm), Math.round(40 * ppm),
+      Math.round(120 * ppm), Math.round(25 * ppm));             // a real tool
+    gw.fillRect(Math.round(220 * ppm), Math.round(40 * ppm),
+      Math.round(60 * ppm), Math.round(60 * ppm));              // and another
+    return w;
+  };
+  const runScan = (canvas, ppm, cleanup) => {
+    const dm = computeDiffMap(canvas);
+    return scanParts(segmentObjects(dm, {
+      threshold: 40, cleanupRadius: cleanup,
+      marginPx: Math.max(2, cleanup + 1), minAreaPx: 200,
+    }), ppm, { frame: { w: dm.w / ppm, h: dm.h / ppm } });
+  };
+  // Thin enough for the margin to swallow, and thick enough that it cannot.
+  const thinBand = runScan(wallCanvas(3, 8), 8, 2);
+  const fatBand = runScan(wallCanvas(9, 8), 8, 2);
+  // A real tool pushed hard against the wall is still a tool.
+  const againstWall = (() => {
+    const ppm = 8, W = 400 * ppm, H = 300 * ppm;
+    const w = document.createElement('canvas');
+    w.width = W; w.height = H;
+    const gw = w.getContext('2d');
+    gw.fillStyle = '#b0b0b0'; gw.fillRect(0, 0, W, H);
+    gw.fillStyle = '#2c2c2c';
+    gw.fillRect(0, 40 * ppm, 120 * ppm, 25 * ppm);   // touching the left wall
+    return runScan(w, ppm, 2);
+  })();
 
   // 3. A tool hard against the left wall lands inside the container's border
   //    inset, where the build refuses. The warning's left and top comparisons
@@ -13589,6 +13632,12 @@ const scanFixes = await page.evaluate(async () => {
     thinN: thin.length, thinFill: thinFill && Math.round(thinFill * 1000) / 1000,
     gate: SCAN_DEFAULTS.minFill,
     edgeParts: edged.length, touchesEdge,
+    thinBand: thinBand.map(p => p.name + ' ' + Math.round(p.bbox.w) + 'x' +
+      (Math.round(p.bbox.h * 10) / 10)),
+    fatBand: fatBand.map(p => p.name + ' ' + Math.round(p.bbox.w) + 'x' +
+      (Math.round(p.bbox.h * 10) / 10)),
+    againstWall: againstWall.length,
+    againstWallW: againstWall.length ? Math.round(againstWall[0].bbox.h) : 0,
     wall: wall.nearWall, clear: clear.nearWall,
   };
 });
@@ -13603,6 +13652,17 @@ check('the margin band is still clear after morphClean, whose dilate pulls the m
   scanFixes.edgeParts === 1 && !scanFixes.touchesEdge,
   `a stripe along the very edge and one real tool: ${scanFixes.edgeParts} component kept, ` +
   `none touching the band (${scanFixes.touchesEdge})`);
+
+check('a band of wall along a mis-dragged edge is not Tool 1, however thick it is',
+  scanFixes.thinBand.length === 2 && scanFixes.fatBand.length === 2 &&
+  scanFixes.thinBand.every(n => /^Tool [12] (120x25|60x60)$/.test(n)) &&
+  scanFixes.fatBand.every(n => /^Tool [12] (120x25|60x60)$/.test(n)),
+  `a 0.4 mm band gives ${JSON.stringify(scanFixes.thinBand)} and a 1.1 mm one gives ` +
+  `${JSON.stringify(scanFixes.fatBand)}: the two real tools, numbered from 1, in both`);
+
+check('a real tool pushed hard against the wall is still a tool',
+  scanFixes.againstWall === 1 && Math.abs(scanFixes.againstWallW - 25) <= 1,
+  `${scanFixes.againstWall} kept, ${scanFixes.againstWallW} mm across its short side`);
 
 check('a tool photographed hard against a wall is counted, which the first comparison never did',
   scanFixes.wall === 1 && scanFixes.clear === 0,
@@ -13658,10 +13718,25 @@ const nestAsync = await page.evaluate(async () => {
   // A pack whose items are mutated mid-run must not be able to read the change.
   // The generator snapshots each item on entry, so a rotation lock toggled
   // between chunks cannot steer a pack that is already under way.
-  const live = items.map(it => ({ ...it }));
+  // Scalars first, then the objects a spread does NOT copy. item.notch is
+  // dragged in place by the layout editor's notch handle, and it changes the
+  // packed pocket: seen by the items not yet placed and not by those already
+  // placed, it would mix two geometries into one answer.
+  const notched = items.map((it, i) => ({
+    ...it, notch: { x: 10, y: 10, dia: 12 }, labelAt: { dx: 1, dy: 1 },
+  }));
+  const notchOpts = { ...opts, notchClear: 6 };
+  const notchRef = nestLayout(C, notched, notchOpts);
+  const live = notched.map(it => ({ ...it, notch: { ...it.notch }, labelAt: { ...it.labelAt } }));
   const meddled = await nestLayoutAsync(C, live, {
-    ...opts,
-    onProgress: () => { for (const it of live) { it.rot = 45; it.rotLock = 'current'; } },
+    ...notchOpts,
+    onProgress: () => {
+      for (const it of live) {
+        it.rot = 45; it.rotLock = 'current';
+        it.notch.x = 999; it.notch.dia = 40;      // dragged mid-pack
+        it.labelAt.dx = 99;
+      }
+    },
   });
 
   return {
@@ -13674,7 +13749,7 @@ const nestAsync = await page.evaluate(async () => {
     turns, chunks: recs1.length,
     cancelled, seen,
     afterCancel: JSON.stringify(after) === JSON.stringify(sync),
-    meddleSafe: JSON.stringify(meddled) === JSON.stringify(sync),
+    meddleSafe: JSON.stringify(meddled) === JSON.stringify(notchRef),
   };
 });
 
@@ -13702,8 +13777,8 @@ check('cancelling from the first chunk returns null and leaves no residue behind
 
 check('editing the drawer mid-nest cannot steer a pack already under way',
   nestAsync.meddleSafe,
-  `every item rotated and locked from inside progress; answer unchanged ` +
-  `${nestAsync.meddleSafe}`);
+  'every item rotated, rotation-locked, and had its finger notch and label offset dragged ' +
+  `from inside a progress callback; answer unchanged ${nestAsync.meddleSafe}`);
 
 // ---------- the autosave slot (resume editing, plan step 5) ----------
 // The backend of last resort: no writable folder, or a tab that died before

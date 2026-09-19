@@ -3903,8 +3903,15 @@ const scanActive = () => !!(state.scan && state.scan.active);
 // scan resolution is an eleven pixel strip cleared on every side: fine for a
 // sheet of paper, where the object is never at the edge, and wrong for a
 // drawer, where a tool commonly sits within 2 mm of a wall and would be
-// clipped or split. Two pixels is enough to swallow the warp's own edge.
-const SCAN_MARGIN_PX = 2;
+// clipped or split.
+//
+// It must exceed the cleanup radius. morphClean closes before it opens, so a
+// residue one pixel inside a band cleared to exactly the cleanup radius is
+// grown straight back over it, and at the frame edge erode() clamps its window
+// rather than reading out of bounds as background, so the opening pass cannot
+// take it off again. Cleared to radius + 1, the residue has nowhere to grow
+// from. At scan resolution the whole band is well under a millimetre.
+const scanMarginPx = () => Math.max(2, (Number(state.seg.cleanup) || 0) + 1);
 
 // Segment the rectified drawer and trace everything in it. Returns the parts,
 // or [] when nothing survives.
@@ -3922,13 +3929,16 @@ function scanRun() {
   const masks = segmentObjects(dm, {
     threshold: state.seg.threshold,
     cleanupRadius: state.seg.cleanup,
-    marginPx: SCAN_MARGIN_PX,
+    marginPx: scanMarginPx(),
     minAreaPx,
   });
   return scanParts(masks, ppm, {
     simplify: state.seg.simplify,
     smooth: state.seg.smooth,
     detectHoles: state.seg.detectHoles,
+    // The drawer's own extent, so a strip of wall along a mis-dragged edge can
+    // be told from a tool pushed against that wall.
+    frame: { w: dm.w / ppm, h: dm.h / ppm },
   });
 }
 
@@ -4115,6 +4125,12 @@ function scanExitReview() {
 // more button press to do the only thing this mode is for. Only once: a review
 // already in progress is not re-run behind the user's back.
 function scanMaybeReview() {
+  // Not while one tool is being edited. itemEditBegin ends in goStep(2), and
+  // goStep re-rectifies and offers a scan whenever rectDirty is set, which any
+  // earlier corner nudge leaves true. Without this, opening a tool for editing
+  // starts a fresh drawer scan on top of it: two live panels, the editor in
+  // scan mode, and the edit stranded behind it.
+  if (itemEdit) return false;
   if (!scanOn() || scanActive() || !state.rect) return false;
   const parts = scanRun();
   if (!parts.length) {
@@ -6645,7 +6661,13 @@ function loadProject(p, opts = {}) {
     // re-edit paths decode this project's OWN sibling photo and then lay the
     // project over it, so the frame underneath is the frame these corners were
     // marked on. That is the only case where inheriting is correct.
-    if (!opts.keepPhoto) state.image = null;
+    if (!opts.keepPhoto) {
+      state.image = null;
+      // And off the screen with it. Leaving the previous project's photograph
+      // painted on Step 1 invites corner edits against a frame that is no
+      // longer anyone's, and the corner editor takes null now.
+      cornerEditor.setImage(null);
+    }
     if (p.corners) { state.corners = p.corners; cornerEditor.setCorners(p.corners); }
     restoreRect();
   }
@@ -6763,13 +6785,16 @@ const LIB_WARN_BYTES = 4 * 1024 * 1024;
 // only copy. So the warning comes before the write and the choice is the
 // user's, which is what "offers to save without thumbnails" asks for.
 // Declining keeps every photo and writes the library as it stands.
+// Returns true only when the library actually reached storage. Callers that
+// discard a backup on the strength of a save have to know whether it happened.
 function libSaveFitted(list, name) {
   const fitted = libFitThumbs(list);
-  const saved = () => { refreshLibList(); };
+  let ok = false;
+  const saved = () => { ok = true; refreshLibList(); };
   if (!fitted.dropped) {
     if (libSave(list)) { toast(`Saved “${name}” to the outline library.`); saved(); }
     else toast('Could not save — storage is unavailable here.');
-    return;
+    return ok;
   }
   const drop = confirm(
     `The outline library is close to the browser's 5 MB limit, and saving it whole may not fit.\n\n` +
@@ -6782,12 +6807,13 @@ function libSaveFitted(list, name) {
       toast(`Saved “${name}”. The library was near the browser's 5 MB limit, so all ${fitted.dropped} photos in it came out.`, 6000);
       saved();
     } else toast('Could not save — storage is unavailable here.');
-    return;
+    return ok;
   }
   if (libSave(list)) {
     toast(`Saved “${name}” with its photo. The library is near the browser's 5 MB limit, so the next save may not fit.`, 6000);
     saved();
   } else toast('Could not save with the photos kept — the library is past what this browser will store. Save again and let the photos come out.', 7000);
+  return ok;
 }
 function libFitThumbs(list) {
   if (JSON.stringify(list).length <= LIB_WARN_BYTES) return { list, dropped: 0 };
@@ -6870,15 +6896,17 @@ function libCommit(entry) {
   const list = libLoad();
   const existing = list.findIndex(o => o.name === entry.name);
   if (existing >= 0) list[existing] = entry; else list.push(entry);
-  libSaveFitted(list, entry.name);
+  return libSaveFitted(list, entry.name);
 }
 
 $('libSaveBtn').addEventListener('click', () => {
   const name = ($('libName').value || '').trim() || `Outline ${new Date().toISOString().slice(0, 10)}`;
   const entry = libEntryFromTrace(name);
   if (!entry) { toast('No outline to save yet.'); return; }
-  libCommit(entry);
-  autosaveDone();
+  // Only once it is actually somewhere. A library save can fail outright, and
+  // throwing the recovery slot away on the strength of a save that did not
+  // happen loses the trace from both places at once.
+  if (libCommit(entry)) autosaveDone();
 });
 
 $('libList').addEventListener('change', () => refreshLibList());

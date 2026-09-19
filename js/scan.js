@@ -56,6 +56,27 @@ export const SCAN_DEFAULTS = {
   // Least area worth calling a part, in square millimetres. A loose bolt is
   // about 20 and is not a tool that gets a pocket.
   minAreaMm2: 30,
+
+  // The narrowest a component may be across its short side and still be a tool,
+  // WHEN IT TOUCHES THE EDGE of the rectified drawer.
+  //
+  // This is not a general minimum width: a 2 mm bar in the middle of the drawer
+  // is a real thing and is kept. It is aimed at one artifact. The corners are
+  // dragged by hand onto where the drawer's floor meets its walls, and missing
+  // by half a millimetre is routine, which leaves a band of wall or rim colour
+  // along one edge of the rectified image. That band is genuinely darker than
+  // the liner, so it segments as an object, and being a strip it fills its own
+  // bounding box completely, so the sliver gate waves it through. It then
+  // arrives as "Tool 1", ticked, renumbering every real tool beneath it, and
+  // places as a 400 mm pocket hard against the wall that the build then
+  // refuses.
+  //
+  // A real tool pushed against a wall is still millimetres thick. A geometric
+  // artifact of a mis-dragged corner is a fraction of one.
+  minEdgeWidthMm: 3,
+
+  // How close to the frame edge counts as touching it, in mm.
+  edgeTolMm: 0.6,
 };
 
 // A part's bounding box in mm.
@@ -116,6 +137,16 @@ function partFromMask(part, pxPerMm, o) {
   const bb = bboxOfPts(outerRaw.pts);
   const boxArea = Math.max(1e-6, bb.w * bb.h);
   if (outerRaw.area / boxArea < o.minFill) return null;
+
+  // The edge artifact. A strip of wall along a mis-dragged edge fills its own
+  // bounding box completely, so the gate above cannot see it; what gives it
+  // away is that it hugs the frame and is a fraction of a millimetre across.
+  if (o.frame && o.frame.w > 0 && o.frame.h > 0) {
+    const t = o.edgeTolMm;
+    const onEdge = bb.minX <= t || bb.minY <= t ||
+      bb.maxX >= o.frame.w - t || bb.maxY >= o.frame.h - t;
+    if (onEdge && Math.min(bb.w, bb.h) < o.minEdgeWidthMm) return null;
+  }
 
   const outer = detach(refine(outerRaw.pts));
   if (outer.length < 3) return null;
