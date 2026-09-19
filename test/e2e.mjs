@@ -13516,6 +13516,98 @@ check('a scan asks before replacing a drawer someone already laid out',
   `declining kept “${scanGuards.keptDrawer.name}”; accepting replaced it with ` +
   `${scanGuards.replaced.placed} scanned tool`);
 
+// ---------- three constants and a comparison, chosen against evidence ----------
+// Each of these looked reasonable and was wrong by an amount only a worked
+// example shows.
+const scanFixes = await page.evaluate(async () => {
+  const app = window.__app;
+  const { computeDiffMap, segmentObjects } = await import('/js/segment.js');
+  const { scanParts, SCAN_DEFAULTS } = await import('/js/scan.js');
+  const PPM = 4;
+
+  // 1. A 180 x 6 mm rule laid at 45 degrees. Thirty to one, and it fills 0.062
+  //    of its axis-aligned bounding box: under the 0.07 the scan first shipped
+  //    with, so it would have vanished, silently, for being laid at an angle.
+  const c = document.createElement('canvas');
+  c.width = 640; c.height = 640;
+  const g = c.getContext('2d');
+  g.fillStyle = '#b0b0b0'; g.fillRect(0, 0, 640, 640);
+  g.save();
+  g.translate(320, 320); g.rotate(Math.PI / 4);
+  g.fillStyle = '#2c2c2c';
+  g.fillRect(-180 * PPM / 2, -6 * PPM / 2, 180 * PPM, 6 * PPM);
+  g.restore();
+  const thin = scanParts(segmentObjects(computeDiffMap(c),
+    { threshold: 40, cleanupRadius: 1, marginPx: 2, minAreaPx: 200 }), PPM);
+  const thinFill = thin.length ? thin[0].area / (thin[0].bbox.w * thin[0].bbox.h) : null;
+
+  // 2. The margin band must still be clear AFTER morphClean, whose dilate pass
+  //    pulls the mask straight back out into it whenever the cleanup radius
+  //    reaches the margin. A clear a later dilate undoes is not a clear.
+  const e = document.createElement('canvas');
+  e.width = 240; e.height = 240;
+  const ge = e.getContext('2d');
+  ge.fillStyle = '#b0b0b0'; ge.fillRect(0, 0, 240, 240);
+  ge.fillStyle = '#2c2c2c';
+  ge.fillRect(0, 0, 240, 3);                 // a stripe hard along the top edge
+  ge.fillRect(60, 60, 80, 60);               // and a real tool well clear of it
+  const edged = segmentObjects(computeDiffMap(e),
+    { threshold: 40, cleanupRadius: 3, marginPx: 2, minAreaPx: 100 });
+  const touchesEdge = edged.some(m => m.y0 < 2 || m.x0 < 2 ||
+    m.x0 + m.w > 238 || m.y0 + m.h > 238);
+
+  // 3. A tool hard against the left wall lands inside the container's border
+  //    inset, where the build refuses. The warning's left and top comparisons
+  //    had the origin offset on one side only, which made them read
+  //    "minX < 0" at the default border: never true.
+  const before = {
+    container: structuredClone(app.state.layout.container),
+    items: structuredClone(app.state.layout.items),
+    step: app.state.step, confirm: window.confirm,
+  };
+  window.confirm = () => true;
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const part = (name, x, y, w, h) => ({
+    name, outer: rect(x, y, w, h), holes: [], area: w * h,
+    bbox: { minX: x, minY: y, maxX: x + w, maxY: y + h, w, h },
+  });
+  app.state.layout.items.length = 0;
+  const wall = app.scan.place([part('against the wall', 1, 40, 30, 20)], { w: 120, h: 100 });
+  app.state.layout.items.length = 0;
+  const clear = app.scan.place([part('well clear', 30, 40, 30, 20)], { w: 120, h: 100 });
+
+  window.confirm = before.confirm;
+  app.state.layout.container = before.container;
+  app.state.layout.items.length = 0;
+  for (const it of before.items) app.state.layout.items.push(it);
+  app.goStep(4);
+  app.goStep(before.step);
+  app.refreshLayoutEditor();
+  return {
+    thinN: thin.length, thinFill: thinFill && Math.round(thinFill * 1000) / 1000,
+    gate: SCAN_DEFAULTS.minFill,
+    edgeParts: edged.length, touchesEdge,
+    wall: wall.nearWall, clear: clear.nearWall,
+  };
+});
+
+check('a 30-to-1 rule laid at 45° is a tool, which the gate this shipped with would have dropped',
+  scanFixes.thinN === 1 && scanFixes.thinFill < 0.07 &&
+  scanFixes.thinFill > scanFixes.gate,
+  `it fills ${scanFixes.thinFill} of its bounding box: under the 0.07 first shipped, over the ` +
+  `${scanFixes.gate} chosen against it`);
+
+check('the margin band is still clear after morphClean, whose dilate pulls the mask back into it',
+  scanFixes.edgeParts === 1 && !scanFixes.touchesEdge,
+  `a stripe along the very edge and one real tool: ${scanFixes.edgeParts} component kept, ` +
+  `none touching the band (${scanFixes.touchesEdge})`);
+
+check('a tool photographed hard against a wall is counted, which the first comparison never did',
+  scanFixes.wall === 1 && scanFixes.clear === 0,
+  `1 mm from the left wall counts ${scanFixes.wall}; 30 mm in counts ${scanFixes.clear}`);
+
 // ---------- the nest that yields (nesting PRD, criterion 6) ----------
 // nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
 // packers to keep agreeing. The async one yields a macrotask between items, so

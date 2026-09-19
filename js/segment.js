@@ -241,8 +241,23 @@ export function segmentObjects(diffMap, options) {
 
   mask = morphClean(mask, w, h, cleanupRadius);
 
-  // morphClean returns its input unchanged at radius 0, so `mask` may alias the
-  // threshold mask above. Nothing below writes into it.
+  // And again, because morphClean's dilate pass pulls the mask back OUT into
+  // the band that was just cleared whenever the cleanup radius is at least the
+  // margin. The band exists to keep the rectified image's own edge, where the
+  // warp interpolates against nothing, out of the result; a clear that a later
+  // dilate undoes is not a clear. morphClean returns a NEW array for any
+  // radius above 0, and at radius 0 it returns its input and there is nothing
+  // to undo, so this writes into the caller's threshold mask in neither case.
+  if (marginPx > 0 && cleanupRadius > 0) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (x < marginPx || y < marginPx || x >= w - marginPx || y >= h - marginPx) {
+          mask[y * w + x] = 0;
+        }
+      }
+    }
+  }
+
   const { labels, sizes } = labelComponents(mask, w, h);
   if (!sizes.length) return [];
 

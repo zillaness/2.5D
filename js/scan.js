@@ -36,12 +36,22 @@ export const SCAN_DEFAULTS = {
   // line. The scan floors lower and leans on the sliver gate instead.
   minHoleAreaMm2: 1.5,
 
-  // How much of its own bounding box a component has to fill to count as a
-  // tool rather than a smear. js/regions.js uses 0.25, which is an orientation
-  // lottery on a drawer: a 200 by 20 mm tool laid at 45 degrees fills 0.165 of
-  // its bounding box and would be rejected outright, silently, for the crime of
-  // not being square to the drawer. Tools get laid at angles on purpose.
-  minFill: 0.07,
+  // How much of its own AXIS-ALIGNED bounding box a component has to fill to
+  // count as a tool rather than a smear.
+  //
+  // This is a heuristic and the number has to be chosen against the worst tool
+  // it must admit, not against what looks reasonable. The measure is not
+  // orientation-invariant: a long thin tool laid at 45 degrees fills far less
+  // of its bounding box than the same tool laid square, and tools get laid at
+  // angles on purpose. js/regions.js uses 0.25, which rejects a 200 by 20 mm
+  // tool at 45 degrees (0.165) outright and silently. But 0.07 is not enough
+  // either: a 180 by 6 mm rule, 30 to 1, fills 0.062 at 45 degrees and would
+  // have gone the same way.
+  //
+  // 0.03 sits below that with room, and the load-bearing filter for actual
+  // smears is minAreaMm2 together with morphClean, not this. Anything thinner
+  // than 60 to 1 at 45 degrees is not a hand tool.
+  minFill: 0.03,
 
   // Least area worth calling a part, in square millimetres. A loose bolt is
   // about 20 and is not a tool that gets a pocket.

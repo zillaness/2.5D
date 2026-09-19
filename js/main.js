@@ -4475,10 +4475,13 @@ function scanPlaceParts(parts, dims) {
   let nearWall = 0;
   for (const part of list) {
     const bb = part.bbox;
-    if (bb.minX + SCAN_ORIGIN_MM < inset ||
-        bb.minY + SCAN_ORIGIN_MM < inset ||
-        bb.maxX + SCAN_ORIGIN_MM > cw + SCAN_ORIGIN_MM - inset ||
-        bb.maxY + SCAN_ORIGIN_MM > ch + SCAN_ORIGIN_MM - inset) nearWall++;
+    // In LAYOUT mm the tool spans [minX + 5, maxX + 5] and the container's
+    // inner edge is at 5 + inset, so the origin offset is on both sides of the
+    // comparison and cancels. Adding it to only one side made the left and top
+    // tests read `minX < inset - 5`, which is `minX < 0` at the default border:
+    // never true, so a tool hard against the left wall was never counted.
+    if (bb.minX < inset || bb.minY < inset ||
+        bb.maxX > cw - inset || bb.maxY > ch - inset) nearWall++;
   }
   layoutEditor.sel = 0;
   syncLayoutFields();
