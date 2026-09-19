@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.10
+version: 1.11
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-19
@@ -127,6 +127,17 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - ▶ NEXT: resume-editing step 2 (library re-edit, now with the load-time
   prompt Sam chose for open question 3), then autosave, step 5 and independent
   of everything. Steps 3 and 4 need Sam's call first, see below.
+
+## Noticed in passing, not fixed
+- **The Step 4 folder palette truncates tool names to two or three characters.**
+  A folder of "claw hammer", "combination pliers", "screwdriver PH2" renders as
+  `cl...`, `com...`, `scr...` while the folder path beside it gets comparable
+  width. The name is the primary key and the path only disambiguates the
+  uncommon same-name case, so the split is backwards. Visible in
+  docs/step4-folder.png. Row builder is in js/main.js near the palette
+  rendering; ids are load-bearing (two PRDs and the suite name them), so widen
+  without renaming. The Library group shares the row builder, so check whether
+  it needs the same change.
 
 ## Known gaps opened here
 - **Progress reporting for a large nest** (nesting step 7). nestLayout is
