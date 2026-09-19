@@ -69,6 +69,13 @@ const state = {
   bar: { lengthMm: 100 }, // scale-bar reference: two points this far apart
   paper: { size: DEFAULT_SIZE, orientation: 'portrait', customW: 210, customH: 297 },
   captureFrac: 0, // 0 = reference-only crop; >0 extends the rectified area beyond it (× longer paper side)
+  // Drawer scan (docs/drawer_scan_prd_v1.0.md): the whole drawer is the
+  // reference rectangle, its measured inside width and depth are the two
+  // numbers, and every tool in it is traced at once. Additive and optional, so
+  // a project written before it loads with the flag off and behaves exactly as
+  // it did. `on` is the capture mode; `active` means a review is in progress
+  // and is what stops goStep(2) retracing over it.
+  scan: { on: false, active: false, parts: [] },
   labels: [],     // emboss/deboss text on a face
   coin: { size: DEFAULT_COIN, customD: 24.26 },
   lens: { k1: 0, k2: 0 }, // radial lens-distortion correction (rectangle path)
@@ -257,10 +264,30 @@ function toast(msg, ms = 3200) {
   toastTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 
+// Is the drawer scan the capture mode right now? Scan mode IS the rect
+// reference with custom dimensions and a flag, not a fifth reference type: a
+// fifth value would be dropped by loadProject, which whitelists exactly
+// ['rect', 'coin', 'grid', 'bar'] and skips the restore silently for anything
+// else.
+const scanOn = () => !!(state.scan && state.scan.on && state.reference === 'rect');
+
+// The long side a drawer scan rectifies to. 3200 gives 5.7 px/mm on a 560 mm
+// drawer, against 2.9 at the default 1600.
+const SCAN_MAX_LONG_SIDE_PX = 3200;
+
 function currentPaper() {
   if (state.reference === 'grid') {
     const g = state.grid;
     return gridDims(gridPitchMm(g.pitch, g.customMm), g.nx, g.ny);
+  }
+  // A drawer's width and depth are measurements, not a page size, so they are
+  // taken as given. paperDims SORTS the two by orientation (js/paperSizes.js),
+  // which is right for a sheet of paper that can be turned and wrong for a
+  // drawer: with the default portrait orientation a 560 wide by 400 deep drawer
+  // would rectify as 400 by 560, transposed, on the very first photo.
+  if (scanOn()) {
+    const w = Number(state.paper.customW) || 0, h = Number(state.paper.customH) || 0;
+    if (w > 10 && h > 10) return { w, h };
   }
   const { size, orientation, customW, customH } = state.paper;
   return paperDims(size, orientation, customW, customH);
@@ -318,7 +345,10 @@ function goStep(n) {
   $('stage4').style.right = split ? '50%' : '';
   positionHoleTag();
   if (n === 2) {
-    $('lensRow').hidden = state.reference !== 'rect';
+    // Hidden for a scan: reRectifyLens re-runs the whole warp 160 ms after every
+    // slider input, and at 7.3 megapixels of output over a 12 megapixel source
+    // that queues multi-second main-thread warps on a drag.
+    $('lensRow').hidden = state.reference !== 'rect' || scanOn();
     $('lensVal').textContent = state.lens.k1.toFixed(3);
     updateTraceInfo(); // also refreshes the optional underside entry point
     traceEditor.draw();
@@ -400,6 +430,16 @@ function loadImageFromURL(url, done, fail) {
       state.corners = defaultCorners();
       cornerEditor.setCorners(state.corners);
       syncGridFields();
+    } else if (scanOn()) {
+      // Nothing to auto-detect here either, and for a sharper reason:
+      // detectPaperCorners scores brightness minus a saturation penalty and
+      // gives up when its best component covers under 5 percent of the frame.
+      // A drawer full of tools is neither bright nor dominant, so it returns
+      // nothing after a full downscale-and-threshold pass, or worse, finds a
+      // tool. The handles start at the default inset and are dragged onto the
+      // drawer's own corners.
+      state.corners = defaultCorners();
+      cornerEditor.setCorners(state.corners);
     } else {
       autoDetect(false);
     }
@@ -538,9 +578,24 @@ function doRectify() {
   if (state.reference === 'bar') return rectifyBar();
   if (state.reference === 'grid') runGridAutoCount();
   const { w, h } = currentPaper();
-  const marginMm = (state.captureFrac || 0) * Math.max(w, h);
+  const scan = scanOn();
+  // A drawer is five to fifteen times the area of one tool on a sheet, and the
+  // default ceiling would hand it back at 2.9 px/mm, where a 2 mm screwdriver
+  // tip is six pixels across. Passed as an option rather than raised at the
+  // default, because raising the default moves pxPerMm for every rect and grid
+  // rectification, and with it marginPx, the Otsu threshold and the px-space
+  // behaviour of simplify and smooth: every outline already traced would come
+  // back different. Above about 640 mm this ceiling falls below 5 px/mm again,
+  // and below 400 mm the 8 px/mm cap binds and the raise does nothing at all.
+  //
+  // Capture area is forced to zero for a scan. It is sticky (it persists in
+  // projects and carries between queued photos), and there is nothing outside
+  // a drawer worth rectifying: every millimetre of margin is warp time and
+  // segmentation area spent on the floor around the drawer.
+  const marginMm = scan ? 0 : (state.captureFrac || 0) * Math.max(w, h);
   const res = rectify(state.image, state.corners, w, h,
-    { k1: state.lens.k1, k2: state.lens.k2, marginMm });
+    { k1: state.lens.k1, k2: state.lens.k2, marginMm,
+      maxLongSidePx: scan ? SCAN_MAX_LONG_SIDE_PX : undefined });
   if (!res) {
     toast('Corner layout is degenerate — adjust the corners.');
     return false;
@@ -4348,12 +4403,14 @@ $('customW').addEventListener('change', e => {
   if (mm > 10) state.paper.customW = mm;
   e.target.value = fmtDim(state.paper.customW);
   state.rectDirty = true;
+  syncScanFields();
 });
 $('customH').addEventListener('change', e => {
   const mm = parseDim(e.target.value);
   if (mm > 10) state.paper.customH = mm;
   e.target.value = fmtDim(state.paper.customH);
   state.rectDirty = true;
+  syncScanFields();
 });
 
 // Coin reference controls
@@ -4372,18 +4429,71 @@ $('coinCustomDia').addEventListener('change', e => {
   state.rectDirty = true;
 });
 
+// What a drawer scan is about to do, in the numbers the user just typed. It
+// says the resolution because that is the one number that decides whether the
+// scan is usable, and it says the two things about the photo that make the
+// difference between a clean scan and a poor one, because both are cheap to do
+// at the time and impossible to fix afterwards.
+function scanHintText() {
+  const w = Number(state.paper.customW) || 0, h = Number(state.paper.customH) || 0;
+  if (!(w > 10 && h > 10)) return 'Type the drawer\u2019s measured inside width and depth.';
+  const ppm = Math.min(SCAN_MAX_LONG_SIDE_PX / Math.max(w, h), 8);
+  const band = Math.round(Math.min(w, h) * 0.04);
+  return `${fmtDim(w)} \u00d7 ${fmtDim(h)} mm at ${ppm.toFixed(1)} px/mm. ` +
+    'Drag the four handles onto the drawer\u2019s inside corners; they are not ' +
+    'found for you, because a drawer full of tools is nothing like a sheet of ' +
+    `paper. Leave about ${band} mm of clear liner all round, since the colour of ` +
+    'that border is what the tools are told apart from, and lay the tools so ' +
+    'they do not touch, because two that touch trace as one.';
+}
+
+function syncScanFields() {
+  const on = scanOn();
+  $('scanMode').checked = !!(state.scan && state.scan.on);
+  // The custom size row is the drawer's two measurements while a scan is on, so
+  // it stays open whatever the size select says.
+  if (on) $('customSizeRow').hidden = false;
+  $('scanHint').hidden = !on;
+  if (on) $('scanHint').textContent = scanHintText();
+  // Orientation sorts the two numbers, which is right for a sheet and wrong for
+  // a drawer, and capture area is area spent on the floor around it.
+  $('paperOrient').disabled = on;
+  $('captureArea').disabled = on;
+  $('paperSize').disabled = on;
+}
+
 function syncRefControls() {
   const r = state.reference;
   $('rectRefControls').hidden = r !== 'rect';
   $('gridRefControls').hidden = r !== 'grid';
   $('coinRefControls').hidden = r !== 'coin';
   $('barRefControls').hidden = r !== 'bar';
+  $('scanModeRow').hidden = r !== 'rect';
   cornerEditor.setRefMode(r === 'coin' ? 'coin' : r === 'bar' ? 'bar' : 'corners');
   if (r === 'grid') syncGridFields();
   if (r === 'bar') syncBarFields();
+  syncScanFields();
 }
+
+$('scanMode').addEventListener('change', e => {
+  if (!state.scan) state.scan = { on: false, active: false, parts: [] };
+  state.scan.on = !!e.target.checked;
+  if (state.scan.on) {
+    // A drawer is measured, so the size select goes to custom and the two
+    // fields become its width and depth.
+    state.paper.size = 'custom';
+    sizeSel.value = 'custom';
+  }
+  state.rectDirty = true;
+  syncRefControls();
+  updateStepButtons();
+});
 $('refType').addEventListener('change', e => {
   state.reference = e.target.value;
+  // Scan mode is the rect reference plus a flag, so leaving rect leaves the
+  // scan. Nothing else guards it, and a scan flag left set under the coin
+  // reference would raise the resolution ceiling on a path that never wanted it.
+  if (state.reference !== 'rect' && state.scan) state.scan.on = false;
   syncRefControls();
   $('gridCheck').textContent = '';
   if (state.image) {
@@ -5530,6 +5640,7 @@ function serializeProject(includePhoto) {
     bar: { lengthMm: state.bar.lengthMm, geom: cornerEditor.getBar() },
     paper: state.paper,
     captureFrac: state.captureFrac,
+    scan: { on: !!(state.scan && state.scan.on) },
     labels: state.labels,
     coin: state.coin,
     lens: state.lens,
@@ -5574,6 +5685,12 @@ function loadProject(p, opts = {}) {
       .forEach(b => b.classList.toggle('active', b.dataset.unit === state.units));
     relabelUnits();
   }
+  // Additive and optional: a project written before the drawer scan existed has
+  // no `scan` key and must open with it off, not with whatever the last photo
+  // used, because the flag changes the rectification resolution.
+  state.scan = {
+    on: !!(p.scan && p.scan.on), active: false, parts: [],
+  };
   if (p.paper) {
     state.paper = { ...state.paper, ...p.paper };
     sizeSel.value = state.paper.size;
@@ -6423,7 +6540,7 @@ document.title = `2.5D v${APP_VERSION} — photo to printable solid`;
 // Test hook (used by the headless test-suite; harmless in normal use).
 window.__app = {
   state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect, doRectify,
-  updateStepButtons,
+  updateStepButtons, currentPaper, syncRefControls,
   backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,

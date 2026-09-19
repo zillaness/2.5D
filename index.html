@@ -121,6 +121,14 @@
             <option value="1">Extend more — object much larger / beside</option>
           </select>
         </div>
+        <!-- The drawer scan. Not a fifth reference type: it is the rect
+             reference with the drawer's own measurements typed into the custom
+             size, plus a flag. loadProject whitelists exactly four reference
+             values and would drop a fifth silently. -->
+        <div class="field" id="scanModeRow">
+          <label title="Lay the tools out in the drawer, photograph the whole drawer with all four corners in frame, type its measured inside width and depth, and trace every tool in one pass."><input type="checkbox" id="scanMode"> Scan a whole drawer of tools</label>
+        </div>
+        <p class="hint" id="scanHint" hidden style="margin:2px 0 6px"></p>
         <div class="field-row" id="customSizeRow" hidden>
           <div class="field">
             <label for="customW">Width (mm)</label>

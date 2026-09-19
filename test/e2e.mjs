@@ -12242,6 +12242,206 @@ check('the option rides the project and is not part of the profile comparison',
   `reopened with seams ${seamNest.reopened.seams}, modified ${seamNest.reopened.modified} ` +
   `(was ${seamNest.modAfter}), step ${seamNest.restored}`);
 
+// ---------- drawer scan step 1: resolution and timing ----------
+// The one number that decides whether scanning a whole drawer is usable at all.
+// A 560 mm drawer at the default 1600 px ceiling arrives at 2.9 px/mm, where a
+// 2 mm screwdriver tip is six pixels across; the scan path asks for 3200, which
+// puts it at 5.7. Proven first, because if the warp or the segmentation cannot
+// carry that resolution the feature stops here rather than at step 5.
+//
+// Pure module work on a fabricated canvas: no page state is touched and there
+// is nothing to restore.
+const scanRes = await page.evaluate(async () => {
+  const { rectify, computeHomography, applyHomography } = await import('/js/homography.js');
+  const { computeDiffMap, segmentObject } = await import('/js/segment.js');
+
+  // A drawer 560 mm wide by 400 mm deep, shot at a mild angle so the warp has
+  // real work to do. Liner and tools are both zero-chroma, which makes the
+  // diff cleanly bimodal and the threshold something to pin rather than guess.
+  const DW = 560, DH = 400;
+  const quad = [
+    { x: 260, y: 300 }, { x: 2150, y: 210 }, { x: 2260, y: 1560 }, { x: 180, y: 1640 },
+  ];
+  const H = computeHomography(
+    [{ x: 0, y: 0 }, { x: DW, y: 0 }, { x: DW, y: DH }, { x: 0, y: DH }], quad);
+  const W = 2400, Hh = 1800;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = Hh;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#39352f';            // the room around the drawer
+  ctx.fillRect(0, 0, W, Hh);
+  const mapPath = pts => {
+    ctx.beginPath();
+    pts.forEach((p, i) => {
+      const q = applyHomography(H, p.x, p.y);
+      if (i === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
+    });
+    ctx.closePath();
+  };
+  const barMm = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  mapPath(barMm(0, 0, DW, DH));
+  ctx.fillStyle = '#b0b0b0';            // drawer liner
+  ctx.fill();
+  // Two bars 30 mm apart, 2 mm and 4 mm wide, 40 mm long, both well inside the
+  // border band computeDiffMap samples its background from.
+  ctx.fillStyle = '#2c2c2c';
+  mapPath(barMm(200, 180, 2, 40)); ctx.fill();
+  mapPath(barMm(232, 180, 4, 40)); ctx.fill();
+
+  const t0 = performance.now();
+  const r = rectify(c, quad, DW, DH, { maxLongSidePx: 3200 });
+  const warpMs = performance.now() - t0;
+  if (!r) return { failed: 'rectify returned null' };
+
+  // The cliff is not the warp. computeDiffMap plus morphClean is four more
+  // passes over the same buffer with roughly ten transient allocations, and a
+  // step that timed only the warp would go green and leave step 2 to blow the
+  // ceiling two commits later.
+  const t1 = performance.now();
+  const dm = computeDiffMap(r.canvas);
+  // Pinned, never Otsu: the synthetic diff is two values, which is degenerate
+  // for Otsu exactly as the fixture at the top of this suite documents.
+  segmentObject(dm, { threshold: 40, cleanupRadius: 2, marginPx: 6 });
+  const segMs = performance.now() - t1;
+
+  // The 2 mm feature, measured on the rectified canvas itself rather than
+  // through a pipeline that does not exist yet. One scanline across both bars,
+  // counting dark runs.
+  const g = r.canvas.getContext('2d');
+  const y = Math.round((180 + 20) * r.pxPerMm);
+  const row = g.getImageData(0, y, r.canvas.width, 1).data;
+  const runs = [];
+  let run = 0;
+  for (let x = 0; x < r.canvas.width; x++) {
+    const dark = row[x * 4] < 120;
+    if (dark) run++;
+    else if (run) { runs.push(run); run = 0; }
+  }
+  if (run) runs.push(run);
+  const widths = runs.filter(n => n >= 3).map(n => n / r.pxPerMm);
+
+  return {
+    pxPerMm: r.pxPerMm, w: r.canvas.width, h: r.canvas.height,
+    warpMs: Math.round(warpMs), segMs: Math.round(segMs),
+    widths: widths.map(v => Math.round(v * 100) / 100),
+    bytes: Math.round(r.canvas.width * r.canvas.height * 4 / (1024 * 1024)),
+  };
+});
+
+check('a 560 mm drawer rectifies at better than 5 px/mm on the scan path',
+  !scanRes.failed && scanRes.pxPerMm >= 5 &&
+  scanRes.w === 3200 && scanRes.h === 2286,
+  `${scanRes.w} × ${scanRes.h} at ${scanRes.pxPerMm && scanRes.pxPerMm.toFixed(2)} px/mm ` +
+  `(${scanRes.bytes} MB of pixels), against 2.86 px/mm at the 1600 default`);
+
+check('the warp and the segmentation both carry that resolution inside a stated ceiling',
+  scanRes.warpMs < 20000 && scanRes.segMs < 20000,
+  `warp ${scanRes.warpMs} ms, diff + clean + label ${scanRes.segMs} ms; the ceiling only has ` +
+  'to catch the difference between a pass that runs and one that has gone quadratic');
+
+check('a 2 mm feature survives the warp and measures within 0.3 mm',
+  scanRes.widths && scanRes.widths.length === 2 &&
+  Math.abs(scanRes.widths[0] - 2) <= 0.3 && Math.abs(scanRes.widths[1] - 4) <= 0.3,
+  `bars measured ${JSON.stringify(scanRes.widths)} mm against 2 and 4`);
+
+// Scan mode is the rect reference with the drawer's own measurements and a
+// flag, which is what keeps loadProject able to read it back: that function
+// whitelists exactly four reference values and drops a fifth in silence.
+const scanMode = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const before = {
+    reference: app.state.reference, paper: { ...app.state.paper },
+    scan: app.state.scan && { ...app.state.scan },
+    // loadProject moves the step, so this block has to put it back or every
+    // block below inherits whatever the last project load left.
+    step: app.state.step, trace: app.traceEditor.getTrace(),
+  };
+  const set = (id, v) => {
+    $(id).checked = v;
+    $(id).dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const typeIn = (id, v) => {
+    $(id).value = v;
+    $(id).dispatchEvent(new Event('change', { bubbles: true }));
+  };
+
+  app.state.reference = 'rect';
+  $('refType').value = 'rect';
+  $('refType').dispatchEvent(new Event('change', { bubbles: true }));
+  set('scanMode', true);
+  typeIn('customW', '560');
+  typeIn('customH', '400');
+  app.state.paper.orientation = 'portrait';
+
+  // The transposition this would have shipped with: paperDims SORTS the two
+  // numbers by orientation, which is right for a sheet that can be turned and
+  // wrong for a drawer that cannot.
+  const paper = app.currentPaper();
+  const ui = {
+    hint: $('scanHint').textContent, hintShown: !$('scanHint').hidden,
+    customOpen: !$('customSizeRow').hidden,
+    orientLocked: $('paperOrient').disabled,
+    captureLocked: $('captureArea').disabled,
+    lensHidden: $('lensRow').hidden,
+  };
+
+  // It rides the project, additively.
+  const saved = JSON.parse(app.serializeProject(false));
+  set('scanMode', false);
+  const off = app.currentPaper();
+  app.loadProject(saved);
+  await new Promise(r => setTimeout(r, 300));
+  const reopened = { on: !!(app.state.scan && app.state.scan.on), paper: app.currentPaper() };
+  // A project written before any of this has no scan key and opens with it off.
+  const legacy = JSON.parse(JSON.stringify(saved));
+  delete legacy.scan;
+  app.loadProject(legacy);
+  await new Promise(r => setTimeout(r, 300));
+  const old = !!(app.state.scan && app.state.scan.on);
+
+  // Leaving the rect reference leaves the scan; nothing else guards the flag.
+  set('scanMode', true);
+  $('refType').value = 'coin';
+  $('refType').dispatchEvent(new Event('change', { bubbles: true }));
+  const leftRect = !!(app.state.scan && app.state.scan.on);
+
+  app.state.reference = before.reference;
+  $('refType').value = before.reference;
+  app.state.paper = before.paper;
+  app.state.scan = before.scan || { on: false, active: false, parts: [] };
+  app.syncRefControls();
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles || []);
+  app.goStep(before.step);
+  return {
+    paper, off, ui, reopened, old, leftRect,
+    restored: app.state.reference === before.reference && app.state.step === before.step,
+  };
+});
+
+check('a drawer’s two measurements are taken as given, not sorted into a page orientation',
+  scanMode.paper.w === 560 && scanMode.paper.h === 400 &&
+  scanMode.off.w === 400 && scanMode.off.h === 560,
+  `scan on: ${scanMode.paper.w} × ${scanMode.paper.h}; scan off, the same two numbers come ` +
+  `back as ${scanMode.off.w} × ${scanMode.off.h}, which is the transposition this avoids`);
+
+check('the hint says the resolution, the corners and the two ways to shoot it badly',
+  scanMode.ui.hintShown && scanMode.ui.customOpen &&
+  /5\.7 px\/mm/.test(scanMode.ui.hint) && /inside corners/.test(scanMode.ui.hint) &&
+  /clear liner/.test(scanMode.ui.hint) && /do not touch/.test(scanMode.ui.hint) &&
+  scanMode.ui.orientLocked && scanMode.ui.captureLocked && scanMode.ui.lensHidden,
+  scanMode.ui.hint);
+
+check('the scan flag rides the project, defaults off, and does not outlive the rect reference',
+  scanMode.reopened.on && scanMode.reopened.paper.w === 560 &&
+  scanMode.old === false && scanMode.leftRect === false && scanMode.restored,
+  `reopened ${scanMode.reopened.on} at ${scanMode.reopened.paper.w} mm; a project with no ` +
+  `scan key opens ${scanMode.old}; switching to the coin reference leaves it ` +
+  `${scanMode.leftRect}; page handed back ${scanMode.restored}`);
+
 // ---------- the nest that yields (nesting PRD, criterion 6) ----------
 // nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
 // packers to keep agreeing. The async one yields a macrotask between items, so
@@ -12351,6 +12551,7 @@ const autosave = await page.evaluate(async () => {
     step: app.state.step, trace: app.traceEditor.getTrace(),
     image: app.state.image, rect: app.state.rect, confirm: window.confirm,
   };
+  const startStep = before.step;
   // The clock is injected precisely so a test can hold it still.
   let now = 1_000_000;
   app.autosave.clock = () => now;
@@ -12438,7 +12639,7 @@ const autosave = await page.evaluate(async () => {
     empty, idleTouch, wrote,
     slot: slot && { name: slot.name, at: slot.at, hasPhoto: /"photo":"data:/.test(slot.text) },
     fresh, declined, asked, stillThere, busy, asked2, restored, back, cleared,
-    bad, goneAfterBad, restoredStep: app.state.step,
+    bad, goneAfterBad, restoredStep: app.state.step === startStep,
   };
 });
 
@@ -12470,9 +12671,9 @@ check('accepting brings the trace back with its photo, and saving properly clear
   `proper save: ${autosave.cleared}`);
 
 check('a slot this build cannot read is discarded rather than thrown, and says so',
-  autosave.bad === 'failed' && autosave.goneAfterBad === null &&
-  autosave.restoredStep === 3,
-  `offer returned ${autosave.bad}, slot after: ${autosave.goneAfterBad}`);
+  autosave.bad === 'failed' && autosave.goneAfterBad === null && autosave.restoredStep,
+  `offer returned ${autosave.bad}, slot after: ${autosave.goneAfterBad}; page handed back ` +
+  `${autosave.restoredStep}`);
 
 // ---------- bed tiling for the cut template ----------
 
