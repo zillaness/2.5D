@@ -13188,6 +13188,123 @@ check('discarding leaves the drawer byte for byte as it was, and Step 4 comes ba
   scanEdit.closed.editing === -1 && scanEdit.restoredStep,
   `discarded cleanly ${scanEdit.discarded}, back on step ${scanEdit.closed.step}`);
 
+// ---------- drawer scan step 8: names that are about to be cut into foam ----------
+// The photo queue gets names free from file names; a one-shot scan produces N
+// anonymous shapes, which is the one place the queue is strictly better.
+// Engraving "Tool 4" into a drawer insert wastes the foam and the afternoon, so
+// the export says so. It warns and exports; it does not block.
+const scanNames = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const before = {
+    step: app.state.step,
+    container: structuredClone(app.state.layout.container),
+    items: structuredClone(app.state.layout.items),
+    labels: structuredClone(app.state.layout.labels),
+    sel: app.layoutEditor.sel,
+  };
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const mk = (name, x, extra) => ({
+    name, outer: rect(0, 0, 30, 18), holes: [], circles: [],
+    thickness: 6, depth: null, rot: 0, x, y: 30, ...extra,
+  });
+
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'rect', w: 200, h: 120, r: 0,
+    name: null, outer: null, scale: { x: 1, y: 1 },
+  };
+  app.state.layout.items.length = 0;
+  app.state.layout.items.push(
+    mk('Tool 1', 30, { source: { kind: 'scan' }, autoNamed: true }),
+    mk('Tool 2', 80, { source: { kind: 'scan' }, autoNamed: true }),
+    // Renamed in the review, so not carrying a scan name any more.
+    mk('cold chisel', 130, { source: { kind: 'scan' } }),
+    // Someone is free to call a library entry "Tool 3" and mean it, so the
+    // gate is provenance, never a name that merely looks automatic.
+    mk('Tool 3', 170, {}),
+  );
+  app.layoutEditor.sel = 0;
+  app.goStep(4);
+  app.refreshLayoutEditor();
+
+  // Labelling off: nothing is engraved, so there is nothing to warn about.
+  app.state.layout.labels = { ...app.state.layout.labels, enabled: false, extra: [] };
+  const off = app.scan.autoNamed();
+
+  app.state.layout.labels = { ...app.state.layout.labels, enabled: true, extra: [] };
+  const on = app.scan.autoNamed();
+
+  // A label with its own text wins over the name, so that tool is fine.
+  app.state.layout.items[0].label = 'WRENCH 17';
+  const withLabel = app.scan.autoNamed();
+  delete app.state.layout.items[0].label;
+
+  // Renaming in the drawer panel clears it, which is the remedy the warning
+  // points at. Before this there was no way to rename a scanned tool at all.
+  app.layoutEditor.sel = 1;
+  app.syncLaySelPanel(1);
+  const fieldShows = $('laySelToolName').value;
+  $('laySelToolName').value = 'tin snips';
+  $('laySelToolName').dispatchEvent(new Event('change', { bubbles: true }));
+  const afterRename = {
+    name: app.state.layout.items[1].name,
+    auto: app.state.layout.items[1].autoNamed,
+    left: app.scan.autoNamed(),
+  };
+
+  // The export warns and still exports. A blank name is refused rather than
+  // wiping the tool's name.
+  $('laySelToolName').value = '   ';
+  $('laySelToolName').dispatchEvent(new Event('change', { bubbles: true }));
+  const blankRefused = app.state.layout.items[1].name === 'tin snips';
+
+  const toastBefore = ($('toast') && $('toast').textContent) || '';
+  const svg = app.layoutExports.svg('auto');
+  await wait(100);
+  const warned = ($('toast') && $('toast').textContent) || '';
+
+  app.state.layout.labels = before.labels;
+  app.state.layout.container = before.container;
+  app.state.layout.items.length = 0;
+  for (const it of before.items) app.state.layout.items.push(it);
+  app.layoutEditor.sel = before.sel;
+  app.goStep(4);
+  app.goStep(before.step);
+  app.refreshLayoutEditor();
+  return {
+    off, on, withLabel, fieldShows, afterRename, blankRefused,
+    exported: !!svg, warned, toastBefore,
+    restored: app.state.step === before.step,
+  };
+});
+
+check('nothing is warned about when labelling is off, because nothing is engraved',
+  scanNames.off.length === 0,
+  `with labels off: ${JSON.stringify(scanNames.off)}`);
+
+check('with labels on, only scanned tools still carrying a scan name are named',
+  JSON.stringify(scanNames.on) === JSON.stringify(['Tool 1', 'Tool 2']) &&
+  JSON.stringify(scanNames.withLabel) === JSON.stringify(['Tool 2']),
+  `${JSON.stringify(scanNames.on)}; a library entry a person chose to call “Tool 3” is ` +
+  `left alone, and giving one a label of its own drops it to ${JSON.stringify(scanNames.withLabel)}`);
+
+check('a scanned tool can be renamed after the review, which is the remedy the warning names',
+  scanNames.fieldShows === 'Tool 2' && scanNames.afterRename.name === 'tin snips' &&
+  scanNames.afterRename.auto === undefined &&
+  JSON.stringify(scanNames.afterRename.left) === JSON.stringify(['Tool 1']) &&
+  scanNames.blankRefused,
+  `renamed to “${scanNames.afterRename.name}”, leaving ` +
+  `${JSON.stringify(scanNames.afterRename.left)}; a blank name is refused ` +
+  `${scanNames.blankRefused}`);
+
+check('the export warns about the names and exports anyway',
+  scanNames.exported && /still carry the name the scan gave them/.test(scanNames.warned) &&
+  /Exporting anyway/.test(scanNames.warned),
+  scanNames.warned.slice(0, 160));
+
 // ---------- the nest that yields (nesting PRD, criterion 6) ----------
 // nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
 // packers to keep agreeing. The async one yields a macrotask between items, so

@@ -3283,6 +3283,8 @@ function syncLaySelPanel(i) {
   $('laySelPanel').hidden = !it;
   if (!it) return;
   $('laySelName').textContent = `Selected: ${it.name}`;
+  $('laySelToolName').value = it.name || '';
+  $('laySelToolName').placeholder = it.name || 'Tool';
   $('laySelLabel').value = it.label || '';
   $('laySelLabel').placeholder = `(uses “${it.name}”)`;
   // Nothing to put back until the label has been dragged or turned by hand.
@@ -3795,6 +3797,21 @@ $('layNestDelProfile').addEventListener('click', () => {
 // Per-item packing policy. Both are additive and optional on the item, which
 // is what nestLayout already expects, so a project saved before either existed
 // nests exactly as it would have.
+// Renaming after the review. Without this the review would be the only chance
+// to name a scanned tool, and a name you cannot change is a name you are stuck
+// engraving.
+$('laySelToolName').addEventListener('change', e => {
+  const it = state.layout.items[layoutEditor.sel];
+  if (!it) return;
+  const name = String(e.target.value || '').trim();
+  if (!name) { e.target.value = it.name || ''; return; }
+  it.name = name;
+  // Named by a person now, whatever it was called before.
+  delete it.autoNamed;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+});
+
 $('laySelPin').addEventListener('change', e => {
   const it = state.layout.items[layoutEditor.sel];
   if (!it) return;
@@ -3988,7 +4005,9 @@ function scanSyncPanel() {
     name.style.cssText = 'flex:1; min-width:0';
     name.title = 'What this tool is called. It is also what gets engraved if labels are on.';
     name.addEventListener('change', () => {
-      part.name = name.value.trim() || part.name;
+      const typed = name.value.trim();
+      if (typed && typed !== part.name) part.renamed = true;
+      part.name = typed || part.name;
       name.value = part.name;
       traceEditor.draw();
     });
@@ -4350,6 +4369,9 @@ function scanPlaceParts(parts, dims) {
     // packer move it.
     const i = layPlaceTool(src, scanPose(part));
     state.layout.items[i].pin = true;
+    // Still called what the scan called it. Cleared the moment a person types
+    // a name, in the review or in the drawer panel.
+    if (!part.renamed) state.layout.items[i].autoNamed = true;
   }
   // A tool photographed hard against a wall lands inside the container's border
   // inset, where layoutConflicts reports it as having escaped and the build
@@ -4840,7 +4862,41 @@ $('layPreviewBtn').addEventListener('click', () => {
 // These are the bodies the layout export buttons used to carry inline. They
 // build and name the file but do not deliver it, so any row can offer the
 // same export and every row produces the same bytes.
+// Tools still carrying the name the scan gave them, when that name is about to
+// be cut into foam. A one-shot scan produces N anonymous shapes: the photo
+// queue gets names free from file names and this does not, which is the one
+// place the queue is strictly better. Engraving "Tool 4" into a drawer insert
+// is a waste of foam and of an afternoon.
+//
+// Gated on provenance rather than on a name that looks automatic, because
+// someone is free to call a library entry "Tool 3" and mean it. Gated on
+// labelling being ON, or it would fire on every export that engraves nothing.
+// A label with its own text wins over the name, so a tool that has one is fine
+// whatever it is called.
+function layAutoNamed() {
+  if (!state.layout.labels || !state.layout.labels.enabled) return [];
+  return state.layout.items.filter(it =>
+    it && it.source && it.source.kind === 'scan' && it.autoNamed &&
+    !String(it.label || '').trim());
+}
+
+// Warn, never block. confirm() in an export path would also break every export
+// test in the suite, which registers no dialog handler, but the reason is not
+// the tests: someone cutting a prototype insert may genuinely not care what is
+// engraved on it, and this is information, not a destructive choice.
+function layWarnAutoNamed() {
+  const anon = layAutoNamed();
+  if (!anon.length) return 0;
+  const names = anon.slice(0, 4).map(it => `“${it.name}”`).join(', ');
+  toast(`${anon.length} tool${anon.length === 1 ? '' : 's'} still carry the name the scan ` +
+    `gave them (${names}${anon.length > 4 ? ', and more' : ''}), and labelling is on, so ` +
+    'that is what gets engraved. Rename them in the drawer panel, or give them a label of ' +
+    'their own. Exporting anyway.', 9000);
+  return anon.length;
+}
+
 function layoutStlExport() {
+  layWarnAutoNamed();
   const res = buildLayoutNow();
   if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the insert.'); return null; }
   const grid = state.layout.container.type === 'grid';
@@ -4870,6 +4926,7 @@ function layoutStlExport() {
 // the single Template SVG button has always done. mode 'tiles' is the explicit
 // tiled button and declines when there is nothing to tile.
 function layoutSvgExport(mode = 'auto') {
+  layWarnAutoNamed();
   const res = buildLayoutNow();
   if (!res || res.reason) { toast((res && LAYOUT_REASONS[res.reason]) || 'Could not build the template.'); return null; }
   if (!res.template) { toast('Template SVG is for flat drawer inserts (foam cutting) — export the bin as STL.'); return null; }
@@ -7158,6 +7215,7 @@ window.__app = {
     pick: mm => scanPickAt(mm),
     accept: () => scanPlaceReviewed(),
     edit: i => itemEditBegin(i),
+    autoNamed: () => layAutoNamed().map(it => it.name),
     finish: apply => itemEditFinish(apply),
     get editing() { return itemEdit ? itemEdit.index : -1; },
     get active() { return scanActive(); },
