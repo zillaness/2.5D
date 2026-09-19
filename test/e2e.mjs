@@ -10749,6 +10749,341 @@ check('the two-subfolder block leaves the layout, the library, the folder and St
   `step ${queueEleven.restored.step}, library restored ${queueEleven.restored.lib}, ` +
   `queue ${queueEleven.restored.queue}, palette ${queueEleven.restored.palette}`);
 
+// ---------- re-editing a traced photo (resume editing, plan step 1) ----------
+// Clicking a traced tile reopens the tool fully editable instead of clearing
+// it, and Undo after Next comes back with the trace rather than the bare photo.
+// Reopening never changes a photo's status: Next is the one thing that finishes
+// a photo, on the first pass and on every pass after, so a stray click on a
+// thumbnail cannot demote a finished tool back to pending.
+const queueReedit = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+
+  // Reopening is three async hops deep (decode the photo, read the project,
+  // decode the rectified copy inside it), so the block waits on the outcome
+  // rather than on a guessed number of milliseconds.
+  const until = async (fn, ms = 6000) => {
+    for (let t = 0; t < ms; t += 50) {
+      if (fn()) return true;
+      await wait(50);
+    }
+    return false;
+  };
+  const traced = () => app.traceEditor.getTrace().outer.length > 0;
+  const toastNow = () => ($('toast') && $('toast').textContent) || '';
+
+  const before = {
+    image: app.state.image, step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    regions: structuredClone(app.state.regions),
+    selRegion: app.state.selRegion,
+  };
+  const regionsOk = rs => rs.length > 0 && rs.every(r => r && r.top && r.bottom);
+  const regionsIn = { n: before.regions.length, ok: regionsOk(before.regions) };
+
+  const files = {
+    'awl.jpg': await photoFile('awl.jpg', 600, 450),
+    'hammer.jpg': await photoFile('hammer.jpg', 400, 300),
+  };
+  // A folder that can be read back as well as written, which the earlier walk
+  // fixtures never needed: reopening a traced photo in a LATER session has only
+  // the folder to go on, so the project has to come off disk and not out of the
+  // text this session happens to still be holding.
+  const disk = new Map();
+  const writes = [];
+  const fileHandle = name => ({ kind: 'file', name, getFile: async () => files[name] });
+  const mkDir = (name, children) => {
+    const h = {
+      kind: 'directory', name, children,
+      values: async function* () { for (const c of h.children) yield c; },
+      queryPermission: async () => 'granted',
+      requestPermission: async () => 'granted',
+      getDirectoryHandle: async n => {
+        const kid = h.children.find(c => c.kind === 'directory' && c.name === n);
+        if (!kid) throw new Error('no such folder');
+        return kid;
+      },
+      getFileHandle: async n => {
+        const key = `${h.name}/${n}`;
+        return {
+          createWritable: async () => ({
+            write: async text => {
+              disk.set(key, String(text));
+              writes.push({ dir: h.name, name: n, text: String(text) });
+            },
+            close: async () => {},
+          }),
+          getFile: async () => {
+            if (!disk.has(key)) throw new Error('no such file');
+            return new File([disk.get(key)], n, { type: 'application/json' });
+          },
+        };
+      },
+    };
+    return h;
+  };
+  const dir = mkDir('bench', [fileHandle('awl.jpg'), fileHandle('hammer.jpg')]);
+
+  localStorage.setItem('2p5d.library.v1', '[]');
+  // A known model state to trace under. Earlier blocks leave sections behind,
+  // and the project this block writes is one it also has to load back, so it
+  // starts from the same single base region a fresh page has.
+  app.state.regions.length = 0;
+  app.state.regions.push({
+    name: 'Base', pts: null, thickness: 7, zBase: 0,
+    top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 },
+  });
+  app.state.selRegion = 0;
+  app.queue.clear();
+  await app.queue.ingestFolder(dir, 'bench');
+
+  // Trace the awl, with the derived entities a trace accumulates around it, so
+  // "the trace came back" means more than the outline alone.
+  app.queue.load(app.state.queue[0]);
+  await until(() => !!app.state.image);
+  // Through Step 2 for real, not around it: rectifying is what gives the saved
+  // project its rectified copy, and that copy is what makes the reopened tool
+  // editable. A fixture trace stood in without it would be a project no walk
+  // could ever write.
+  app.goStep(2);
+  await until(() => !!app.state.rect);
+  app.traceEditor.setTrace(rect(10, 10, 50, 25), [rect(20, 15, 8, 8)]);
+  app.traceEditor.setCircles([{ cx: 40, cy: 20, d: 4 }]);
+  app.traceEditor.measurements = [{ type: 'p2p',
+    refs: [{ kind: 'vert', loop: -1, idx: 0 }, { kind: 'vert', loop: -1, idx: 1 }] }];
+  const firstNext = await app.queue.walk.next();
+  await wait(700);
+  const committed = {
+    saved: firstNext && firstNext.name,
+    status: app.state.queue[0].status,
+    picked: app.state.queue[0].picked,
+    onSecond: app.state.queueCurrentId === app.state.queue[1].id,
+    // The walk cleared the trace with the photo, which is the behaviour the
+    // reopen has to undo rather than the bug it works around.
+    outerNow: app.traceEditor.getTrace().outer.length,
+    written: writes.map(w => `${w.dir}/${w.name}`),
+  };
+  const firstProject = writes[0] && writes[0].text;
+
+  // --- reopening by clicking the tile ---
+  app.queue.load(app.state.queue[0]);
+  await until(traced);
+  const t = app.traceEditor.getTrace();
+  const reopened = {
+    outer: t.outer.length, holes: t.holes.length, circles: t.circles.length,
+    measurements: app.traceEditor.measurements.length,
+    thickness: app.state.regions[0].thickness,
+    step: app.state.step,
+    step2Enabled: !$('stepBtn2').disabled,
+    rect: !!app.state.rect,
+    // Sam's rule: reopening is not a commit and not an un-commit.
+    status: app.state.queue[0].status,
+    picked: app.state.queue[0].picked,
+    reediting: app.queue.reediting === app.state.queue[0].id,
+    nameField: $('queueSaveName').value,
+    toast: toastNow(),
+    hasText: !!app.state.queue[0].projText,
+    readBack: !!(await app.queue.readProject(app.state.queue[0])),
+    badge: (() => {
+      const tile = $('queueList').querySelector(`[data-id="${app.state.queue[0].id}"]`);
+      return tile ? tile.querySelector('.queue-badge').textContent : null;
+    })(),
+    pencil: !!$('queueList').querySelector(
+      `[data-id="${app.state.queue[0].id}"] .queue-reedit`),
+  };
+
+  // --- nudge one vertex, commit again: a round trip, not a rebuild ---
+  // A vertex drag moves the point in place. setTrace() is the RETRACE path and
+  // drops measurement refs by design, because a fresh segmentation renumbers
+  // every vertex; using it here would test a rebuild rather than a round trip.
+  app.traceEditor.outer[0].x += 1;
+  app.traceEditor.draw();
+  await app.queue.walk.next();
+  await wait(700);
+  const secondProject = writes[writes.length - 1] && writes[writes.length - 1].text;
+  const a = JSON.parse(firstProject || '{}'), b = JSON.parse(secondProject || '{}');
+  // `rectified` is excluded on purpose and is the one field that cannot be
+  // identical: the restore decodes that JPEG and the re-save re-encodes it, so
+  // it is the same image through one more generation of lossy compression.
+  const skip = new Set(['trace', 'rectified']);
+  const keys = Array.from(new Set([...Object.keys(a), ...Object.keys(b)]));
+  const roundTrip = {
+    differing: keys.filter(k => !skip.has(k) &&
+      JSON.stringify(a[k]) !== JSON.stringify(b[k])),
+    traceMoved: JSON.stringify(a.trace) !== JSON.stringify(b.trace),
+    msA: JSON.stringify(a.measurements), msB: JSON.stringify(b.measurements),
+    stillRectified: typeof b.rectified === 'string' && b.rectified.length > 0,
+    libNames: JSON.parse(localStorage.getItem('2p5d.library.v1') || '[]').map(e => e.name),
+    tracedRows: app.queue.traced.filter(r => r.name === 'awl').length,
+    writes: writes.map(w => `${w.dir}/${w.name}`),
+  };
+
+  // --- Undo after Next: the gap recorded against v1.25.0 ---
+  app.queue.walk.undo();
+  await until(traced);
+  const undone = {
+    outer: app.traceEditor.getTrace().outer.length,
+    step2Enabled: !$('stepBtn2').disabled,
+    status: app.state.queue[0].status,
+    picked: app.state.queue[0].picked,
+    fileName: app.state.fileName,
+  };
+
+  // --- the sibling project has gone missing ---
+  disk.delete('bench/awl.json');
+  app.state.queue[0].projText = null;
+  app.state.queue[0].jsonFile = null;
+  app.state.queue[0].status = 'traced';
+  app.state.queue[0].picked = false;
+  app.queue.load(app.state.queue[0]);
+  await until(() => /not beside it any more/.test(toastNow()));
+  const missing = {
+    outer: app.traceEditor.getTrace().outer.length,
+    reediting: app.queue.reediting,
+    image: !!app.state.image,
+    step: app.state.step,
+    toast: ($('toast') && $('toast').textContent) || '',
+  };
+
+  // --- reading a project that only ever existed on disk ---
+  // The second photo was never traced in this block, so its only route back is
+  // the folder. Write one for it the way Next would, then drop every in-memory
+  // trace of it and reopen.
+  const hammer = app.state.queue[1];
+  disk.set('bench/hammer.json', firstProject);
+  hammer.status = 'traced';
+  hammer.picked = false;
+  hammer.projText = null;
+  hammer.jsonFile = null;
+  hammer.json = 'hammer.json';
+  hammer.jsonPath = 'bench/hammer.json';
+  app.queue.load(hammer);
+  await until(traced);
+  const fromDisk = {
+    outer: app.traceEditor.getTrace().outer.length,
+    reediting: app.queue.reediting === hammer.id,
+    step2Enabled: !$('stepBtn2').disabled,
+  };
+
+  // Hand the page back.
+  app.queue.clear();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.state.image = before.image;
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles || []);
+  app.traceEditor.measurements = [];
+  // Hand back a model state that can be serialised and loaded again. The
+  // sections this block inherited were already missing their top/bottom caps,
+  // which loadProject cannot read back, so putting exactly those back would
+  // hand the next block a project it cannot open. A well-formed set goes back
+  // as it found it; a malformed one is replaced by the single base region a
+  // fresh page starts with.
+  app.state.regions.length = 0;
+  if (regionsOk(before.regions)) for (const r of before.regions) app.state.regions.push(r);
+  else app.state.regions.push({
+    name: 'Base', pts: null, thickness: 5, zBase: 0,
+    top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 },
+  });
+  app.state.selRegion = regionsOk(before.regions) ? before.selRegion : 0;
+  app.goStep(before.step);
+  const restored = {
+    step: app.state.step, image: !!app.state.image,
+    queue: app.state.queue.length, reediting: app.queue.reediting,
+    regionsIn, regionsOut: { n: app.state.regions.length, ok: regionsOk(app.state.regions) },
+    serOk: (() => {
+      try { return regionsOk(JSON.parse(app.serializeProject(false)).regions || []); }
+      catch (e) { return 'threw: ' + e.message; }
+    })(),
+  };
+
+  return { committed, reopened, roundTrip, undone, missing, fromDisk, restored };
+});
+
+check('Next clears the trace with the photo and leaves the tool traced and unticked',
+  queueReedit.committed.saved === 'awl' && queueReedit.committed.status === 'traced' &&
+  queueReedit.committed.picked === false && queueReedit.committed.onSecond &&
+  queueReedit.committed.outerNow === 0 &&
+  JSON.stringify(queueReedit.committed.written) === JSON.stringify(['bench/awl.json']),
+  `saved “${queueReedit.committed.saved}”, trace now ${queueReedit.committed.outerNow} points, ` +
+  `wrote ${JSON.stringify(queueReedit.committed.written)}`);
+
+check('clicking a traced tile reopens the tool editable, with every derived entity intact',
+  queueReedit.reopened.outer === 4 && queueReedit.reopened.holes === 1 &&
+  queueReedit.reopened.circles === 1 && queueReedit.reopened.measurements === 1 &&
+  queueReedit.reopened.thickness === 7 &&
+  queueReedit.reopened.step === 2 && queueReedit.reopened.step2Enabled &&
+  queueReedit.reopened.rect,
+  `outer ${queueReedit.reopened.outer}, holes ${queueReedit.reopened.holes}, ` +
+  `circles ${queueReedit.reopened.circles}, measurements ${queueReedit.reopened.measurements}, ` +
+  `thickness ${queueReedit.reopened.thickness}, step ${queueReedit.reopened.step} ` +
+  `(Step 2 enabled ${queueReedit.reopened.step2Enabled})`);
+
+check('reopening does not finish or unfinish the photo: only Next moves its status',
+  queueReedit.reopened.status === 'traced' && queueReedit.reopened.picked === false &&
+  queueReedit.reopened.reediting && queueReedit.reopened.nameField === 'awl' &&
+  queueReedit.reopened.badge === 're-editing' && queueReedit.reopened.pencil,
+  `status ${queueReedit.reopened.status}, ticked ${queueReedit.reopened.picked}, ` +
+  `badge “${queueReedit.reopened.badge}”, pencil ${queueReedit.reopened.pencil}, ` +
+  `name field “${queueReedit.reopened.nameField}”, kept text ` +
+  `${queueReedit.reopened.hasText}, read back ${queueReedit.reopened.readBack}, ` +
+  `toast “${queueReedit.reopened.toast}”`);
+
+check('reopening, moving one vertex and pressing Next is a round trip, not a rebuild',
+  queueReedit.roundTrip.differing.length === 0 && queueReedit.roundTrip.traceMoved &&
+  queueReedit.roundTrip.stillRectified &&
+  JSON.stringify(queueReedit.roundTrip.libNames) === JSON.stringify(['awl']) &&
+  queueReedit.roundTrip.tracedRows === 1 &&
+  JSON.stringify(queueReedit.roundTrip.writes) === JSON.stringify(
+    ['bench/awl.json', 'bench/awl.json']),
+  `fields that moved besides the trace: ${JSON.stringify(queueReedit.roundTrip.differing)}, ` +
+  `library ${JSON.stringify(queueReedit.roundTrip.libNames)}, ` +
+  `${queueReedit.roundTrip.tracedRows} row for awl; ` +
+  `measurements ${queueReedit.roundTrip.msA} -> ${queueReedit.roundTrip.msB}`);
+
+check('Undo after Next comes back with the trace, not just the photo',
+  queueReedit.undone.outer === 4 && queueReedit.undone.step2Enabled &&
+  queueReedit.undone.status === 'pending' && queueReedit.undone.picked === true &&
+  queueReedit.undone.fileName === 'awl',
+  `outer ${queueReedit.undone.outer} points, back to ${queueReedit.undone.status}/` +
+  `ticked ${queueReedit.undone.picked} on “${queueReedit.undone.fileName}”`);
+
+check('a traced photo whose project has gone reopens as a plain photo and says so',
+  queueReedit.missing.outer === 0 && queueReedit.missing.reediting === null &&
+  queueReedit.missing.image && queueReedit.missing.step === 1 &&
+  /not beside it any more/.test(queueReedit.missing.toast),
+  `outer ${queueReedit.missing.outer}, step ${queueReedit.missing.step}, ` +
+  `toast “${queueReedit.missing.toast}”`);
+
+check('a project this session never wrote is read back off the folder',
+  queueReedit.fromDisk.outer === 4 && queueReedit.fromDisk.reediting &&
+  queueReedit.fromDisk.step2Enabled,
+  `outer ${queueReedit.fromDisk.outer}, re-editing ${queueReedit.fromDisk.reediting}`);
+
+check('the re-edit block hands the queue and Step 1 back as it found them',
+  queueReedit.restored.queue === 0 && queueReedit.restored.reediting === null &&
+  queueReedit.restored.image,
+  `queue ${queueReedit.restored.queue}, re-editing ${queueReedit.restored.reediting}, ` +
+  `photo restored ${queueReedit.restored.image}, regions in ` +
+  `${JSON.stringify(queueReedit.restored.regionsIn)} out ` +
+  `${JSON.stringify(queueReedit.restored.regionsOut)}, serialisable ` +
+  `${queueReedit.restored.serOk}`);
+
 // ---------- snap to grid in the layout editor (Part B) ----------
 // Snapping is a property of the gesture: a drag, an arrow-key nudge and a
 // rotation-handle drag land on the grid, and nothing already placed moves when

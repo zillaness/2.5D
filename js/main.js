@@ -333,14 +333,18 @@ function updateStepButtons() {
 // started. onFail runs when that decode then fails, which is the only way the
 // caller hears about it: the file name and the label are already on screen by
 // then, but state.image still holds the photo before this one.
-function loadFile(file, onFail) {
+function loadFile(file, onFail, onLoad) {
   if (!file || !file.type.startsWith('image/')) {
     toast('Please choose an image file.');
     return false;
   }
   state.fileName = (file.name || 'object').replace(/\.[^.]+$/, '');
   const url = URL.createObjectURL(file);
-  loadImageFromURL(url, () => URL.revokeObjectURL(url), () => {
+  // onLoad runs once the photo is actually on screen, which is the moment a
+  // queued re-edit can lay its saved trace back over it. Corner detection has
+  // already run by then, so whatever the project restores lands last and wins,
+  // which is the only order the two can be applied in.
+  loadImageFromURL(url, () => { URL.revokeObjectURL(url); if (onLoad) onLoad(); }, () => {
     URL.revokeObjectURL(url);
     if (onFail) onFail();
   });
@@ -575,6 +579,11 @@ const QUEUE_BADGES = {
   unsupported: { text: 'unsupported', color: 'var(--warn)' },
 };
 
+// The queue item whose saved trace is currently back on screen, or null. It is
+// set only once the trace has actually been restored, never on the intent, so
+// the tile cannot claim to be re-editing a project that turned out to be gone.
+let queueReediting = null;
+
 // Ids are a plain counter, so the same ingest always yields the same ids and
 // the tests can name them. No clock and no randomness anywhere in here.
 let queueSeq = 0;
@@ -731,19 +740,116 @@ function queueClearTrace() {
   updateStepButtons();
 }
 
+// A traced photo's project, read back. Three sources, because the queue's two
+// write paths do not leave the same thing behind: Next keeps the exact text it
+// wrote, a resumed folder hands over the sibling File it matched, and a project
+// written into a picked folder in an earlier session is only ever on disk.
+// Tried in that order, cheapest first, and a source that has gone stale simply
+// falls through to the next one.
+async function queueReadProject(item) {
+  if (!item) return null;
+  const parse = text => {
+    let j = null;
+    try { j = JSON.parse(text); } catch { return null; }
+    return isProject(j) ? j : null;
+  };
+  if (item.projText) {
+    const j = parse(item.projText);
+    if (j) return j;
+  }
+  if (item.jsonFile) {
+    try {
+      const j = parse(await item.jsonFile.text());
+      if (j) return j;
+    } catch { /* the folder moved under us; try the handle instead */ }
+  }
+  if (layFolderHandle && item.json && await ensurePermission(layFolderHandle, 'read')) {
+    try {
+      const dir = await queueDirFor(item.jsonPath || item.path);
+      if (dir && typeof dir.getFileHandle === 'function') {
+        const fh = await dir.getFileHandle(item.json);
+        const j = parse(await (await fh.getFile()).text());
+        if (j) return j;
+      }
+    } catch { /* deleted, renamed, or never written here */ }
+  }
+  return null;
+}
+
+// The way back into a tool already traced. The photo is on screen by the time
+// this runs, so Step 1 and the corners are live; the project supplies the
+// trace, the arcs, the lines, the regions, the labels and the reference
+// settings THIS tool was traced under, which is exactly why the carry-over
+// snapshot has no business here. Neither file is enough on its own, and the
+// queue already holds both, so reopening needs no storage it did not have.
+async function queueRestoreTrace(item) {
+  const p = await queueReadProject(item);
+  // The read is async and a second thumbnail may have been clicked while it
+  // was in flight. Without this the trace of one photo lands on another, which
+  // is the same mistake queueClearTrace exists to prevent.
+  if (!item || state.queueCurrentId !== item.id) return false;
+  if (!p) {
+    queueReediting = null;
+    renderQueue();
+    toast(`“${item.name}” is marked traced, but its project is not beside it any more. ` +
+      'Reopened as a plain photo; tracing it again writes the project back.', 7000);
+    return false;
+  }
+  // Step 2 is forced only when the project carries its rectified copy, which
+  // every project the walk writes does, because tracing requires rectifying.
+  // Without one, goStep(2) would find state.rectDirty still true from the photo
+  // that just decoded, re-rectify and RETRACE, and the freshly restored trace
+  // would be overwritten by a new segmentation of the same photo. A project
+  // with a trace and no rectified copy therefore lands where loadProject would
+  // have put it on its own, at Step 3, with the outline intact.
+  const editable = !!(p.rectified && p.pxPerMm);
+  // A project file is data, and a hand-edited or truncated one can throw its
+  // way out of loadProject part-applied. Nothing here awaits this function, so
+  // an uncaught throw would be a silent no-op: the tile would sit there looking
+  // reopened with none of its trace back and nothing said. Caught, it reports.
+  try {
+    loadProject(p, { quiet: true, step: editable ? 2 : undefined });
+  } catch (err) {
+    queueReediting = null;
+    renderQueue();
+    toast(`“${item.name}” has a project file this build cannot read, so its trace ` +
+      'did not come back. The photo is loaded; tracing it again replaces the file.', 7000);
+    return false;
+  }
+  queueReediting = item.id;
+  renderQueue();
+  queueSyncWalk();
+  toast(editable
+    ? `Re-editing “${item.name}”. Next saves it again under the same name.`
+    : `“${item.name}” was saved without its rectified photo, so the outline is back but ` +
+      'the trace cannot be edited. Re-rectify in Step 2 to trace it again.', 6000);
+  return true;
+}
+
 // Clicking a thumbnail loads that photo. The load is the picker's own path, so
 // the corner auto-detect, the step buttons and the file label all follow.
-function queueLoad(item) {
+//
+// A traced photo has a trace to come back to, so reopening one restores it
+// rather than wiping it. Its status is deliberately left alone: Next is the
+// one and only thing that finishes a photo, on the first pass and on every
+// pass after, so a stray click cannot demote a finished tool back to pending.
+// Ticks decide where the walk goes next, never whether a photo is done.
+function queueLoad(item, opts = {}) {
   if (!item) return false;
   if (item.status === 'unsupported') { toast(item.note || QUEUE_HEIC_MSG); return false; }
   state.queueCurrentId = item.id;
-  // The library name this photo will be saved under, editable before Next.
+  // The library name this photo will be saved under, editable before Next. On
+  // a re-edit this is the name it was filed under, so Next overwrites that
+  // entry instead of adding a second one.
   $('queueSaveName').value = item.libName || item.name;
+  const reedit = opts.reedit === undefined ? item.status === 'traced' : !!opts.reedit;
+  queueReediting = null;
   queueClearTrace();
   // What Step 1 says now, so a decode that fails can put it back: the name and
   // the label move to this photo before the decode is even attempted.
   const was = { fileName: state.fileName, label: $('fileLabelText').textContent };
-  loadFile(item.file, () => queueLoadFailed(item, was));
+  loadFile(item.file, () => queueLoadFailed(item, was),
+    reedit ? () => { queueRestoreTrace(item); } : null);
   if (state.step !== 1) goStep(1);
   renderQueue();
   return true;
@@ -764,6 +870,7 @@ function queueLoadFailed(item, was) {
   item.note = `“${item.name}” ${QUEUE_BAD_PHOTO_MSG}`;
   if (state.queueCurrentId === item.id) {
     state.queueCurrentId = null;
+    queueReediting = null;
     $('queueSaveName').value = '';
     if (was) {
       state.fileName = was.fileName;
@@ -786,6 +893,7 @@ function queueLoadFailed(item, was) {
 function queueDetach() {
   if (!state.queueCurrentId) return;
   state.queueCurrentId = null;
+  queueReediting = null;
   $('queueSaveName').value = '';
   renderQueue();
   queueSyncWalk();
@@ -795,6 +903,7 @@ function queueClear() {
   state.queue.length = 0;
   state.queueCurrentId = null;
   queueUndoable = null;
+  queueReediting = null;
   queueTraced.length = 0;
   $('queueSaveName').value = '';
   renderQueue();
@@ -866,7 +975,9 @@ function renderQueue() {
     tile.style.cssText =
       'flex:0 0 auto; width:160px; padding:4px; border-radius:6px; cursor:pointer; ' +
       `border:1px solid ${current ? 'var(--accent2)' : 'var(--border)'}`;
-    tile.title = item.path;
+    tile.title = item.status === 'traced'
+      ? `${item.path}\nClick to reopen this trace for editing`
+      : item.path;
 
     const head = document.createElement('div');
     head.style.cssText = 'display:flex; align-items:center; gap:4px';
@@ -883,6 +994,17 @@ function renderQueue() {
     name.textContent = item.name;
     name.style.cssText = 'flex:1; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap';
     head.append(box, name);
+    // A traced tile has a trace to come back to, and clicking it is how you get
+    // there. The pencil is the affordance for that; an untraced tile only ever
+    // loads its photo and needs none.
+    if (item.status === 'traced') {
+      const pen = document.createElement('span');
+      pen.className = 'queue-reedit';
+      pen.textContent = '✎';
+      pen.title = 'Reopen this trace for editing';
+      pen.style.cssText = 'flex:0 0 auto; font-size:11px; color:var(--muted)';
+      head.append(pen);
+    }
 
     const img = document.createElement('img');
     img.className = 'queue-thumb';
@@ -894,8 +1016,13 @@ function renderQueue() {
 
     const foot = document.createElement('span');
     foot.className = 'queue-badge';
-    foot.textContent = badge.text;
-    foot.style.cssText = `font-size:10px; text-transform:uppercase; letter-spacing:1px; color:${badge.color}`;
+    // A tile whose trace is back on screen says so instead of saying "traced",
+    // because what Next is about to do to it is the part worth knowing: it
+    // overwrites the entry already filed rather than adding a second one.
+    const editing = current && queueReediting === item.id;
+    foot.textContent = editing ? 're-editing' : badge.text;
+    foot.style.cssText = 'font-size:10px; text-transform:uppercase; letter-spacing:1px; ' +
+      `color:${editing ? 'var(--accent2)' : badge.color}`;
 
     tile.append(head, img, foot);
     tile.addEventListener('click', () => queueLoad(item));
@@ -955,6 +1082,13 @@ async function queueResume(pairs) {
     spent.add(key);
     item.status = 'traced';
     item.picked = false;
+    // The sibling that retired this photo is also the way back into it, so the
+    // File is kept rather than hunted for again later. It is a handle and not
+    // bytes: the queue already holds one per photo, and this adds one more per
+    // photo that was already traced.
+    item.jsonFile = pair.file;
+    item.jsonPath = pair.path;
+    item.json = String(pair.path).split('/').pop();
     resumed++;
   }
   return resumed;
@@ -1175,6 +1309,10 @@ function queueApplyRef(snap) {
 // restore is synchronous, so it lands before the decode does and the load's
 // own auto-detect runs against the carried reference rather than the old one.
 function queueLoadCarrying(item) {
+  // A photo being reopened was traced under its own reference settings, and its
+  // project restores them. There is nothing to carry into it, and carrying
+  // anyway would race the restore and sometimes beat it.
+  if (item && item.status === 'traced') return queueLoad(item);
   const snap = queueRefSnapshot();
   const ok = queueLoad(item);
   if (ok) queueApplyRef(snap);
@@ -1258,6 +1396,11 @@ function queueJsonPath(path, written) {
 // so embedding it would double the folder's size for nothing.
 async function queueWriteProject(item) {
   const text = serializeProject(false);
+  // Kept so this photo can be reopened for editing later in the session even
+  // where nothing can be read back: the directory-input backend and a plain
+  // drop both write by download and hand over no folder to re-read. A few KB
+  // per traced photo, alive exactly as long as the queue, which is a session.
+  item.projText = text;
   const base = queueBaseName(item.path);
   if (layFolderHandle && await ensurePermission(layFolderHandle, 'readwrite')) {
     try {
@@ -1319,10 +1462,16 @@ async function queueNext() {
   const wrote = await queueWriteProject(item);
   item.status = 'traced';
   item.picked = false;
+  // Re-tracing a photo replaces its row rather than adding one. Two rows for
+  // one photo would tick two palette entries for a tool that exists once, and
+  // Add all would place it twice.
+  const already = queueTraced.findIndex(t => t.id === item.id);
+  if (already >= 0) queueTraced.splice(already, 1);
   queueTraced.push({
     id: item.id, name, fileName: state.fileName, path: item.path,
     json: item.json, jsonPath: item.jsonPath,
   });
+  queueReediting = null;
   const nxt = queueAdvance(item, 'next');
   const tail = nxt
     ? ` Now on “${nxt.name}”.`
@@ -1339,6 +1488,7 @@ function queueSkip() {
   if (!item) { toast('No queued photo is loaded — click a thumbnail to start.'); return null; }
   item.status = 'skipped';
   item.picked = false;
+  queueReediting = null;
   const nxt = queueAdvance(item, 'skip');
   toast(nxt
     ? `Skipped “${item.name}”. Now on “${nxt.name}”.`
@@ -1346,11 +1496,13 @@ function queueSkip() {
   return { skipped: item.id, next: nxt ? nxt.id : null };
 }
 
-// Undo comes back to the photo just finished. The trace itself is gone: the
-// next photo replaced the rectified image, and keeping a second one decoded
-// would break the memory rule the queue is built on. So the photo comes back
-// pending and ticked, and its library entry stays where it is until the photo
-// is traced again under the same name.
+// Undo comes back to the photo just finished, and brings its trace with it.
+// The trace on screen did leave with the next photo, exactly as the memory
+// rule requires, but Next had already written it to the photo's own project
+// file, so it is read back rather than held: one decode is alive at a time
+// either way. Undo reverses the commit, so unlike reopening a traced tile it
+// does put the photo back to pending and ticked; its library entry stays where
+// it is until the photo is traced again under the same name.
 function queueUndo() {
   const back = queueUndoable;
   queueUndoable = null;
@@ -1360,10 +1512,12 @@ function queueUndo() {
   if (at >= 0) queueTraced.splice(at, 1);
   item.status = 'pending';
   item.picked = true;
-  const ok = queueLoad(item);
+  // Forced, because the status has just been reversed to pending: the trace to
+  // come back to is a fact about what Next did, not about what the item says.
+  const ok = queueLoad(item, { reedit: back.kind === 'next' });
   queueSyncWalk();
   toast(back.kind === 'next'
-    ? `Back on “${item.name}”. Its library entry is still saved — tracing it again under the same name overwrites it.`
+    ? `Back on “${item.name}”, trace and all. Its library entry is still saved: tracing it again under the same name overwrites it.`
     : `Back on “${item.name}”.`, 5000);
   return ok;
 }
@@ -4889,7 +5043,12 @@ function serializeProject(includePhoto) {
   });
 }
 
-function loadProject(p) {
+// opts.quiet suppresses the modal close and the "Project loaded." toast, for
+// callers that report the load in their own words. opts.step overrides the
+// step the load settles on, for callers that know more than the project does:
+// a queue re-edit has the photo on screen, so Step 2 is live even where the
+// project on its own would have settled for Step 3.
+function loadProject(p, opts = {}) {
   if (!p || (p.app && p.app !== '2.5D')) { toast('Not a 2.5D project.'); return; }
   if (!p.trace && !p.corners) { toast('Project has no trace or corners to load.'); return; }
 
@@ -5065,10 +5224,12 @@ function loadProject(p) {
     if (p.holeTemplate) traceEditor.holeTemplate = structuredClone(p.holeTemplate);
     updateStepButtons();
     updateTraceInfo();
-    $('projModal').hidden = true;
-    toast('Project loaded.');
+    if (!opts.quiet) {
+      $('projModal').hidden = true;
+      toast('Project loaded.');
+    }
     const hasTrace = p.trace && p.trace.outer && p.trace.outer.length >= 3;
-    goStep(hasTrace ? (state.rect ? 2 : 3) : 1);
+    goStep(hasTrace ? (opts.step || (state.rect ? 2 : 3)) : 1);
   };
 
   const restoreRect = () => {
@@ -5583,6 +5744,10 @@ window.__app = {
     dropPairs: queueDropPairs, drop: queueDrop,
     ingestPairs: queueIngestPairs, ingestFolder: queueIngestFolder,
     resume: queueResume,
+    // Reopening a traced photo: the project reader, the restore it drives, and
+    // whether a restored trace is currently on screen.
+    readProject: queueReadProject, restore: queueRestoreTrace,
+    get reediting() { return queueReediting; },
     // The walk: Next, Skip and Undo, kept apart from `next`, which is the
     // "which photo comes next" lookup the strip and the walk both use.
     walk: { next: queueNext, skip: queueSkip, undo: queueUndo },
