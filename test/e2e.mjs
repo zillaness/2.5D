@@ -12704,6 +12704,164 @@ check('a long tool laid at 45° is still a tool, which the region suggester’s 
   `it fills ${scanParts.diagFill} of its bounding box: under the region suggester's ` +
   `${scanParts.regionsGate}, over the scan's ${scanParts.scanGate}`);
 
+// ---------- drawer scan step 4: landing in the layout ----------
+// The photograph IS the layout, so a scanned tool lands where it was
+// photographed rather than in the next free grid cell, and everything Step 4
+// already does to a tool has to accept it unchanged.
+const scanLand = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const { computeDiffMap, segmentObjects } = await import('/js/segment.js');
+  const { scanParts } = await import('/js/scan.js');
+  const { layoutPockets } = await import('/js/holders.js');
+
+  // Blocks below this one expect the container they were written against, and
+  // a 560 x 400 drawer left behind would silently change every nesting, tiling
+  // and conflict answer after it.
+  const before = {
+    container: structuredClone(app.state.layout.container),
+    items: structuredClone(app.state.layout.items),
+    sel: app.layoutEditor.sel, step: app.state.step,
+    scan: app.state.scan && { ...app.state.scan },
+  };
+
+  const PPM = 4;
+  const DW = 120, DH = 100;
+  const c = document.createElement('canvas');
+  c.width = DW * PPM; c.height = DH * PPM;
+  const g = c.getContext('2d');
+  g.fillStyle = '#b0b0b0'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#2c2c2c';
+  const drawn = [
+    [12, 10, 30, 12], [50, 10, 24, 14], [84, 10, 22, 22],
+    [12, 34, 40, 10], [60, 36, 30, 16],
+    [12, 60, 26, 26], [50, 62, 44, 12],
+  ];
+  for (const [x, y, w, h] of drawn) {
+    g.fillRect(Math.round(x * PPM), Math.round(y * PPM),
+      Math.round(w * PPM), Math.round(h * PPM));
+  }
+  const parts = scanParts(segmentObjects(computeDiffMap(c),
+    { threshold: 40, cleanupRadius: 1, marginPx: 4, minAreaPx: 60 }), PPM);
+
+  const res = app.scan.place(parts, { w: DW, h: DH });
+  const items = app.state.layout.items;
+  const cont = app.state.layout.container;
+
+  // Every tool within a tolerance of where it was drawn, once the +5 mm
+  // layout origin is taken off again.
+  const O = app.scan.origin;
+  const worst = items.reduce((m, it, i) => {
+    const want = drawn.find(d =>
+      Math.abs(d[0] + d[2] / 2 + O - it.x) < 6 && Math.abs(d[1] + d[3] / 2 + O - it.y) < 6);
+    if (!want) return 99;
+    return Math.max(m,
+      Math.abs(want[0] + want[2] / 2 + O - it.x),
+      Math.abs(want[1] + want[3] / 2 + O - it.y));
+  }, 0);
+
+  // Pockets build for every one of them, which is the cheapest signal that the
+  // item shape is right. The heavier consumers run in the pass below, against
+  // the real container loop.
+  const pockets = layoutPockets(items, app.state.layout.clearance);
+
+  return {
+    placed: res.placed, nearWall: res.nearWall,
+    n: items.length, worst: Math.round(worst * 100) / 100,
+    container: { w: cont.w, h: cont.h, r: cont.r, type: cont.type,
+      scale: cont.scale, name: cont.name },
+    fieldsW: $('layW').value, fieldsH: $('layH').value,
+    allPinned: items.every(it => it.pin === true),
+    allScanned: items.every(it => it.source && it.source.kind === 'scan'),
+    rots: items.every(it => it.rot === 0),
+    finite: items.every(it => Number.isFinite(it.x) && Number.isFinite(it.y)),
+    pocketsOk: pockets.length === items.length && pockets.every(p => p.pocket),
+    // Nothing is shared with the review list: nudging a placed tool must not
+    // move the candidate it came from.
+    aliased: items.some((it, i) => parts.some(p => p.outer === it.outer)),
+    before,
+  };
+});
+
+// The heavier downstream calls want the real container loop, so they run in a
+// second pass rather than being faked above.
+const scanDownstream = await page.evaluate(async () => {
+  const app = window.__app;
+  const {
+    layoutPockets, layoutConflicts, nestLayout, applyNest, buildLayoutInsert, roundedRect,
+  } = await import('/js/holders.js');
+  const items = app.state.layout.items;
+  const c = app.state.layout.container;
+  const outer = roundedRect(5 + c.w / 2, 5 + c.h / 2, c.w, c.h, c.r);
+  const pockets = layoutPockets(items, app.state.layout.clearance);
+  const cf = layoutConflicts(outer, pockets, app.state.layout.border);
+  const nested = nestLayout(outer, items, { rotationStep: 90 });
+  const moved = applyNest(items, nested);
+  const mesh = buildLayoutInsert({ outer }, items,
+    { clearance: 0.5, floor: 3, border: 5, defaultDepth: 6 });
+  return {
+    collisions: cf.collisions.size, escaped: cf.escaped.size,
+    pinnedCount: (nested.stats.pinned || []).length,
+    nestMoved: moved.some((m, i) => m.x !== items[i].x || m.y !== items[i].y),
+    mesh: !!(mesh && mesh.positions && mesh.positions.length > 0),
+    tris: mesh && mesh.indices ? mesh.indices.length / 3 : 0,
+    // Round trip through the save format, then back.
+    roundTrip: (() => {
+      const saved = JSON.parse(app.serializeProject(false));
+      const a = saved.layout.items;
+      return a.length === items.length &&
+        a.every(it => it.source && it.source.kind === 'scan' && it.pin === true);
+    })(),
+  };
+});
+
+// Hand the page back: the container these blocks inherited, not the drawer.
+await page.evaluate(b => {
+  const app = window.__app;
+  app.state.layout.container = b.container;
+  app.state.layout.items.length = 0;
+  for (const it of b.items) app.state.layout.items.push(it);
+  app.state.scan = b.scan || { on: false, active: false, parts: [] };
+  app.layoutEditor.sel = b.sel;
+  app.goStep(4);
+  app.goStep(b.step);
+  app.refreshLayoutEditor();
+}, scanLand.before);
+
+check('seven photographed tools land where they were photographed, pinned and badged',
+  scanLand.placed === 7 && scanLand.n === 7 && scanLand.worst <= 1.5 &&
+  scanLand.allPinned && scanLand.allScanned && scanLand.rots && scanLand.finite,
+  `${scanLand.n} placed, worst position error ${scanLand.worst} mm, all pinned ` +
+  `${scanLand.allPinned}, all carrying source.kind “scan” ${scanLand.allScanned}`);
+
+check('the scan sets the drawer as the container, square-cornered and back to 1:1',
+  scanLand.container.type === 'rect' && scanLand.container.w === 120 &&
+  scanLand.container.h === 100 && scanLand.container.r === 0 &&
+  scanLand.container.name === null &&
+  scanLand.container.scale.x === 1 && scanLand.container.scale.y === 1 &&
+  scanLand.fieldsW === '120' && scanLand.fieldsH === '100',
+  `${scanLand.container.w} × ${scanLand.container.h} mm, corner radius ` +
+  `${scanLand.container.r}, panel reading ${scanLand.fieldsW} × ${scanLand.fieldsH}`);
+
+check('a placed tool shares no geometry with the candidate it came from',
+  !scanLand.aliased && scanLand.pocketsOk && scanLand.nearWall === 0,
+  `aliased ${scanLand.aliased}, every pocket built ${scanLand.pocketsOk}, ` +
+  `${scanLand.nearWall} tools against a wall`);
+
+check('every Step 4 consumer takes a scanned tool unchanged, down to a built mesh',
+  scanDownstream.collisions === 0 && scanDownstream.escaped === 0 &&
+  scanDownstream.mesh && scanDownstream.tris > 100,
+  `${scanDownstream.collisions} collisions, ${scanDownstream.escaped} escaped, insert built ` +
+  `with ${scanDownstream.tris} triangles`);
+
+check('Nest cannot throw away the positions the scan just measured',
+  scanDownstream.pinnedCount === 7 && !scanDownstream.nestMoved,
+  `the nester saw ${scanDownstream.pinnedCount} pinned tools and moved ` +
+  `${scanDownstream.nestMoved ? 'some' : 'none'} of them`);
+
+check('a scanned drawer round-trips through the save format with its provenance',
+  scanDownstream.roundTrip, `items survived with source and pin intact: ${scanDownstream.roundTrip}`);
+
 // ---------- the nest that yields (nesting PRD, criterion 6) ----------
 // nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
 // packers to keep agreeing. The async one yields a macrotask between items, so

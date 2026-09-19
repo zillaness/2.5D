@@ -3801,7 +3801,11 @@ for (const [id, key] of [['layBedW', 'w'], ['layBedH', 'h']]) {
 // palette rows go through here, so a tool lands in the same seeded grid slot
 // however it was picked: offset by the item's index, never by chance.
 // `source` is provenance only — a placed item is a self-contained copy.
-function layPlaceTool(src) {
+// `at` places the tool at a given point instead of on the deterministic grid,
+// for a caller that already knows where the tool goes. The drawer scan is the
+// one that does: the photograph IS the layout, so a scanned tool lands where it
+// was photographed rather than in the next free grid cell.
+function layPlaceTool(src, at) {
   const loop = layContainerLoop();
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of loop) {
@@ -3812,8 +3816,8 @@ function layPlaceTool(src) {
   const it = {
     name: src.name, outer: src.outer, holes: src.holes || [], circles: src.circles || [],
     thickness: src.thickness || state.regions[0].thickness, depth: null, rot: 0,
-    x: (minX + maxX) / 2 + (n % 3) * 12 - 12,
-    y: (minY + maxY) / 2 + Math.floor(n / 3) * 12,
+    x: at && Number.isFinite(at.x) ? at.x : (minX + maxX) / 2 + (n % 3) * 12 - 12,
+    y: at && Number.isFinite(at.y) ? at.y : (minY + maxY) / 2 + Math.floor(n / 3) * 12,
   };
   if (src.source) it.source = structuredClone(src.source);
   // The photo rides along with the copy, so a saved project shows the tools
@@ -3821,6 +3825,100 @@ function layPlaceTool(src) {
   if (src.thumb) it.thumb = structuredClone(src.thumb);
   state.layout.items.push(it);
   return state.layout.items.length - 1;
+}
+
+// ---------- landing a drawer scan in the layout (drawer scan, plan step 4) ----------
+//
+// Drawer millimetres to layout millimetres is +5 on both axes, and it is worth
+// being loud about because getting it wrong does not look like an origin error.
+// layContainerLoop() builds its rectangle at (5 + w/2, 5 + h/2), so the
+// container's bbox is [5, 5+w] by [5, 5+h]; libEntryFromTrace normalises saved
+// outlines to the same 5 mm margin. A scan that skipped the offset would put
+// every tool 5 mm up and left, and any tool near the top or left wall would
+// land inside the border inset and be reported as having escaped the container,
+// which reads as a segmentation failure rather than an arithmetic one.
+const SCAN_ORIGIN_MM = 5;
+
+// Where a scanned part sits, in layout mm. placeLoop rotates a tool's points
+// about its own bounding-box centre and then moves that centre to (x, y), so
+// with rot 0 and x, y set to the polygon's own centre the placement is the
+// identity and the tool draws exactly where the photograph put it.
+function scanPose(part) {
+  const bb = part.bbox;
+  return {
+    x: (bb.minX + bb.maxX) / 2 + SCAN_ORIGIN_MM,
+    y: (bb.minY + bb.maxY) / 2 + SCAN_ORIGIN_MM,
+  };
+}
+
+// Put the drawer itself in the container panel, from the two numbers already
+// typed. Follows the container select's own handler: the scale goes back to
+// 1:1 first and unconditionally, or a previous drawer's Known width factor
+// would silently rescale this one.
+function scanSetContainer(w, h) {
+  const c = state.layout.container;
+  c.scale = { x: 1, y: 1 };
+  c.type = 'rect';
+  c.name = null;
+  c.outer = null;
+  c.w = w;
+  c.h = h;
+  // A drawer's corners are square unless someone says otherwise, and this is
+  // real geometry: `r` is extruded into the slab buildLayoutInsert cuts, and it
+  // defaults to 6.
+  c.r = 0;
+}
+
+// The accepted candidates become the drawer. One redraw at the end, because
+// setLayout re-fits the canvas every time it is called and N of those is N
+// re-zooms of a canvas the user is watching.
+function scanPlaceParts(parts, dims) {
+  const list = Array.isArray(parts) ? parts : [];
+  if (!list.length) return { placed: 0, nearWall: 0 };
+  if (dims && dims.w > 10 && dims.h > 10) scanSetContainer(dims.w, dims.h);
+  state.layout.items.length = 0;
+  for (const part of list) {
+    // Cloned per candidate. layPlaceTool aliases outer, holes and circles
+    // rather than copying them, which every other caller gets away with by
+    // pre-cloning; without it the placed item and the review list would share
+    // polygon arrays and a nudge would edit both.
+    const src = structuredClone({
+      name: part.name, outer: part.outer, holes: part.holes, circles: [],
+      thumb: part.thumb,
+      // Provenance, and the only way to tell six weeks later which tools got
+      // the human pass in Step 2 and which got a glance in the review.
+      source: { kind: 'scan' },
+    });
+    // Pinned, because the photograph is the layout. Without this the first
+    // press of Nest would throw away the positions the scan just measured,
+    // which is the one thing the user came here for. Unpin any tool to let the
+    // packer move it.
+    const i = layPlaceTool(src, scanPose(part));
+    state.layout.items[i].pin = true;
+  }
+  // A tool photographed hard against a wall lands inside the container's border
+  // inset, where layoutConflicts reports it as having escaped and the build
+  // refuses outright. Worth saying at landing time rather than leaving a red
+  // outline with no explanation.
+  //
+  // Every scanned tool has rot 0 and sits at its own outline's centre, so its
+  // placed bounding box is simply the part's own box shifted by the origin
+  // offset. No need to re-place it to find out.
+  const inset = Math.max(0.5, layBorderEff());
+  const cw = state.layout.container.w, ch = state.layout.container.h;
+  let nearWall = 0;
+  for (const part of list) {
+    const bb = part.bbox;
+    if (bb.minX + SCAN_ORIGIN_MM < inset ||
+        bb.minY + SCAN_ORIGIN_MM < inset ||
+        bb.maxX + SCAN_ORIGIN_MM > cw + SCAN_ORIGIN_MM - inset ||
+        bb.maxY + SCAN_ORIGIN_MM > ch + SCAN_ORIGIN_MM - inset) nearWall++;
+  }
+  layoutEditor.sel = 0;
+  syncLayoutFields();
+  syncLaySelPanel(0);
+  refreshLayoutEditor();
+  return { placed: state.layout.items.length, nearWall };
 }
 
 // ---------- the Step 4 palette: Library and Folder ----------
@@ -6591,6 +6689,15 @@ window.__app = {
   },
   // Auto-sort: the action, its undo, the profile store and the resolved
   // options the packer is actually handed.
+  // The drawer scan: the landing path, and the pieces a test needs to drive it
+  // without a photograph.
+  scan: {
+    place: (parts, dims) => scanPlaceParts(parts, dims),
+    pose: part => scanPose(part),
+    origin: SCAN_ORIGIN_MM,
+    placeTool: (src, at) => layPlaceTool(src, at),
+    get state() { return state.scan; },
+  },
   // The autosave slot: its clock, so a test can hold it still, and the three
   // acts that touch it.
   autosave: {
