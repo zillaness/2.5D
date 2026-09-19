@@ -5567,6 +5567,204 @@ check('30 tools with live restarts nest inside the ceiling too (criterion 6)',
   nestRef.twin.ms < 8000,
   `${nestRef.twin.ms} ms for ${nestRef.twin.passes} passes`);
 
+// ---------- packing profiles + reserved label space (nesting steps 5 and 6) ----------
+// Profiles are data before they are UI: two built-in presets, a normaliser that
+// a hand-edited project cannot get past, and a match that says not just which
+// profile a layout is on but whether it has been edited away from it.
+const packFix = await page.evaluate(async () => {
+  const {
+    nestLayout, applyNest, layoutPockets, layoutConflicts, roundedRect,
+    PACK_PROFILES, PACK_KEYS, packProfileValues, packNormalize, packProfileMatch,
+  } = await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const mk = (name, outer, extra = {}) => ({
+    name, outer, holes: [], circles: [], x: 0, y: 0, rot: 0, depth: null,
+    thickness: 6, ...extra,
+  });
+  const drawer = (w, h) => roundedRect(w / 2, h / 2, w, h, 4);
+  const bbox = pts => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  };
+  const clash = (outer, items, res, border = 5) => {
+    const moved = applyNest(items, res);
+    const cf = layoutConflicts(outer,
+      layoutPockets(res.placements.map(p => moved[p.i]), 0.5), border);
+    return [cf.collisions.size, cf.escaped.size];
+  };
+
+  const names = PACK_PROFILES.map(p => p.name);
+  const dense = packProfileValues('Dense');
+  const access = packProfileValues('Access');
+
+  // Selecting a profile then nesting must be the same as setting its values by
+  // hand then nesting. This is the whole claim of "presets, not modes": if the
+  // two ever diverged, the panel would be describing a pack it did not produce.
+  const profC = drawer(150, 110);
+  const profItems = [
+    mk('a', rect(40, 22)), mk('b', rect(36, 18)), mk('c', rect(28, 26)),
+  ];
+  const byName = nestLayout(profC, profItems, { ...packProfileValues('Access') });
+  const byHand = nestLayout(profC, profItems, {
+    minWeb: 8, comfortWeb: 12, rotationStep: 90, rotationFree: false,
+    notchPolicy: 'require', labelSpace: 'reserve', restarts: 20,
+  });
+  const sameAsHand =
+    JSON.stringify(byName.placements) === JSON.stringify(byHand.placements);
+
+  // A hand-edited project is data. Nothing it can say gets past the normaliser
+  // into the packer.
+  const junk = packNormalize({
+    minWeb: -3, comfortWeb: 'wide', rotationStep: 0, rotationFree: 'yes',
+    notchPolicy: 'whatever', labelSpace: 7, restarts: 1e9,
+  });
+  const missing = packNormalize({});
+  const unknown = packProfileValues('Nonexistent');
+
+  // Provenance: on a profile, edited away from one, and on a custom profile.
+  const onAccess = packProfileMatch(access);
+  const edited = packProfileMatch({ ...access, minWeb: 9 }, [], 'Access');
+  const orphan = packProfileMatch({ ...access, minWeb: 9 });
+  const custom = [{ name: 'Mine', values: { ...dense, minWeb: 6 } }];
+  const onCustom = packProfileMatch({ ...dense, minWeb: 6 }, custom);
+
+  // --- comfortWeb: the spread term ---
+  // Off by default, so the dense profile packs exactly as v1.25.0 did.
+  const spreadC = drawer(200, 150);
+  const spreadItems = [
+    mk('p', rect(40, 24)), mk('q', rect(40, 24)), mk('r', rect(40, 24)),
+  ];
+  const tight = nestLayout(spreadC, spreadItems, { rotationStep: 90, comfortWeb: 0 });
+  const tightAgain = nestLayout(spreadC, spreadItems, { rotationStep: 90 });
+  const spread = nestLayout(spreadC, spreadItems, { rotationStep: 90, comfortWeb: 20 });
+  // Nearest-neighbour centre distance, as a blunt read on how spread out the
+  // three ended up. The spread pack must not be tighter than the dense one,
+  // and must still be conflict-free, which is the criterion that gates all of
+  // this: a roomier pack that overlaps is not a pack.
+  const spacing = res => {
+    const ps = res.placements;
+    let worst = Infinity;
+    for (let i = 0; i < ps.length; i++) {
+      for (let j = i + 1; j < ps.length; j++) {
+        const d = Math.hypot(ps[i].x - ps[j].x, ps[i].y - ps[j].y);
+        if (d < worst) worst = d;
+      }
+    }
+    return ps.length > 1 ? worst : 0;
+  };
+
+  // --- labelSpace: reserve ---
+  // A label is foam that has to exist. Two tools that fit side by side with no
+  // labels must be pushed apart once each one's name is packed with it.
+  // Narrow on purpose. A label sits UNDER its tool, so the room it demands is
+  // vertical, and in a square drawer the two tools would simply sit side by
+  // side and never test it. At 60 mm wide only one 40 mm tool fits across, so
+  // the second has to go below the first and the label is in the gap.
+  const labC = drawer(60, 200);
+  const labItems = [mk('WRENCH', rect(40, 20)), mk('PLIERS', rect(40, 20))];
+  const labOff = nestLayout(labC, labItems,
+    { rotationStep: 90, rotationFree: false, minWeb: 4, labelSpace: 'none' });
+  const labOn = nestLayout(labC, labItems, {
+    rotationStep: 90, rotationFree: false, minWeb: 4,
+    labelSpace: 'reserve', labelHeight: 6, labelMargin: 2,
+  });
+  // The gap the reservation has to open: two pockets whose labels sit between
+  // them need the label's own height plus its margins, not the bare 4 mm web.
+  const vGap = res => {
+    const moved = applyNest(labItems, res);
+    const pk = layoutPockets(res.placements.map(p => moved[p.i]), 0.5);
+    if (pk.length < 2) return null;
+    const [a, b] = pk.map(g => bbox(g.pocket));
+    const stacked = a.maxY <= b.minY || b.maxY <= a.minY;
+    const lo = a.maxY <= b.minY ? a : b, hi = a.maxY <= b.minY ? b : a;
+    return { gap: hi.minY - lo.maxY, stacked };
+  };
+  // A tool with no name reserves nothing, so labelSpace costs an unlabelled
+  // drawer exactly zero.
+  const anonItems = [mk('', rect(40, 20)), mk('', rect(40, 20))];
+  const anonOn = nestLayout(labC, anonItems, {
+    rotationStep: 90, rotationFree: false, minWeb: 4, labelSpace: 'reserve',
+  });
+  const anonOff = nestLayout(labC, anonItems,
+    { rotationStep: 90, rotationFree: false, minWeb: 4, labelSpace: 'none' });
+
+  return {
+    names, dense, access, sameAsHand, junk, missing, unknown,
+    onAccess, edited, orphan, onCustom,
+    keys: PACK_KEYS.slice(),
+    tight: { n: tight.placements.length, same: JSON.stringify(tight.placements) === JSON.stringify(tightAgain.placements), space: spacing(tight), clash: clash(spreadC, spreadItems, tight) },
+    spread: { n: spread.placements.length, space: spacing(spread), clash: clash(spreadC, spreadItems, spread) },
+    labOff: { n: labOff.placements.length, v: vGap(labOff), labelled: labOff.stats.labelled, clash: clash(labC, labItems, labOff) },
+    labOn: { n: labOn.placements.length, v: vGap(labOn), labelled: labOn.stats.labelled, clash: clash(labC, labItems, labOn) },
+    anonSame: JSON.stringify(anonOn.placements) === JSON.stringify(anonOff.placements),
+    anonLabelled: anonOn.stats.labelled,
+  };
+});
+
+check('two built-in profiles, each a complete set of the seven packing keys',
+  JSON.stringify(packFix.names) === JSON.stringify(['Dense', 'Access']) &&
+  packFix.keys.every(k => packFix.dense[k] !== undefined && packFix.access[k] !== undefined) &&
+  packFix.dense.minWeb === 4 && packFix.access.minWeb === 8 &&
+  packFix.dense.comfortWeb === 0 && packFix.access.comfortWeb === 12 &&
+  packFix.dense.rotationStep === 15 && packFix.access.rotationStep === 90 &&
+  packFix.dense.rotationFree === true && packFix.access.rotationFree === false &&
+  packFix.dense.notchPolicy === 'warn' && packFix.access.notchPolicy === 'require' &&
+  packFix.dense.labelSpace === 'none' && packFix.access.labelSpace === 'reserve',
+  `${JSON.stringify(packFix.names)}; Dense ${JSON.stringify(packFix.dense)}`);
+
+check('selecting a profile then nesting is identical to setting its values by hand',
+  packFix.sameAsHand, `by name === by hand: ${packFix.sameAsHand}`);
+
+check('a hand-edited project cannot get a bad packing value past the normaliser',
+  packFix.junk.minWeb === 0 && packFix.junk.comfortWeb === 0 &&
+  packFix.junk.rotationStep === 1 && packFix.junk.rotationFree === true &&
+  packFix.junk.notchPolicy === 'warn' && packFix.junk.labelSpace === 'none' &&
+  packFix.junk.restarts === 200 &&
+  packFix.missing.minWeb === 4 && packFix.missing.rotationStep === 15 &&
+  packFix.unknown === null,
+  `${JSON.stringify(packFix.junk)}; unknown profile -> ${packFix.unknown}`);
+
+check('a layout says which profile it is on, and whether it has been edited away from it',
+  packFix.onAccess.name === 'Access' && packFix.onAccess.modified === false &&
+  packFix.edited.name === 'Access' && packFix.edited.modified === true &&
+  packFix.orphan.name === null && packFix.orphan.modified === true &&
+  packFix.onCustom.name === 'Mine' && packFix.onCustom.modified === false,
+  `on ${JSON.stringify(packFix.onAccess)}, edited ${JSON.stringify(packFix.edited)}, ` +
+  `no selection ${JSON.stringify(packFix.orphan)}, custom ${JSON.stringify(packFix.onCustom)}`);
+
+check('comfortWeb 0 is inert: the dense pack is the one that shipped, and repeatable',
+  packFix.tight.same && packFix.tight.n === 3 &&
+  JSON.stringify(packFix.tight.clash) === JSON.stringify([0, 0]),
+  `explicit 0 matches the default: ${packFix.tight.same}, ` +
+  `${packFix.tight.n} placed, conflicts ${JSON.stringify(packFix.tight.clash)}`);
+
+check('comfortWeb spreads the pack out and the result is still conflict-free',
+  packFix.spread.n === 3 &&
+  packFix.spread.space >= packFix.tight.space - 1e-6 &&
+  JSON.stringify(packFix.spread.clash) === JSON.stringify([0, 0]),
+  `nearest pair ${packFix.tight.space.toFixed(1)} mm tight -> ` +
+  `${packFix.spread.space.toFixed(1)} mm at comfortWeb 20, conflicts ` +
+  `${JSON.stringify(packFix.spread.clash)}`);
+
+check('reserving label space opens the gap to fit the label, not the bare web',
+  packFix.labOn.n === 2 && packFix.labOff.n === 2 &&
+  packFix.labOn.labelled === 2 && packFix.labOff.labelled === 0 &&
+  packFix.labOn.v && packFix.labOff.v &&
+  packFix.labOn.v.stacked && packFix.labOff.v.stacked &&
+  packFix.labOn.v.gap >= 10 && packFix.labOn.v.gap > packFix.labOff.v.gap + 1 &&
+  JSON.stringify(packFix.labOn.clash) === JSON.stringify([0, 0]),
+  `gap ${packFix.labOff.v && packFix.labOff.v.gap.toFixed(1)} mm without labels -> ` +
+  `${packFix.labOn.v && packFix.labOn.v.gap.toFixed(1)} mm with 6 mm labels at 2 mm margin ` +
+  `(${packFix.labOn.labelled} reserved), conflicts ${JSON.stringify(packFix.labOn.clash)}`);
+
+check('a tool with no name reserves nothing, so an unlabelled drawer pays nothing',
+  packFix.anonSame && packFix.anonLabelled === 0,
+  `same placements ${packFix.anonSame}, ${packFix.anonLabelled} reserved`);
+
 // ---------- Gridfinity bin (holders.js) ----------
 
 const grid = await page.evaluate(async () => {

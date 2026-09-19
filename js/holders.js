@@ -501,10 +501,97 @@ export function layoutConflicts(containerOuter, pockets, border) {
 // A clock would bound the other case too and break determinism, which is not
 // a trade this module is allowed to make.
 
+// ---------- packing profiles (nesting PRD step 5) ----------
+//
+// Density is not one objective with a knob on it. A travelling toolbox wants
+// tight webs, free rotation and no room kept for labels, because the lid holds
+// everything anyway. A shop drawer wants fingers to fit, labels to stay
+// readable from the front, and that label space to be part of the pack rather
+// than borrowed from the web afterward. One slider cannot say both, so the
+// objective is chosen as a named bundle.
+//
+// These are PRESETS, not modes. Selecting one seeds every value; all of them
+// stay individually editable afterward, and editing any of them makes the
+// layout "Access (modified)" rather than silently still-Access.
+export const PACK_KEYS = [
+  'minWeb', 'comfortWeb', 'rotationStep', 'rotationFree',
+  'notchPolicy', 'labelSpace', 'restarts',
+];
+
+export const PACK_PROFILES = [
+  {
+    name: 'Dense', builtIn: true,
+    note: 'A toolbox that gets carried. The lid holds the tools; pack them tight.',
+    values: {
+      minWeb: 4, comfortWeb: 0, rotationStep: 15, rotationFree: true,
+      notchPolicy: 'warn', labelSpace: 'none', restarts: 20,
+    },
+  },
+  {
+    name: 'Access', builtIn: true,
+    note: 'A drawer you reach into. Fingers fit, labels read from the front.',
+    values: {
+      minWeb: 8, comfortWeb: 12, rotationStep: 90, rotationFree: false,
+      notchPolicy: 'require', labelSpace: 'reserve', restarts: 20,
+    },
+  },
+];
+
+const packNum = (v, dflt) => (Number.isFinite(Number(v)) ? Number(v) : dflt);
+
+// One profile's values, cleaned. Unknown names return null rather than a
+// silent default, so a project naming a profile that no longer exists is a
+// reported case and not a drawer that quietly repacks to something else.
+export function packProfileValues(name, custom) {
+  const all = PACK_PROFILES.concat(Array.isArray(custom) ? custom : []);
+  const hit = all.find(p => p && String(p.name).toLowerCase() === String(name).toLowerCase());
+  return hit ? packNormalize(hit.values) : null;
+}
+
+// Every packing key present, every value the right kind. A hand-edited project
+// is data like any other file: a rotationStep of "wide" or a labelSpace of 7
+// lands on the default rather than reaching the packer.
+export function packNormalize(v) {
+  const o = v || {};
+  return {
+    minWeb: Math.max(0, packNum(o.minWeb, NEST_DEFAULTS.minWeb)),
+    comfortWeb: Math.max(0, packNum(o.comfortWeb, NEST_DEFAULTS.comfortWeb)),
+    rotationStep: Math.min(180, Math.max(1, packNum(o.rotationStep, NEST_DEFAULTS.rotationStep))),
+    rotationFree: o.rotationFree === undefined ? NEST_DEFAULTS.rotationFree : !!o.rotationFree,
+    notchPolicy: o.notchPolicy === 'require' ? 'require' : 'warn',
+    labelSpace: o.labelSpace === 'reserve' ? 'reserve' : 'none',
+    restarts: Math.min(200, Math.max(0, Math.round(packNum(o.restarts, NEST_DEFAULTS.restarts)))),
+  };
+}
+
+// Which profile a set of values IS, and whether it has been edited away from
+// it. Returned as provenance for the panel and for the project file, never as
+// something to resolve back into values later: see packProfileValues' note and
+// the PRD's rule that a project stores the numbers, not the name.
+export function packProfileMatch(values, custom, selected) {
+  const v = packNormalize(values);
+  const all = PACK_PROFILES.concat(Array.isArray(custom) ? custom : []);
+  for (const p of all) {
+    const w = packNormalize(p.values);
+    if (PACK_KEYS.every(k => w[k] === v[k])) return { name: p.name, modified: false };
+  }
+  // Edited away from whatever was picked. Naming it is the whole point:
+  // "Access (modified)" is never ambiguous about whether Access is still in
+  // force, where a bare "custom" would be.
+  const kept = selected && all.find(p =>
+    String(p.name).toLowerCase() === String(selected).toLowerCase());
+  return { name: kept ? kept.name : null, modified: true };
+}
+
 export const NEST_DEFAULTS = {
   clearance: 0.5,      // pocket offset, same units/meaning as layoutPockets
   border: 5,           // container border inset, same as layoutConflicts
   minWeb: 4,           // least foam between two pockets, and pocket to border
+  comfortWeb: 0,       // spacing past which extra room stops earning score; 0 = off
+  labelSpace: 'none',  // 'reserve' packs each tool's label as part of its footprint
+  labelHeight: 6,      // cap height used when reserving, mm (LABEL_DEFAULTS.height)
+  labelMargin: 2,      // clear foam demanded around the glyphs, mm
+  labelFont: 'bold sans-serif',
   rotationStep: 15,    // candidate angle step, matching the editor Shift-snap
   rotationFree: true,  // false restricts every free item to 0 / 180
   notchClear: 10,      // radius of clear foam a finger notch wants, mm
@@ -576,6 +663,41 @@ export function nestAngles(item, opts = {}) {
 // One (item, angle) pocket, built at the origin so every placement of it is a
 // pure translation. offsetLoop of a rotated outline is NOT the rotation of the
 // offset for a non-convex shape, so this really is rebuilt per angle.
+// The footprint a tool's label demands, in the variant's own coordinates, or
+// null when nothing is reserved. Under labelSpace 'reserve' a label is not
+// decoration applied after the fact; it is foam that has to exist, so it has
+// to be known before anything is placed.
+//
+// The box is the glyph bounds grown by the margin, sitting where
+// layoutLabelGeometry auto-places it: centred under the pocket and clear of it
+// by that same margin. Because the box already carries the margin on all four
+// sides and is then inflated by minWeb / 2 like the pocket, a label sitting in
+// a web opens that web to its own height rather than the bare minimum, which
+// is the per-gap effective web the PRD asks for, arrived at by reserving the
+// space rather than by computing a number and hoping.
+//
+// The glyphs stay horizontal. That is why the access profile restricts
+// rotation to quarter turns: a label that turned with its tool would want a
+// different amount of room at every angle, and one that stayed put while its
+// tool turned would want a different box for each.
+function nestLabelBox(item, pocket, o) {
+  if (o.labelSpace !== 'reserve') return null;
+  const text = itemLabelText(item);
+  if (!text) return null;
+  const h = Math.max(0.5, Number(item.labelHeight) || Number(o.labelHeight) || 6);
+  const margin = Math.max(0, Number(o.labelMargin) || 0);
+  const bb = bboxOf(pocket);
+  const loops = labelLoops(text, (bb.minX + bb.maxX) / 2, bb.maxY + margin + h / 2, h,
+    { rot: 0, font: o.labelFont || 'bold sans-serif' });
+  if (!loops.length) return null;
+  const lb = labelBounds(loops);
+  if (!lb || !(lb.maxX > lb.minX)) return null;
+  return {
+    minX: lb.minX - margin, maxX: lb.maxX + margin,
+    minY: lb.minY - margin, maxY: lb.maxY + margin,
+  };
+}
+
 function nestVariant(item, angle, o) {
   if (!item || !item.outer || item.outer.length < 3) return null;
   const geo = layoutPockets([{ ...item, x: 0, y: 0, rot: angle }], o.clearance)[0];
@@ -583,10 +705,21 @@ function nestVariant(item, angle, o) {
   if (!pocket || pocket.length < 3) return null;
   const h = Math.max(0, o.minWeb) / 2;
   const infl = h > 0 ? (offsetLoop(pocket, h)[0] || pocket) : pocket;
+  // A reserved label is carried as its own loop rather than unioned into the
+  // pocket, exactly as the finger notch's disc is. The label sits clear of the
+  // pocket by the margin, so a union would be two disjoint paths, and every
+  // test in here takes one loop.
+  const lbox = nestLabelBox(item, pocket, o);
+  const label = lbox ? boxLoop(lbox, h) : null;
+  const bb = bboxOf(infl);
+  const pbb = bboxOf(pocket);
   return {
-    angle, pocket, infl,
-    bb: bboxOf(infl),
-    pbb: bboxOf(pocket),
+    angle, pocket, infl, label,
+    // The cheap bbox reject and the top-left gravity both have to see the
+    // label, or a tool would be scored as if its name cost nothing and then
+    // rejected for the room the name needs.
+    bb: label ? bboxOf(infl.concat(label)) : bb,
+    pbb: label ? bboxOf(pocket.concat(label)) : pbb,
     area: Math.abs(signedArea(pocket)),
     notch: geo.notchAt || null,
   };
@@ -613,7 +746,8 @@ export function nestLayout(containerOuter, items, opts = {}) {
     clearance: o.clearance, border: o.border, minWeb: o.minWeb,
     rotationStep: o.rotationStep, rotationFree: !!o.rotationFree,
     notchPolicy: o.notchPolicy, notchClear: o.notchClear,
-    notchWarnings: [], pinned: [],
+    comfortWeb: o.comfortWeb, labelSpace: o.labelSpace,
+    notchWarnings: [], pinned: [], labelled: 0,
   };
 
   const inner = containerOuter && containerOuter.length >= 3
@@ -695,20 +829,61 @@ export function nestLayout(containerOuter, items, opts = {}) {
   let tests = 0;
   const wantNotch = o.notchPolicy === 'require' && Number(o.notchClear) > 0;
 
+  // Every loop a variant occupies at (X, Y): the inflated pocket, and the
+  // reserved label box when the profile asks for one. A tool and its name are
+  // one obstacle to everything else in the drawer.
+  const loopsAt = (v, X, Y) => (v.label
+    ? [shiftLoop(v.infl, X, Y), shiftLoop(v.label, X, Y)]
+    : [shiftLoop(v.infl, X, Y)]);
+
+  // The spread term. `comfortWeb` is the spacing past which extra room stops
+  // earning anything: a candidate that crowds its neighbours or the wall is
+  // pushed down the ranking by how far it falls short, and one that is already
+  // comfortable is not rewarded for being more so. At comfortWeb 0 this is
+  // identically zero, so the dense profile, and every result that predates
+  // this term, rank exactly as they did.
+  //
+  // Bounding boxes rather than outlines, deliberately. This is a preference
+  // among placements that are all already legal, so it is allowed to be
+  // approximate, and running Clipper over every candidate of every restart is
+  // not something this budget can afford.
+  function crowding(bb, placed) {
+    const c = Math.max(0, Number(o.comfortWeb) || 0);
+    if (c <= 0) return 0;
+    let gap = Math.min(
+      bb.minX - limitBB.minX, limitBB.maxX - bb.maxX,
+      bb.minY - limitBB.minY, limitBB.maxY - bb.maxY);
+    for (const p of placed) {
+      // Separated on either axis, the gap is that separation. Boxes that
+      // overlap while the outlines interleave score zero, never negative.
+      const d = Math.max(
+        Math.max(p.bb.minX - bb.maxX, bb.minX - p.bb.maxX),
+        Math.max(p.bb.minY - bb.maxY, bb.minY - p.bb.maxY));
+      if (d < gap) gap = d;
+    }
+    return Math.max(0, c - Math.max(0, gap));
+  }
+
   // Is the variant placeable with its item origin at (X, Y)?
   function validAt(v, X, Y, placed) {
     tests++;
     const bb = bbShift(v.bb, X, Y);
     if (!bbIn(bb, limitBB)) return false;
-    let loop = null;
+    let loops = null;
     if (!limitIsRect) {
-      loop = shiftLoop(v.infl, X, Y);
-      if (clipArea(loop, limit, CT.ctDifference) > NEST_TOL) return false;
+      loops = loopsAt(v, X, Y);
+      for (const L of loops) {
+        if (clipArea(L, limit, CT.ctDifference) > NEST_TOL) return false;
+      }
     }
     for (const p of placed) {
       if (!bbHit(bb, p.bb)) continue;
-      if (!loop) loop = shiftLoop(v.infl, X, Y);
-      if (clipArea(loop, p.infl, CT.ctIntersection) > NEST_TOL) return false;
+      if (!loops) loops = loopsAt(v, X, Y);
+      for (const L of loops) {
+        for (const M of p.loops) {
+          if (clipArea(L, M, CT.ctIntersection) > NEST_TOL) return false;
+        }
+      }
     }
     if (wantNotch) {
       const pk = shiftLoop(v.pocket, X, Y);
@@ -758,6 +933,8 @@ export function nestLayout(containerOuter, items, opts = {}) {
     bb: bbShift(v.bb, X, Y),
     pbb: bbShift(v.pbb, X, Y),
     infl: shiftLoop(v.infl, X, Y),
+    loops: loopsAt(v, X, Y),
+    label: v.label ? shiftLoop(v.label, X, Y) : null,
     pocket: shiftLoop(v.pocket, X, Y),
     disc: v.notch && Number(o.notchClear) > 0
       ? nestDisc({ x: v.notch.x + X, y: v.notch.y + Y }, o.notchClear) : null,
@@ -834,7 +1011,8 @@ export function nestLayout(containerOuter, items, opts = {}) {
           const bb = bbShift(v.bb, X, Y);
           // Top-left gravity in the editor's y-down space; ties break toward
           // the smaller rotation so the result looks deliberate.
-          cands.push({ v, X, Y, sy: bb.maxY, sx: bb.maxX, a: v.angle, k });
+          const crowd = crowding(bb, placed);
+          cands.push({ v, X, Y, sy: bb.maxY + crowd, sx: bb.maxX + crowd, a: v.angle, k });
         }
       }
       cands.sort((p, q) => (p.sy - q.sy) || (p.sx - q.sx) || (p.a - q.a) || (p.k - q.k));
@@ -847,7 +1025,9 @@ export function nestLayout(containerOuter, items, opts = {}) {
       let bestC = null;
       for (const c of keep) {
         const s = settle(c.v, c.X, c.Y, placed);
-        const cand = { v: c.v, X: s.X, Y: s.Y, sy: s.bb.maxY, sx: s.bb.maxX, a: c.v.angle };
+        const crowd = crowding(s.bb, placed);
+        const cand = { v: c.v, X: s.X, Y: s.Y,
+          sy: s.bb.maxY + crowd, sx: s.bb.maxX + crowd, a: c.v.angle };
         if (!bestC || cand.sy < bestC.sy - NEST_EPS ||
             (Math.abs(cand.sy - bestC.sy) <= NEST_EPS &&
               (cand.sx < bestC.sx - NEST_EPS ||
@@ -963,6 +1143,7 @@ export function nestLayout(containerOuter, items, opts = {}) {
       budgetHit,
       tests,
       bbox: best.bbox,
+      labelled: best.placed.filter(p => p.label).length,
       area: best.area,
       notchWarnings,
       pinned: pinIdx.slice(),
