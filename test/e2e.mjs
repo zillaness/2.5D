@@ -11495,6 +11495,227 @@ check('the snap grid rides in the project and an older project loads with it off
   `round trip ${JSON.stringify(snapGrid.roundTrip.inFile)}, older project ` +
   `${JSON.stringify(snapGrid.older)}, page handed back at step ${snapGrid.restored.step}`);
 
+// ---------- re-editing a library entry (resume editing, plan step 2) ----------
+// A row the photo queue saved records where its project went, so it can be
+// reopened against the photo it was traced from rather than on the blank
+// backdrop a bare outline gets. When the library copy and the file beside the
+// photo have drifted apart, Sam's rule is to ask rather than let either win.
+const libReedit = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const until = async (fn, ms = 6000) => {
+    for (let t = 0; t < ms; t += 50) { if (fn()) return true; await wait(50); }
+    return false;
+  };
+  const traced = () => app.traceEditor.getTrace().outer.length > 0;
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const photoFile = async (name, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#f2f2f0'; g.fillRect(w * 0.08, h * 0.08, w * 0.84, h * 0.84);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.3, h * 0.3, w * 0.35, h * 0.3);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return new File([blob], name, { type: 'image/jpeg' });
+  };
+
+  const before = {
+    image: app.state.image, step: app.state.step,
+    trace: app.traceEditor.getTrace(),
+    lib: localStorage.getItem('2p5d.library.v1'),
+    regions: structuredClone(app.state.regions),
+    selRegion: app.state.selRegion,
+    confirm: window.confirm,
+  };
+  const regionsOk = rs => rs.length > 0 && rs.every(r => r && r.top && r.bottom);
+
+  // A readable and writable folder, so the project the walk writes can be read
+  // back the way a later session would read it.
+  const files = { 'awl.jpg': await photoFile('awl.jpg', 600, 450) };
+  const disk = new Map();
+  const fileHandle = name => ({ kind: 'file', name, getFile: async () => files[name] });
+  const dir = {
+    kind: 'directory', name: 'bench', children: [fileHandle('awl.jpg')],
+    queryPermission: async () => 'granted',
+    requestPermission: async () => 'granted',
+    getDirectoryHandle: async () => { throw new Error('no folders'); },
+    getFileHandle: async n => {
+      const key = `bench/${n}`;
+      return {
+        createWritable: async () => ({
+          write: async t => { disk.set(key, String(t)); },
+          close: async () => {},
+        }),
+        getFile: async () => {
+          if (files[n]) return files[n];
+          if (!disk.has(key)) throw new Error('no such file');
+          return new File([disk.get(key)], n, { type: 'application/json' });
+        },
+      };
+    },
+  };
+  dir.values = async function* () { for (const c of dir.children) yield c; };
+
+  localStorage.setItem('2p5d.library.v1', '[]');
+  app.state.regions.length = 0;
+  app.state.regions.push({
+    name: 'Base', pts: null, thickness: 6, zBase: 0,
+    top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 },
+  });
+  app.state.selRegion = 0;
+  app.queue.clear();
+  await app.queue.ingestFolder(dir, 'bench');
+  app.queue.load(app.state.queue[0]);
+  await until(() => !!app.state.image);
+  app.goStep(2);
+  await until(() => !!app.state.rect);
+  app.traceEditor.setTrace(rect(10, 10, 50, 25), [rect(20, 15, 8, 8)]);
+  await app.queue.walk.next();
+  await wait(600);
+
+  // The row the walk saved knows where its project went.
+  const entry = () => JSON.parse(localStorage.getItem('2p5d.library.v1') || '[]')[0];
+  const saved = {
+    name: entry().name,
+    source: entry().source && { ...entry().source },
+    can: app.lib.canReedit(entry()),
+  };
+  // A row saved any other way has no source and cannot be reopened this way.
+  const bare = { name: 'hand saved', kind: 'tool', thickness: 5,
+    outer: rect(0, 0, 30, 20), holes: [], circles: [] };
+  const bareCan = app.lib.canReedit(bare);
+
+  // --- reopening it ---
+  app.queue.clear();
+  app.traceEditor.setTrace([], []);
+  app.goStep(1);
+  let asked = null;
+  window.confirm = msg => { asked = msg; return true; };
+  const how = await app.lib.reedit(entry());
+  await until(traced);
+  const t = app.traceEditor.getTrace();
+  const reopened = {
+    how, asked, outer: t.outer.length, holes: t.holes.length,
+    step: app.state.step, step2Enabled: !$('stepBtn2').disabled,
+    rect: !!app.state.rect, image: !!app.state.image,
+    // The queue is not driving this, so Next must have nothing bound to it.
+    queueBound: app.state.queueCurrentId,
+  };
+
+  // --- the two copies disagree ---
+  // Edit the library row so it is a different shape from the file beside the
+  // photo, then reopen and take each branch of the prompt in turn.
+  const drift = entry();
+  drift.outer = rect(0, 0, 40, 40).concat([{ x: 20, y: 50 }]);
+  localStorage.setItem('2p5d.library.v1', JSON.stringify([drift]));
+  app.traceEditor.setTrace([], []);
+  asked = null;
+  window.confirm = msg => { asked = msg; return true; };
+  const tookFile = await app.lib.reedit(entry());
+  await until(traced);
+  const onFile = {
+    how: tookFile, asked, outer: app.traceEditor.getTrace().outer.length,
+    step: app.state.step, image: !!app.state.image,
+  };
+
+  app.traceEditor.setTrace([], []);
+  asked = null;
+  window.confirm = msg => { asked = msg; return false; };
+  const tookLib = await app.lib.reedit(entry());
+  await until(traced);
+  const onLib = {
+    how: tookLib, asked, outer: app.traceEditor.getTrace().outer.length,
+    image: !!app.state.image,
+  };
+
+  // --- the photo has gone ---
+  delete files['awl.jpg'];
+  dir.children.length = 0;
+  app.traceEditor.setTrace([], []);
+  asked = null;
+  window.confirm = () => { asked = 'ASKED'; return true; };
+  const gone = await app.lib.reedit(entry());
+  await until(traced);
+  const missing = {
+    how: gone, asked, outer: app.traceEditor.getTrace().outer.length,
+    image: !!app.state.image,
+    toast: ($('toast') && $('toast').textContent) || '',
+  };
+
+  // Hand the page back.
+  window.confirm = before.confirm;
+  app.queue.clear();
+  app.folderBackend.forget();
+  if (before.lib === null) localStorage.removeItem('2p5d.library.v1');
+  else localStorage.setItem('2p5d.library.v1', before.lib);
+  app.state.image = before.image;
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles || []);
+  app.traceEditor.measurements = [];
+  app.state.regions.length = 0;
+  if (regionsOk(before.regions)) for (const r of before.regions) app.state.regions.push(r);
+  else app.state.regions.push({
+    name: 'Base', pts: null, thickness: 5, zBase: 0,
+    top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 },
+  });
+  app.state.selRegion = regionsOk(before.regions) ? before.selRegion : 0;
+  app.goStep(before.step);
+
+  return {
+    saved, bareCan, reopened, onFile, onLib, missing,
+    restored: { step: app.state.step, queue: app.state.queue.length },
+  };
+});
+
+check('a library row the walk saved records the photo and the project it came from',
+  libReedit.saved.name === 'awl' && libReedit.saved.source &&
+  libReedit.saved.source.path === 'bench/awl.jpg' &&
+  libReedit.saved.source.json === 'awl.json' &&
+  libReedit.saved.can === true && libReedit.bareCan === false,
+  `source ${JSON.stringify(libReedit.saved.source)}; a hand-saved row can re-edit: ` +
+  `${libReedit.bareCan}`);
+
+check('re-editing a library row reopens it against its own photo, Step 2 live',
+  libReedit.reopened.how === 'editable' && libReedit.reopened.asked === null &&
+  libReedit.reopened.outer === 4 && libReedit.reopened.holes === 1 &&
+  libReedit.reopened.step === 2 && libReedit.reopened.step2Enabled &&
+  libReedit.reopened.rect && libReedit.reopened.image &&
+  libReedit.reopened.queueBound === null,
+  `outer ${libReedit.reopened.outer}, holes ${libReedit.reopened.holes}, step ` +
+  `${libReedit.reopened.step}, photo ${libReedit.reopened.image}, nothing asked ` +
+  `(${libReedit.reopened.asked}), queue unbound ${libReedit.reopened.queueBound === null}`);
+
+check('when the two copies disagree it asks, naming what differs rather than a timestamp',
+  /not the same shape in both places/.test(libReedit.onFile.asked || '') &&
+  /Beside the photo: 4 points/.test(libReedit.onFile.asked || '') &&
+  /In your library:  5 points/.test(libReedit.onFile.asked || ''),
+  (libReedit.onFile.asked || '(nothing asked)').replace(/\n/g, ' | '));
+
+check('taking the file beside the photo edits the file, over the photo',
+  libReedit.onFile.how === 'editable' && libReedit.onFile.outer === 4 &&
+  libReedit.onFile.step === 2 && libReedit.onFile.image,
+  `outer ${libReedit.onFile.outer} (the file), step ${libReedit.onFile.step}, ` +
+  `photo ${libReedit.onFile.image}`);
+
+check('declining keeps the library copy, on a blank backdrop, and says the file is untouched',
+  libReedit.onLib.how === 'declined' && libReedit.onLib.outer === 5 &&
+  libReedit.onLib.image === false,
+  `outer ${libReedit.onLib.outer} (the library copy), photo ${libReedit.onLib.image}`);
+
+check('a row whose photo has gone opens as an outline and says so, without asking',
+  libReedit.missing.how === 'missing' && libReedit.missing.asked === null &&
+  libReedit.missing.outer === 5 && libReedit.missing.image === false &&
+  /no longer has/.test(libReedit.missing.toast),
+  `${libReedit.missing.how}: “${libReedit.missing.toast}”`);
+
+check('the library re-edit block hands the queue, the folder and Step 1 back',
+  libReedit.restored.queue === 0 && libReedit.restored.step === 3,
+  `queue ${libReedit.restored.queue}, step ${libReedit.restored.step}`);
+
 // ---------- the Nest button, its profiles and what a project keeps (steps 7-8) ----------
 // nestLayout() shipped in v1.25.0 as reachable geometry with nothing calling
 // it. This is the call, plus the rule that decides what reopening a project

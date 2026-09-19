@@ -755,6 +755,20 @@ function queueClearTrace() {
   updateStepButtons();
 }
 
+// One file inside the open folder, by the same path shape the ingest hands out.
+// Null when there is no folder, the folder refuses, or the file has gone.
+async function folderFileAt(path) {
+  if (!layFolderHandle || !path) return null;
+  if (!await ensurePermission(layFolderHandle, 'read')) return null;
+  try {
+    const dir = await queueDirFor(path);
+    if (!dir || typeof dir.getFileHandle !== 'function') return null;
+    const name = String(path).split('/').pop();
+    const fh = await dir.getFileHandle(name);
+    return await fh.getFile();
+  } catch { return null; }
+}
+
 // A traced photo's project, read back. Three sources, because the queue's two
 // write paths do not leave the same thing behind: Next keeps the exact text it
 // wrote, a resumed folder hands over the sibling File it matched, and a project
@@ -791,6 +805,28 @@ async function queueReadProject(item) {
   return null;
 }
 
+// Lay a project over the photo that is already on screen. Shared by the queue
+// re-edit and by the library re-edit, because they are the same act reached two
+// ways: the photo makes Step 2 live, the project carries everything that was
+// drawn on it. Returns 'editable', 'outlineOnly' or 'failed'.
+function applyProjectOverPhoto(p) {
+  // Step 2 is forced only when the project carries its rectified copy, which
+  // every project the walk writes does, because tracing requires rectifying.
+  // Without one, goStep(2) would find state.rectDirty still true from the photo
+  // that just decoded, re-rectify and RETRACE, and the freshly restored trace
+  // would be overwritten by a new segmentation of the same photo.
+  const editable = !!(p && p.rectified && p.pxPerMm);
+  // A project file is data, and a hand-edited or truncated one can throw its
+  // way out of loadProject part-applied. Nothing awaits these callers, so an
+  // uncaught throw would be a silent no-op.
+  try {
+    loadProject(p, { quiet: true, step: editable ? 2 : undefined });
+  } catch {
+    return 'failed';
+  }
+  return editable ? 'editable' : 'outlineOnly';
+}
+
 // The way back into a tool already traced. The photo is on screen by the time
 // this runs, so Step 1 and the corners are live; the project supplies the
 // trace, the arcs, the lines, the regions, the labels and the reference
@@ -817,20 +853,15 @@ async function queueRestoreTrace(item) {
   // would be overwritten by a new segmentation of the same photo. A project
   // with a trace and no rectified copy therefore lands where loadProject would
   // have put it on its own, at Step 3, with the outline intact.
-  const editable = !!(p.rectified && p.pxPerMm);
-  // A project file is data, and a hand-edited or truncated one can throw its
-  // way out of loadProject part-applied. Nothing here awaits this function, so
-  // an uncaught throw would be a silent no-op: the tile would sit there looking
-  // reopened with none of its trace back and nothing said. Caught, it reports.
-  try {
-    loadProject(p, { quiet: true, step: editable ? 2 : undefined });
-  } catch (err) {
+  const how = applyProjectOverPhoto(p);
+  if (how === 'failed') {
     queueReediting = null;
     renderQueue();
     toast(`“${item.name}” has a project file this build cannot read, so its trace ` +
       'did not come back. The photo is loaded; tracing it again replaces the file.', 7000);
     return false;
   }
+  const editable = how === 'editable';
   queueReediting = item.id;
   renderQueue();
   queueSyncWalk();
@@ -1472,9 +1503,13 @@ async function queueNext() {
   // containers from the palette: the tools traced this session would be
   // ticked nowhere and Add all would place none of them.
   entry.kind = 'tool';
-  libCommit(entry);
   item.libName = name;
+  // The project is written FIRST so the library entry can record where it
+  // went. Without that the library row is an outline with no way back to the
+  // photo it was traced from, which is the whole of plan step 2.
   const wrote = await queueWriteProject(item);
+  entry.source = { path: item.path, json: item.json, jsonPath: item.jsonPath };
+  libCommit(entry);
   item.status = 'traced';
   item.picked = false;
   // Re-tracing a photo replaces its row rather than adding one. Two rows for
@@ -5733,6 +5768,14 @@ function refreshLibList() {
   $('libSaveBtn').disabled = !ok;
   $('libLoadBtn').disabled = !ok;
   $('libDeleteBtn').disabled = !ok;
+  // Re-edit needs more than storage: the entry has to know which photo it came
+  // from, and that photo's folder has to be the one open. Anything else and the
+  // button would promise a photo it cannot produce.
+  const can = libCanReedit(list[+$('libList').value]);
+  $('libReeditBtn').disabled = !ok || !can;
+  $('libReeditBtn').title = can
+    ? 'Reopen this outline against the photo it was traced from'
+    : 'Only an outline the photo queue saved can be reopened against its photo, and its folder has to be open';
   $('libNote').textContent = ok ? '' : 'Storage is unavailable here — the library needs the offline or hosted copy.';
   if (!$('layoutModal').hidden) refreshLaySelects();
 }
@@ -5789,6 +5832,24 @@ $('libSaveBtn').addEventListener('click', () => {
   libCommit(entry);
 });
 
+$('libList').addEventListener('change', () => refreshLibList());
+
+$('libReeditBtn').addEventListener('click', () => {
+  const i = $('libList').value;
+  if (i === '') { toast('Pick a saved outline first.'); return; }
+  const o = libLoad()[+i];
+  if (!o) return;
+  if (!libCanReedit(o)) {
+    toast(o.source
+      ? `\u201c${o.name}\u201d came from a folder that is not open. Open it and try again.`
+      : `\u201c${o.name}\u201d was not saved by the photo queue, so there is no photo to reopen it against.`,
+      6000);
+    return;
+  }
+  libReedit(o);
+  $('projModal').hidden = true;
+});
+
 $('libDeleteBtn').addEventListener('click', () => {
   const i = $('libList').value;
   if (i === '') { toast('Pick a saved outline first.'); return; }
@@ -5807,6 +5868,111 @@ $('libLoadBtn').addEventListener('click', () => {
   loadOutlineIntoSession(o);
   $('projModal').hidden = true;
 });
+
+// ---------- re-editing a library entry (resume editing, plan step 2) ----------
+//
+// A library row saved by the photo queue records where its project went, so it
+// can be reopened the same way a queue tile is: the photo under the trace, the
+// project over it, Step 2 live. Rows saved any other way have no source and
+// keep loading as a bare outline, which is all they ever were.
+
+// A shape in terms that survive the origin shift libEntryFromTrace applies:
+// counts and extents, never absolute positions. Comparing these is how the two
+// copies are told apart without a clock, which the module is not allowed to
+// read, and it says something more useful than a timestamp anyway: a timestamp
+// says which is newer, this says what is actually different.
+function libShapeOf(outer, holes, circles) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of (outer || [])) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const r = v => (Number.isFinite(v) ? Math.round(v * 100) / 100 : 0);
+  return {
+    pts: (outer || []).length,
+    holes: (holes || []).length,
+    circles: (circles || []).length,
+    w: r(maxX - minX), h: r(maxY - minY),
+  };
+}
+const libShapeWords = s =>
+  `${s.pts} points, ${fmtDim(s.w)} × ${fmtDim(s.h)} mm` +
+  (s.holes ? `, ${s.holes} hole${s.holes === 1 ? '' : 's'}` : '') +
+  (s.circles ? `, ${s.circles} drilled` : '');
+const libShapesAgree = (a, b) =>
+  a.pts === b.pts && a.holes === b.holes && a.circles === b.circles &&
+  Math.abs(a.w - b.w) < 0.05 && Math.abs(a.h - b.h) < 0.05;
+
+// Can this entry be reopened against its own photo right now? It needs a
+// source, and the folder that source names has to be the one currently open.
+function libCanReedit(entry) {
+  return !!(entry && entry.source && entry.source.path && layFolderHandle);
+}
+
+// Reopen a library entry for editing against the photo it was traced from.
+// Returns 'editable', 'outline', 'missing' or 'declined'.
+async function libReedit(entry) {
+  if (!entry || !entry.source) return 'missing';
+  const [photo, projFile] = await Promise.all([
+    folderFileAt(entry.source.path),
+    folderFileAt(entry.source.jsonPath || queueSiblingJson(entry.source.path)),
+  ]);
+  let proj = null;
+  if (projFile) {
+    try {
+      const j = JSON.parse(await projFile.text());
+      if (isProject(j)) proj = j;
+    } catch { proj = null; }
+  }
+  if (!photo || !proj) {
+    // The reason goes AFTER the load, because loadOutlineIntoSession toasts its
+    // own success and would otherwise bury it: the user would see "Loaded
+    // outline" and never learn why it came up on a blank backdrop.
+    loadOutlineIntoSession(entry);
+    toast(`“${entry.name}” was traced from a photo this folder no longer has, ` +
+      'so it opens as an outline on a blank backdrop.', 7000);
+    return 'missing';
+  }
+
+  // Sam's rule for the disagreement, 2026-09-19: ask, rather than letting
+  // either win silently. The file beside the photo is the record and the
+  // library is a convenience copy, but a library copy edited after the fact is
+  // real work and losing it without a word is the worse failure.
+  const mine = libShapeOf(entry.outer, entry.holes, entry.circles);
+  const theirs = libShapeOf(
+    proj.trace && proj.trace.outer, proj.trace && proj.trace.holes,
+    proj.trace && proj.trace.circles);
+  if (!libShapesAgree(mine, theirs)) {
+    const take = confirm(
+      `\u201c${entry.name}\u201d is not the same shape in both places.\n\n` +
+      `Beside the photo: ${libShapeWords(theirs)}\n` +
+      `In your library:  ${libShapeWords(mine)}\n\n` +
+      'OK edits the file beside the photo, which is the record.\n' +
+      'Cancel edits the library copy instead, on a blank backdrop.');
+    if (!take) {
+      loadOutlineIntoSession(entry);
+      toast(`Editing the library copy of “${entry.name}”. The file beside the photo is untouched.`, 6000);
+      return 'declined';
+    }
+  }
+
+  let how = 'failed';
+  loadFile(photo, () => {
+    loadOutlineIntoSession(entry);
+    toast(`The photo for “${entry.name}” would not decode, so it opens as an outline.`, 6000);
+  }, () => {
+    how = applyProjectOverPhoto(proj);
+    toast(how === 'editable'
+      ? `Re-editing “${entry.name}” against its own photo.`
+      : `“${entry.name}” opened, but it was saved without its rectified photo, so the ` +
+        'trace cannot be edited. Re-rectify in Step 2 to trace it again.', 6000);
+    refreshLibList();
+  });
+  // The queue is not driving this, and leaving it bound would let Next file
+  // this tool under a queued photo's name.
+  queueDetach();
+  return 'editable';
+}
 
 // Load a bare outline (no photo) into an editable session by synthesizing a
 // blank backdrop, so it can be edited in step 2 and modeled in step 3.
@@ -6085,6 +6251,11 @@ window.__app = {
     get traced() { return queueTraced; },
   },
   libFitThumbs,
+  // Re-editing a library entry against the photo it was traced from.
+  lib: {
+    reedit: libReedit, canReedit: libCanReedit, shapeOf: libShapeOf,
+    load: libLoad, refresh: refreshLibList,
+  },
   // Auto-sort: the action, its undo, the profile store and the resolved
   // options the packer is actually handed.
   nest: {
