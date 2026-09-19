@@ -1,6 +1,6 @@
 ---
 file: README.md
-version: 1.2
+version: 1.3
 author: Sam Cao
 created: 2026-07-20
 last_updated: 2026-09-19
@@ -837,7 +837,7 @@ warns when two measured axes disagree by more than 2 percent, which usually
 means a mis-traced edge rather than warp. The original outline stays in the
 library; only the layout's copy is scaled.
 
-### Tracing a whole drawer in one pass
+### The photo queue: a drawer one tool at a time
 
 A drawer is a dozen tools, and tracing them one at a time means a dozen trips
 through Steps 1 to 3, with the reference set up again on every trip and a
@@ -892,6 +892,60 @@ not count as done.
 **Memory.** A hundred phone photos are never decoded at once. Ingest is
 sequential, each queue item holds a file reference and a 160 px thumbnail, and
 the only full-size decode alive at any moment is the photo being worked on.
+
+### Scanning a drawer in one photo
+
+The queue above is the careful path, and it is still the recommended one for
+building a library you will cut from. This is the fast rough one: lay the tools
+out in the drawer, photograph the whole drawer once, and trace all of them at
+the same time.
+
+**Setting it up.** In Step 1 pick the **Rectangle** reference and tick **Scan a
+whole drawer of tools**. Type the drawer's measured inside width and depth;
+those two numbers are the scale, so a tape measure is the instrument here, not
+a reference card. The hint tells you the resolution you will get before you
+take the shot.
+
+**Where the corners go.** Put the four handles where the drawer's *floor* meets
+its walls, not on the rim. The tools lie on the floor, and corners marked at the
+rim sit one drawer-depth nearer the camera, so everything comes back small by
+that ratio: a 60 mm drawer shot from 800 mm reads about 7 percent under, which
+turns a 300 mm wrench into 277 mm. They are not detected for you either. Paper
+detection looks for a bright dominant region, and a drawer full of tools is
+neither.
+
+**Two things about the photo.** Leave a clear band of liner all round, roughly
+4 percent of the drawer's short side, because the colour of that border is what
+the tools are told apart from. And lay the tools so they do not touch: two that
+touch are one shape to a segmenter, and v1 does not try to cut them apart.
+
+**Review.** Continue to Step 2 and the drawer is segmented and traced. Step 2
+becomes a review: every shape found is drawn over the photo with its name, and
+the panel lists them. Click a tool on the photo to tick or untick it, rename
+anything you will want engraved, and **Find again** re-runs the segmentation if
+you change the detection threshold. **Place these N tools** puts them in the
+drawer and opens Step 4.
+
+**What you get.** Each tool lands exactly where it was photographed, in a
+container already set to the drawer's typed dimensions, and **pinned**. The
+photograph *is* the layout, so Nest will not move them until you untick a pin.
+Each carries a scan provenance, which is how you tell later which tools got the
+full Step 2 pass and which got a glance here.
+
+**When the scan gets one wrong.** Select it in the drawer and press **✎ Edit in
+Step 2**. The tool opens as an ordinary single outline, over the drawer photo it
+was scanned from, with the whole point-by-point editor. **Apply** puts it back
+in the same place, and **Discard** leaves the drawer alone.
+
+**The honest trade.** This path gives every tool a glance instead of a pass, and
+that is a real reduction in the care each outline gets. It is deliberate, and
+it is why scanned tools are badged, why the escape hatch above exists, and why
+an export warns when tools are still carrying the names the scan gave them
+rather than engraving "Tool 4" into your foam.
+
+**Not in v1.** Tools that touch are not separated. There is no reference-object
+cross-check against the typed dimensions, so the rim caution above is the only
+defence against a mis-measured drawer.
 
 ## Tests
 

@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.12
+version: 1.13
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-19
@@ -127,6 +127,38 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - ▶ NEXT: resume-editing step 2 (library re-edit, now with the load-time
   prompt Sam chose for open question 3), then autosave, step 5 and independent
   of everything. Steps 3 and 4 need Sam's call first, see below.
+
+## 2026-09-19, later: the drawer scan
+Sam put task 4 in the work queue, which granted the exception the PRD asks of
+batch_ingest_prd_v1.0.md's quality-bar rule and signed off the `layout.items`
+landing position. Steps 1 to 6 and 8 shipped as v1.27.0; step 7 did not.
+
+- ✅ Step 1, the resolution the feature stands on: 5.71 px/mm on a 560 mm drawer
+  against 2.86 at the default, warp 606 ms, segmentation 899 ms, a 2 mm bar
+  measuring 2.1 mm — b862f94
+  - ⚠ Found: **paperDims SORTS custom width and height by orientation**, so a
+    560 by 400 drawer would have rectified transposed on the first photo.
+- ✅ Step 2, segmentObjects, bbox-cropped per component: 26 KB of masks against
+  1641 KB full-frame on the fixture
+- ✅ Step 3, js/scan.js, retrace's pipeline in retrace's order, scoped per
+  component. Three paper-tuned constants deliberately not inherited.
+- ✅ Step 4, landing: seven tools at a worst position error of 0.0 mm, pinned,
+  badged — b4888d7
+- ✅ Step 5, the review as a mode on Step 2 — 8ab4555
+  - ⚠ Found: **goStep(2) would have destroyed a scan silently** on any corner
+    nudge, by re-rectifying and retracing the drawer as one tool. Guarded and
+    tested. This was the single most dangerous line for the feature.
+  - ⚠ "A mode on Step 2, no new capability" understated it by two mandatory
+    TraceEditor edits.
+- ✅ Step 6, Edit in Step 2, with the pose round trip exact to 1e-6 mm — ecd724a
+- ✅ Step 8, the auto-name export guard, plus a Name field in the drawer panel,
+  because the review had been the only chance a scanned tool ever got at a name
+- ▶ NEXT: **step 7**, the reference-object cross-check and the one-click
+  rescale of the PRD's open question 6. The rim caution shipped as hint text
+  with the numbers, so the sharpest accuracy risk is named where the corners
+  are placed; what is missing is the independent measurement that would catch a
+  mis-measured drawer. Also outstanding and named in the README: merging two
+  candidates that were touching, and thumbnails in the review list.
 
 ## Noticed in passing, not fixed
 - **The Step 4 folder palette truncates tool names to two or three characters.**

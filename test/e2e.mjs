@@ -12428,10 +12428,11 @@ check('a drawer’s two measurements are taken as given, not sorted into a page 
   `scan on: ${scanMode.paper.w} × ${scanMode.paper.h}; scan off, the same two numbers come ` +
   `back as ${scanMode.off.w} × ${scanMode.off.h}, which is the transposition this avoids`);
 
-check('the hint says the resolution, the corners and the two ways to shoot it badly',
+check('the hint says the resolution, the rim trap, and the two ways to shoot it badly',
   scanMode.ui.hintShown && scanMode.ui.customOpen &&
-  /5\.7 px\/mm/.test(scanMode.ui.hint) && /inside corners/.test(scanMode.ui.hint) &&
-  /clear liner/.test(scanMode.ui.hint) && /do not touch/.test(scanMode.ui.hint) &&
+  /5\.7 px\/mm/.test(scanMode.ui.hint) && /FLOOR meets its walls/.test(scanMode.ui.hint) &&
+  /not on the rim/.test(scanMode.ui.hint) && /clear liner/.test(scanMode.ui.hint) &&
+  /do not touch/.test(scanMode.ui.hint) &&
   scanMode.ui.orientLocked && scanMode.ui.captureLocked && scanMode.ui.lensHidden,
   scanMode.ui.hint);
 

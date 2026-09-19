@@ -1,6 +1,6 @@
 ---
 file: drawer_scan_prd_v1.0.md
-version: 1.0
+version: 1.1
 author: Sam Cao
 created: 2026-09-19
 last_updated: 2026-09-19
@@ -10,8 +10,47 @@ ai_update: Update last_updated and version. Rename file to match. Append changel
 
 # PRD: Scanning a drawer in one photo
 
-Status: **DRAFT, awaiting sign-off. Nothing here is built.** · 2026-09-19 ·
-target branch `claude/2.5d-photo-stl-s3-y0oodn`
+Status: **Steps 1 to 6 and 8 SHIPPED in v1.27.0, 2026-09-19. Step 7 not built.**
+· 2026-09-19 · target branch `claude/2.5d-photo-stl-s3-y0oodn`
+
+Sam put this in the work queue on 2026-09-19, which granted the exception asked
+for below and signed off the `layout.items` landing position with Send to Step 2
+as the escape hatch. Every open question was built to its own recommendation.
+
+**Shipped:** the capture mode and the resolution raise (1), `segmentObjects`
+(2), `js/scan.js` (3), landing in `layout.items` (4), the review as a mode on
+Step 2 (5), Edit in Step 2 (6), and the auto-name export guard (8).
+
+**Not built:** step 7, the reference-object cross-check and the one-click
+rescale of open question 6. The rim caution shipped as hint text, with the
+numbers, so the sharpest accuracy risk is at least named at the moment the
+corners are placed; what is missing is the independent measurement that would
+catch a mis-measured drawer. Also not built, and both named in the README:
+merging two candidates that were touching, and per-candidate thumbnails in the
+review list.
+
+**Three corrections this document needed, found by building it:**
+
+1. **`paperDims` sorts custom width and height by orientation.** With the
+   default portrait orientation a 560 wide by 400 deep drawer would have
+   rectified as 400 by 560, transposed, on the very first photo. The scan takes
+   its two numbers as given.
+2. **`goStep(2)` would have destroyed the scan silently.** It re-rectifies and
+   retraces whenever `state.rectDirty` is set, which any corner nudge does, and
+   `retrace` ends in a single-tool segmentation of the whole drawer. A user who
+   scanned, glanced at Step 1, moved a handle and came back would have lost
+   everything. Guarded, and tested.
+3. **"A mode on Step 2, no new capability" understated it by two TraceEditor
+   edits**, both mandatory: `draw()` has to hand its context and viewport to
+   `onDraw`, and `_down` needs a mode branch of its own or a left press falls
+   through to `edit`, starts a pan, and swallows every tick.
+
+Three shipped constants were deliberately not inherited, because each was tuned
+for one object on a sheet at up to 8 px/mm and each fails silently on a drawer:
+the region suggester's 0.25 bounding-box fill gate (a 200 by 20 mm tool at 45
+degrees fills 0.165 and would vanish), `state.seg.minHoleAreaMm2` of 3, and
+`state.seg.marginMm` of 2, which at scan resolution clears an eleven pixel strip
+on every side and would clip any tool lying against a wall.
 
 Sam, 2026-09-19: "is it possible to layout the tools in the drawer, and take a
 picture of the 4 corners of the drawer and provide the measurement length and
@@ -474,4 +513,5 @@ Step 2 as the escape hatch. Open questions 3, 6 and 9 change what gets built;
 the rest are defaults.
 
 ## CHANGELOG
+- v1.1 (2026-09-19): Steps 1 to 6 and 8 shipped in v1.27.0. Records the three corrections building it forced (the paperDims transposition, the goStep(2) retrace that would have destroyed a scan, and the two TraceEditor edits the "no new capability" framing hid), the three paper-tuned constants the scan does not inherit, and what remains: step 7's cross-check, merge, and thumbnails.
 - v1.0 (2026-09-19): Initial draft, from Sam's 2026-09-19 note on photographing a laid-out drawer and tracing every tool in one pass. Records the three settled decisions (one photo of all four corners, typed drawer width and depth with an optional reference-object cross-check), takes the position that scanned silhouettes land directly in `state.layout.items` with a per-item Send to Step 2 escape hatch rather than refactoring the `TraceEditor` singleton, states the tension with `batch_ingest_prd_v1.0.md`'s shipped quality-bar rule and what exception is being asked for, and proposes a resolution for the README heading collision at line 771.

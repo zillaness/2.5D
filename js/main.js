@@ -5050,11 +5050,15 @@ function scanHintText() {
   const ppm = Math.min(SCAN_MAX_LONG_SIDE_PX / Math.max(w, h), 8);
   const band = Math.round(Math.min(w, h) * 0.04);
   return `${fmtDim(w)} \u00d7 ${fmtDim(h)} mm at ${ppm.toFixed(1)} px/mm. ` +
-    'Drag the four handles onto the drawer\u2019s inside corners; they are not ' +
-    'found for you, because a drawer full of tools is nothing like a sheet of ' +
-    `paper. Leave about ${band} mm of clear liner all round, since the colour of ` +
-    'that border is what the tools are told apart from, and lay the tools so ' +
-    'they do not touch, because two that touch trace as one.';
+    'Put the four handles where the drawer\u2019s FLOOR meets its walls, not on ' +
+    'the rim: the tools lie on the floor, and corners marked at the rim are one ' +
+    'drawer-depth nearer the camera, so everything comes back small by that ratio ' +
+    '(a 60 mm drawer shot from 800 mm reads about 7 percent under, which turns a ' +
+    '300 mm wrench into 277). They are not found for you either, because a drawer ' +
+    `full of tools is nothing like a sheet of paper. Leave about ${band} mm of ` +
+    'clear liner all round, since the colour of that border is what the tools are ' +
+    'told apart from, and lay the tools so they do not touch, because two that ' +
+    'touch trace as one.';
 }
 
 function syncScanFields() {
