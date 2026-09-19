@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.14
+version: 1.15
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-19
@@ -162,10 +162,22 @@ landing position. Steps 1 to 6 and 8 shipped as v1.27.0; step 7 did not.
 
 ## The adversarial review, 2026-09-19
 An 87-agent review of this session's work: six lenses over the diff, then three
-independent skeptics per finding, each prompted to refute. **27 candidates, 9
-confirmed, 18 refuted.** Every confirmed one is fixed, with the reviewer's own
-reproduction as the test. Worth recording that two thirds were wrong: the
-skeptic pass is what made the nine worth acting on.
+independent skeptics per finding, each prompted to refute. 27 candidates, 9
+confirmed, 18 refuted, and **that split does not mean two thirds were wrong.**
+
+Two things inflate the refuted count, and the raw numbers are worthless without
+them. The six lenses overlapped heavily, so the same defect arrived up to four
+times in different words. And the fixes were being written while the skeptics
+were still running, so a skeptic that opened the file after the fix landed
+refuted a finding that had been correct when it was made. "Edit in Step 2 keeps
+a stale item index" is in the dismissed list; the same bug is in the confirmed
+list under another lens's wording, and it was real.
+
+Deduplicated, roughly ten distinct defects were found and all ten are fixed,
+each with the reviewer's own reproduction as its test. The lesson is not that
+the finders were noisy. It is that running the review concurrently with the
+fixing makes the verdict column unreadable, and that a review worth trusting
+has to be read for its findings rather than its arithmetic.
 
 The nine, and what they had in common: three were constants or comparisons
 chosen against one example rather than the worst case, five were the review and
