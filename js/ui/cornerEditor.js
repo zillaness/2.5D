@@ -41,8 +41,13 @@ export class CornerEditor {
     }).observe(canvas);
   }
 
+  // Letting go of the frame is a real state: a project saved without its
+  // original photo loads with nothing to mark corners on, and draw() has always
+  // handled that by clearing and returning. This handles it on the way in too,
+  // rather than throwing on the naturalWidth of a null.
   setImage(image) {
-    this.image = image;
+    this.image = image || null;
+    if (!this.image) { this.draw(); return; }
     // Accept an HTMLImageElement (naturalWidth) or a canvas (width).
     this.vp.setContent(image.naturalWidth || image.width, image.naturalHeight || image.height);
     if (this.canvas.clientWidth > 0 && this.canvas.clientHeight > 0) this.vp.fit();

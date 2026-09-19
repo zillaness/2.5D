@@ -335,6 +335,18 @@ function goStep(n) {
 function updateStepButtons() {
   // stepBtn4 is never disabled: organising needs no photo and no trace.
   $('stepBtn2').disabled = !state.image && !state.rect;
+  // A disabled Step 2 says why. This is now a narrow case rather than the
+  // common one, because both project saves carry the rectified copy: it takes
+  // a project saved before anything was ever rectified, or a session that has
+  // let go of its photo. Either way a dead button with no reason is the worst
+  // way to find out.
+  $('stepBtn2').title = $('stepBtn2').disabled
+    ? (traceEditor.outer && traceEditor.outer.length >= 3
+      ? 'This project was saved with no photo and no corrected image, so there is ' +
+        'nothing to trace against. The outline can still be modelled, exported and ' +
+        'laid out in a drawer. Open the original photo to edit the trace.'
+      : 'Open a photo first.')
+    : '';
   $('stepBtn3').disabled = !(traceEditor.outer && traceEditor.outer.length >= 3);
   $('toTraceBtn').disabled = !state.image && !state.rect;
   $('detectBtn').disabled = !state.image;
@@ -820,7 +832,7 @@ function applyProjectOverPhoto(p) {
   // way out of loadProject part-applied. Nothing awaits these callers, so an
   // uncaught throw would be a silent no-op.
   try {
-    loadProject(p, { quiet: true, step: editable ? 2 : undefined });
+    loadProject(p, { quiet: true, step: editable ? 2 : undefined, keepPhoto: true });
   } catch {
     return 'failed';
   }
@@ -5396,7 +5408,9 @@ function serializeProject(includePhoto) {
 // callers that report the load in their own words. opts.step overrides the
 // step the load settles on, for callers that know more than the project does:
 // a queue re-edit has the photo on screen, so Step 2 is live even where the
-// project on its own would have settled for Step 3.
+// project on its own would have settled for Step 3. opts.keepPhoto says the
+// photo already on screen belongs to THIS project, which only the re-edit
+// paths can know; see the no-photo branch at the bottom of this function.
 function loadProject(p, opts = {}) {
   if (!p || (p.app && p.app !== '2.5D')) { toast('Not a 2.5D project.'); return; }
   if (!p.trace && !p.corners) { toast('Project has no trace or corners to load.'); return; }
@@ -5628,13 +5642,54 @@ function loadProject(p, opts = {}) {
     img.onerror = restoreRect;
     img.src = p.photo;
   } else {
+    // A project with no photo of its own does not inherit whatever was on
+    // screen. It carries its own corners, and corners belong to the frame they
+    // were marked on: leaving a foreign photo live means a later corner nudge
+    // sets rectDirty, and Step 2 then rectifies the WRONG photo with these
+    // corners and retraces from it. loadOutlineIntoSession has always dropped
+    // the photo for that reason; this is the same act on the same grounds.
+    //
+    // opts.keepPhoto is the one exception, and it is not a loophole: the
+    // re-edit paths decode this project's OWN sibling photo and then lay the
+    // project over it, so the frame underneath is the frame these corners were
+    // marked on. That is the only case where inheriting is correct.
+    if (!opts.keepPhoto) state.image = null;
     if (p.corners) { state.corners = p.corners; cornerEditor.setCorners(p.corners); }
     restoreRect();
   }
 }
 
+// What the checkbox actually costs, in capability and then in bytes, in that
+// order. It gates ONE field, `photo`, the original camera frame. The rectified
+// copy is written either way whenever one exists, and one always does once
+// anything has been traced, because tracing happens in Step 2 and Step 2
+// rectifies. So unticking it does not cost the trace editor, which is what the
+// old label implied by saying it "enables re-tracing later". It costs the
+// corners: with no original frame there is nothing to re-mark, so the
+// rectification you have is the one you keep.
+function projPhotoNote(text) {
+  const kb = n => (n < 1024 * 1024
+    ? `${Math.round(n / 1024)} KB`
+    : `${(n / (1024 * 1024)).toFixed(1)} MB`);
+  const withPhoto = $('projIncludePhoto').checked;
+  if (!state.rect) {
+    return withPhoto
+      ? `Nothing is rectified yet, so this saves the photo and the corners. ${kb(text.length)}.`
+      : `Nothing is rectified yet, so this saves neither photo. Step 2 will be ` +
+        `unavailable until you open a photo again. ${kb(text.length)}.`;
+  }
+  return withPhoto
+    ? `The corrected image rides along either way, so the trace stays editable. ` +
+      `This also keeps the original, so you can re-mark the sheet and rectify it ` +
+      `again. ${kb(text.length)}.`
+    : `The corrected image still rides along, so the trace stays editable. What ` +
+      `goes is the original frame, so the corners cannot be re-marked. ${kb(text.length)}.`;
+}
+
 function refreshProjectText() {
-  $('projText').value = serializeProject($('projIncludePhoto').checked);
+  const text = serializeProject($('projIncludePhoto').checked);
+  $('projText').value = text;
+  $('projPhotoNote').textContent = projPhotoNote(text);
 }
 
 $('projectBtn').addEventListener('click', () => {
@@ -6208,6 +6263,7 @@ document.title = `2.5D v${APP_VERSION} — photo to printable solid`;
 // Test hook (used by the headless test-suite; harmless in normal use).
 window.__app = {
   state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect, doRectify,
+  updateStepButtons,
   backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
   layoutEditor, syncLaySelPanel, refreshLayoutEditor,

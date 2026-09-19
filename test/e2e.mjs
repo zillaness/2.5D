@@ -10993,6 +10993,11 @@ const queueReedit = await page.evaluate(async () => {
   };
   const regionsOk = rs => rs.length > 0 && rs.every(r => r && r.top && r.bottom);
   const regionsIn = { n: before.regions.length, ok: regionsOk(before.regions) };
+  // Whether Step 1 had a photo at all when this block started. It may not: a
+  // block above may have handed the page back through a photo-less project,
+  // which no longer resurrects whatever frame happened to be on screen. Being
+  // a good citizen means handing back what was found, not a photo either way.
+  const hadImage = !!before.image;
 
   const files = {
     'awl.jpg': await photoFile('awl.jpg', 600, 450),
@@ -11203,7 +11208,8 @@ const queueReedit = await page.evaluate(async () => {
   const restored = {
     step: app.state.step, image: !!app.state.image,
     queue: app.state.queue.length, reediting: app.queue.reediting,
-    regionsIn, regionsOut: { n: app.state.regions.length, ok: regionsOk(app.state.regions) },
+    hadImage, regionsIn,
+    regionsOut: { n: app.state.regions.length, ok: regionsOk(app.state.regions) },
     serOk: (() => {
       try { return regionsOk(JSON.parse(app.serializeProject(false)).regions || []); }
       catch (e) { return 'threw: ' + e.message; }
@@ -11275,9 +11281,10 @@ check('a project this session never wrote is read back off the folder',
 
 check('the re-edit block hands the queue and Step 1 back as it found them',
   queueReedit.restored.queue === 0 && queueReedit.restored.reediting === null &&
-  queueReedit.restored.image,
+  queueReedit.restored.image === queueReedit.restored.hadImage,
   `queue ${queueReedit.restored.queue}, re-editing ${queueReedit.restored.reediting}, ` +
-  `photo restored ${queueReedit.restored.image}, regions in ` +
+  `photo back as found (${queueReedit.restored.hadImage} -> ` +
+  `${queueReedit.restored.image}), regions in ` +
   `${JSON.stringify(queueReedit.restored.regionsIn)} out ` +
   `${JSON.stringify(queueReedit.restored.regionsOut)}, serialisable ` +
   `${queueReedit.restored.serOk}`);
@@ -11494,6 +11501,148 @@ check('the snap grid rides in the project and an older project loads with it off
   snapGrid.restored.snap.pitch === 5,
   `round trip ${JSON.stringify(snapGrid.roundTrip.inFile)}, older project ` +
   `${JSON.stringify(snapGrid.older)}, page handed back at step ${snapGrid.restored.step}`);
+
+// ---------- what the two project saves actually differ in (steps 3 and 4) ----------
+// serializeProject(includePhoto) gates exactly one field, `photo`, the original
+// camera frame. `rectified` is written by both forms whenever one exists, and
+// one always does once anything has been traced, because tracing happens in
+// Step 2 and Step 2 rectifies. So the small save does not cost the trace
+// editor. It costs the corners, and the dialog now says that instead.
+const saveNames = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const before = {
+    step: app.state.step, checked: $('projIncludePhoto').checked,
+    image: app.state.image, rect: app.state.rect,
+    trace: app.traceEditor.getTrace(),
+    regions: structuredClone(app.state.regions),
+  };
+
+  // A known session to save from, rather than whatever the block before left:
+  // a corrected image at 4 px/mm with a rectangle traced on it, and an original
+  // photo behind it so both save forms have something to differ about.
+  const mk = (w, h, fill) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = fill; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.25, h * 0.25, w * 0.4, h * 0.35);
+    return c;
+  };
+  const rectCanvas = mk(400, 300, '#f2f2f0');
+  const photoCanvas = mk(600, 450, '#2a2a2a');
+  app.state.image = photoCanvas;
+  app.state.rect = { canvas: rectCanvas, pxPerMm: 4 };
+  app.state.rectDirty = false;
+  app.traceEditor.setRectified(rectCanvas, 4);
+  app.traceEditor.setTrace(
+    [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 35 }, { x: 10, y: 35 }], []);
+  app.traceEditor.setCircles([]);
+  app.traceEditor.measurements = [];
+  app.traceEditor.arcs = []; app.traceEditor.lines = [];
+  app.state.regions.length = 0;
+  app.state.regions.push({
+    name: 'Base', pts: null, thickness: 6, zBase: 0,
+    top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 },
+  });
+  app.state.selRegion = 0;
+  app.updateStepButtons();
+
+  // Both forms, off that session, which has a rectified image.
+  const big = JSON.parse(app.serializeProject(true));
+  const small = JSON.parse(app.serializeProject(false));
+  const gated = {
+    bigPhoto: typeof big.photo === 'string' && big.photo.length > 0,
+    smallPhoto: small.photo,
+    bigRect: typeof big.rectified === 'string' && big.rectified.length > 0,
+    // The claim the old label got wrong: the small save keeps the corrected image.
+    smallRect: typeof small.rectified === 'string' && small.rectified.length > 0,
+    smallPpm: small.pxPerMm,
+    // Every other field identical, so `photo` really is the only gate.
+    otherFieldsDiffer: Array.from(new Set([...Object.keys(big), ...Object.keys(small)]))
+      .filter(k => k !== 'photo' && JSON.stringify(big[k]) !== JSON.stringify(small[k])),
+  };
+
+  // The dialog says the consequence in capability first, bytes second.
+  $('projIncludePhoto').checked = false;
+  $('projIncludePhoto').dispatchEvent(new Event('change', { bubbles: true }));
+  const offNote = $('projPhotoNote').textContent;
+  $('projIncludePhoto').checked = true;
+  $('projIncludePhoto').dispatchEvent(new Event('change', { bubbles: true }));
+  const onNote = $('projPhotoNote').textContent;
+
+  // Step 2 stays live through a small save, which is the whole correction.
+  const reopened = await (async () => {
+    app.loadProject(JSON.parse(JSON.stringify(small)));
+    await wait(500);
+    return {
+      step2: !$('stepBtn2').disabled, step3: !$('stepBtn3').disabled,
+      outer: app.traceEditor.getTrace().outer.length,
+      rect: !!app.state.rect, image: !!app.state.image,
+      title: $('stepBtn2').title,
+    };
+  })();
+
+  // The narrow case that IS still dead: a project with a trace and neither
+  // image. The button says why rather than sitting there disabled and mute.
+  const blind = JSON.parse(JSON.stringify(small));
+  blind.photo = null; blind.rectified = null; blind.pxPerMm = null;
+  app.state.rect = null;
+  app.loadProject(blind);
+  await wait(500);
+  const noBackdrop = {
+    step2: !$('stepBtn2').disabled, step3: !$('stepBtn3').disabled,
+    title: $('stepBtn2').title,
+    outer: app.traceEditor.getTrace().outer.length,
+  };
+
+  // Hand the page back.
+  $('projIncludePhoto').checked = before.checked;
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  if (before.rect) app.traceEditor.setRectified(before.rect.canvas, before.rect.pxPerMm);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles || []);
+  app.state.regions.length = 0;
+  for (const r of before.regions) app.state.regions.push(r);
+  app.updateStepButtons();
+  app.goStep(before.step);
+  return { gated, offNote, onNote, reopened, noBackdrop, restored: app.state.step };
+});
+
+check('includePhoto gates exactly one field: the original frame, never the corrected image',
+  saveNames.gated.bigPhoto && saveNames.gated.smallPhoto === null &&
+  saveNames.gated.bigRect && saveNames.gated.smallRect &&
+  saveNames.gated.smallPpm > 0 &&
+  JSON.stringify(saveNames.gated.otherFieldsDiffer) === JSON.stringify([]),
+  `small save: photo ${saveNames.gated.smallPhoto}, rectified present ` +
+  `${saveNames.gated.smallRect} at ${saveNames.gated.smallPpm} px/mm; fields differing ` +
+  `besides photo: ${JSON.stringify(saveNames.gated.otherFieldsDiffer)}`);
+
+check('the dialog states the capability cost before the byte cost, and states it truthfully',
+  /trace stays editable/.test(saveNames.offNote) &&
+  /corners cannot be re-marked/.test(saveNames.offNote) &&
+  /re-mark the sheet/.test(saveNames.onNote) &&
+  /KB|MB/.test(saveNames.offNote) && /KB|MB/.test(saveNames.onNote),
+  `unticked: “${saveNames.offNote}”`);
+
+check('a project saved without the original photo still reaches Step 2 with its trace',
+  saveNames.reopened.step2 && saveNames.reopened.step3 &&
+  saveNames.reopened.outer === 4 && saveNames.reopened.rect &&
+  saveNames.reopened.image === false && saveNames.reopened.title === '',
+  `Step 2 enabled ${saveNames.reopened.step2} with ${saveNames.reopened.outer} points ` +
+  `over the corrected image, and the previous photo let go of ` +
+  `(${saveNames.reopened.image})`);
+
+check('a project with neither image says why Step 2 is dead, and Step 3 still works',
+  !saveNames.noBackdrop.step2 && saveNames.noBackdrop.step3 &&
+  saveNames.noBackdrop.outer >= 3 &&
+  /saved with no photo and no corrected image/.test(saveNames.noBackdrop.title) &&
+  /still be modelled/.test(saveNames.noBackdrop.title) &&
+  saveNames.restored === 3,
+  `Step 2 ${saveNames.noBackdrop.step2}, Step 3 ${saveNames.noBackdrop.step3}, title ` +
+  `“${saveNames.noBackdrop.title}”`);
 
 // ---------- re-editing a library entry (resume editing, plan step 2) ----------
 // A row the photo queue saved records where its project went, so it can be
