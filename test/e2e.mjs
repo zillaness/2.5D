@@ -11716,6 +11716,160 @@ check('deleting a custom profile leaves the settings alone and hands the page ba
   nestUI.restored.step === 3,
   `custom now ${JSON.stringify(nestUI.afterDel.custom)}, step ${nestUI.restored.step}`);
 
+// ---------- seam corridors (nesting step 9) ----------
+// splitTiles runs after a layout exists, and a tightly nested drawer can leave
+// it no legal seam that misses a pocket. Reserving the band first is the only
+// order in which the nester can help. Default off, and a preference rather than
+// a constraint: a pocket cut across a seam still works, so the corridors are
+// dropped rather than lose a tool its place.
+const seamNest = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const { seamCorridors, nestLayout, applyNest, layoutPockets, layoutConflicts, roundedRect } =
+    await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const tool = (name, w, h, extra = {}) => ({
+    name, outer: rect(w, h), holes: [], circles: [], thickness: 5,
+    depth: null, rot: 0, x: 10, y: 10, ...extra,
+  });
+  const bbox = pts => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of pts) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
+  };
+
+  // 450 mm of drawer across a 300 mm bed is one seam; 200 mm down a 300 mm bed
+  // is none, so exactly one corridor and it runs the full height.
+  const wide = roundedRect(225, 100, 450, 200, 4);
+  const cors = seamCorridors(wide, 300, 300, { minWeb: 8 });
+  const cb = cors.length ? bbox(cors[0]) : null;
+  // No bed, or a drawer that already fits it, wants no corridor at all.
+  const noBed = seamCorridors(wide, 0, 0, { minWeb: 8 });
+  const fits = seamCorridors(roundedRect(100, 75, 200, 150, 4), 300, 300, { minWeb: 8 });
+
+  // The corridor is foam kept clear: nothing the packer places may sit in it,
+  // and the corridor itself is never reported as a placement.
+  const items = [
+    tool('a', 90, 40), tool('b', 80, 45), tool('c', 70, 50),
+    tool('d', 100, 35), tool('e', 60, 40),
+  ];
+  const opts = { rotationStep: 90, minWeb: 8, border: 5, clearance: 0.5 };
+  const kept = nestLayout(wide, items, { ...opts, obstacles: cors });
+  const inCorridor = (() => {
+    if (!cb) return null;
+    const moved = applyNest(items, kept);
+    const pk = layoutPockets(kept.placements.map(p => moved[p.i]), 0.5);
+    return pk.filter(g => {
+      const b = bbox(g.pocket);
+      return b.minX < cb.maxX - 1e-6 && cb.minX < b.maxX - 1e-6;
+    }).length;
+  })();
+  const plainClash = (() => {
+    const moved = applyNest(items, kept);
+    const cf = layoutConflicts(wide,
+      layoutPockets(kept.placements.map(p => moved[p.i]), 0.5), 5);
+    return [cf.collisions.size, cf.escaped.size];
+  })();
+
+  // A drawer packed so tight that keeping the band clear costs a tool its
+  // place: the corridors go and the pack is run again without them.
+  const tight = Array.from({ length: 7 }, (_, i) => tool(`t${i}`, 120, 55));
+  const tightC = roundedRect(200, 220, 400, 440, 4);
+  const tightCors = seamCorridors(tightC, 300, 300, { minWeb: 8 });
+  const withCors = nestLayout(tightC, tight, { ...opts, obstacles: tightCors });
+  const without = nestLayout(tightC, tight, opts);
+
+  // --- through the panel ---
+  const restorePoint = app.serializeProject(false);
+  const beforeStep = app.state.step;
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'rect', w: 450, h: 200, r: 6,
+    name: null, outer: null,
+  };
+  app.state.layout.labels = { ...app.state.layout.labels, enabled: false, extra: [] };
+  app.state.layout.items.length = 0;
+  for (const it of items) app.state.layout.items.push({ ...it });
+  // No bed yet: the option has nothing to mean, so it stays out of the way.
+  app.state.layout.bed = {
+    ...app.state.layout.bed, preset: 'none', shape: null, offset: { x: 0, y: 0 },
+  };
+  app.goStep(4);
+  app.nest.sync();
+  const noBedUI = { row: !$('layNestSeamRow').hidden, corridors: app.nest.corridors().length };
+  // A bed the drawer does not fit, and the option appears.
+  app.state.layout.bed = { ...app.state.layout.bed, preset: 'custom', w: 300, h: 300 };
+  app.nest.sync();
+  const bedUI = { row: !$('layNestSeamRow').hidden, checked: $('layNestSeams').checked };
+  $('layNestSeams').checked = true;
+  $('layNestSeams').dispatchEvent(new Event('change', { bubbles: true }));
+  const onUI = { flag: !!app.state.layout.pack.seams, corridors: app.nest.corridors().length };
+  const ran = app.nest.run();
+  const ranUI = { corridors: ran.stats.corridors, info: $('layNestInfo').textContent };
+
+  // It rides the project, and is not one of the seven packing values, so it is
+  // not part of the "modified" comparison.
+  const saved = app.serializeProject(false);
+  const modAfter = app.state.layout.pack.modified;
+  app.state.layout.pack.seams = false;
+  app.loadProject(JSON.parse(saved));
+  await new Promise(r => setTimeout(r, 400));
+  const reopened = { seams: !!app.state.layout.pack.seams, modified: app.state.layout.pack.modified };
+
+  app.loadProject(JSON.parse(restorePoint));
+  await new Promise(r => setTimeout(r, 400));
+  app.goStep(beforeStep);
+
+  return {
+    n: cors.length, cb, noBed: noBed.length, fits: fits.length,
+    kept: { n: kept.placements.length, corridors: kept.stats.corridors, inCorridor, clash: plainClash },
+    tight: { with: withCors.placements.length, without: without.placements.length },
+    noBedUI, bedUI, onUI, ranUI, modAfter, reopened,
+    restored: app.state.step,
+  };
+});
+
+check('a drawer wider than the bed gets exactly one corridor, the full height and one web wide',
+  seamNest.n === 1 && seamNest.cb &&
+  Math.abs(seamNest.cb.w - 8) < 1e-6 && Math.abs(seamNest.cb.h - 200) < 1 &&
+  seamNest.cb.minX > 150 && seamNest.cb.maxX < 300 &&
+  seamNest.noBed === 0 && seamNest.fits === 0,
+  `${seamNest.n} corridor, ${seamNest.cb && seamNest.cb.w.toFixed(1)} mm wide by ` +
+  `${seamNest.cb && seamNest.cb.h.toFixed(0)} mm, centred at ` +
+  `${seamNest.cb && ((seamNest.cb.minX + seamNest.cb.maxX) / 2).toFixed(0)} mm; ` +
+  `no bed ${seamNest.noBed}, already fits ${seamNest.fits}`);
+
+check('nothing is packed into a reserved corridor, and the corridor is never a placement',
+  seamNest.kept.inCorridor === 0 && seamNest.kept.corridors === 1 &&
+  seamNest.kept.n === 5 &&
+  JSON.stringify(seamNest.kept.clash) === JSON.stringify([0, 0]),
+  `${seamNest.kept.n} tools placed, ${seamNest.kept.inCorridor} of them in the corridor, ` +
+  `stats reported ${seamNest.kept.corridors}, conflicts ${JSON.stringify(seamNest.kept.clash)}`);
+
+check('the corridors are a preference: keeping them clear costs places, and that is measurable',
+  seamNest.tight.with <= seamNest.tight.without,
+  `${seamNest.tight.with} placed with the band kept clear, ${seamNest.tight.without} without`);
+
+check('the corridor option appears only once a bed is set that the drawer does not fit',
+  !seamNest.noBedUI.row && seamNest.noBedUI.corridors === 0 &&
+  seamNest.bedUI.row && seamNest.bedUI.checked === false &&
+  seamNest.onUI.flag && seamNest.onUI.corridors === 1,
+  `no bed: row shown ${seamNest.noBedUI.row}; with a 300 mm bed: row ${seamNest.bedUI.row}, ` +
+  `default ${seamNest.bedUI.checked}, ticking it plans ${seamNest.onUI.corridors}`);
+
+check('nesting with the option on keeps the seams clear and says so',
+  seamNest.ranUI.corridors === 1 && /seam.* kept clear/.test(seamNest.ranUI.info),
+  seamNest.ranUI.info);
+
+check('the option rides the project and is not part of the profile comparison',
+  seamNest.reopened.seams === true &&
+  seamNest.reopened.modified === seamNest.modAfter &&
+  seamNest.restored === 3,
+  `reopened with seams ${seamNest.reopened.seams}, modified ${seamNest.reopened.modified} ` +
+  `(was ${seamNest.modAfter}), step ${seamNest.restored}`);
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {

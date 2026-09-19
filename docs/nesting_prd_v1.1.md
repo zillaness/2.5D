@@ -1,6 +1,6 @@
 ---
 file: nesting_prd_v1.1.md
-version: 1.3
+version: 1.4
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-19
@@ -10,8 +10,7 @@ ai_update: Update last_updated and version. Rename file to match. Append changel
 
 # PRD: Nesting / auto-sort for drawer layouts
 
-Status: **Steps 1 to 8 SHIPPED (1 to 4 in v1.25.0, 5 to 8 in v1.26.0). Step 9,
-seam corridors, not built.** · 2026-09-04 ·
+Status: **SHIPPED. Steps 1 to 4 in v1.25.0, steps 5 to 9 in v1.26.0.** · 2026-09-04 ·
 target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 Sam signed this off and steps 1 to 4 shipped in v1.25.0 on 2026-09-13:
@@ -40,8 +39,12 @@ Two departures from this plan, both recorded where they happened:
   the way the finger notch's disc already is, which is the same reservation with
   none of the multi-path handling.
 
-Still not built: **step 9, seam corridors**, and progress reporting for large
-sets, which step 7 listed. `nestLayout` is synchronous and bounded by its own
+Step 9, seam corridors, shipped with the rest of v1.26.0, planned against the
+bare bed rather than the tab-shrunk one: puzzle tabs move the real seams a few
+millimetres off the reserved band, which the README says and which the
+preference-not-constraint rule already tolerates.
+
+Still not built: progress reporting for large sets, which step 7 listed. `nestLayout` is synchronous and bounded by its own
 test budget, so a large pack blocks the tab for the second or two it takes;
 chunking it wants a worker and is its own change. Success criterion 6 (30 items
 under 2 s) is still guarded only by a loose 8000 ms ceiling, measuring about
@@ -373,7 +376,14 @@ Each step ends green and committed.
    still reopens on its own numbers with its geometry unchanged, while the
    panel reads "(modified)" because those numbers no longer agree with the
    profile of that name.
-9. **Seam corridors**, behind a checkbox, last. NOT BUILT.
+9. **Seam corridors**, behind a checkbox, last. SHIPPED v1.26.0. Reserved as
+   fixed obstacles through a new `obstacles` option on `nestLayout`, which is
+   how a corridor gets to behave exactly as a pinned pocket does without being
+   an item: it never appears in `placements` and never inflates the reported
+   extent of the pack. Since there are no pockets yet when the corridor is
+   planned, "clearance-optimal" is the midpoint of each seam's legal window,
+   which leaves the eventual seam the most room to shift if the band is
+   dropped.
 
 Steps 1 to 4 are the feature. Steps 5 to 9 are what makes it usable.
 
@@ -412,6 +422,7 @@ Sign-off to build steps 1 to 4, or a redirect. Nothing in this document has
 been implemented.
 
 ## CHANGELOG
+- v1.4 (2026-09-19): Step 9 shipped in v1.26.0, so this PRD is complete except for the progress reporting step 7 listed. Records that corridors are planned against the bare bed, so puzzle tabs shift the real seams slightly off the reserved band, and that the corridor position is the midpoint of each seam's legal window because there are no pockets yet to be clear of.
 - v1.3 (2026-09-19): Steps 5 to 8 shipped in v1.26.0. Records the two departures from this plan: comfortWeb had to be implemented in the scorer before profiles could honestly carry it, and a reserved label is carried as its own loop rather than unioned into the pocket, since the union is two disjoint paths. Step 9 and progress reporting remain unbuilt.
 - v1.0 (2026-09-04): Initial draft for sign-off.
 - v1.1 (2026-09-05): Replaced the single density-versus-spread objective with

@@ -596,6 +596,7 @@ export const NEST_DEFAULTS = {
   rotationFree: true,  // false restricts every free item to 0 / 180
   notchClear: 10,      // radius of clear foam a finger notch wants, mm
   notchPolicy: 'warn', // 'warn' records it in stats; 'require' rejects
+  obstacles: null,     // extra fixed loops to pack around (seam corridors)
   restarts: 20,        // bounded seeded restarts over the equal-area groups
   testBudget: 40000,   // work ceiling for those restarts, in candidate tests
   seed: 1,             // fixed: same input, same result, every time
@@ -727,6 +728,59 @@ function nestVariant(item, angle, o) {
 
 const nestDisc = (c, r) => circleToPolygon(c.x, c.y, Math.max(0.1, r) * 2, 32);
 
+// Bands of foam to keep clear where the cut template's seams will fall, so a
+// drawer wider than the laser bed tiles without every seam cutting a pocket
+// (nesting PRD step 9).
+//
+// splitTiles runs AFTER a layout exists, and planSeams then steers each seam to
+// the position crossing the fewest pockets. A tightly nested drawer can defeat
+// that outright: if pockets tile it evenly, every legal seam cuts something.
+// Reserving the band first is the only order in which the nester can help.
+//
+// The seam count and each seam's legal window are the same arithmetic planSeams
+// uses. What differs is the choice inside the window: planSeams picks the
+// position crossing fewest pockets, and there are no pockets yet, so this takes
+// the window's midpoint, which leaves the most room on both sides for the
+// eventual seam to shift if the corridor has to be dropped.
+//
+// A pocket cut across a seam still works, so this is a preference and never a
+// hard constraint: the caller is expected to re-run without corridors if the
+// pack then fails to fit, and to say that seams will cross pockets.
+//
+// `tabReach` shrinks the usable bed the way puzzle tabs do. Pass 0, or leave it
+// out, and the corridors are planned against the bare bed, which puts them a
+// few mm off where a tabbed template will actually cut.
+export function seamCorridors(containerOuter, bedW, bedH, opts = {}) {
+  const width = Math.max(0.5, Number(opts.minWeb) || NEST_DEFAULTS.minWeb);
+  const reach = Math.max(0, Number(opts.tabReach) || 0);
+  if (!Array.isArray(containerOuter) || containerOuter.length < 3) return [];
+  const bb = bboxOf(containerOuter);
+  const out = [];
+  const axis = (vertical, L, bed, lo0, hi0, along) => {
+    const B = Math.max(1, bed - reach);
+    if (!(bed > 10) || L <= bed + 1e-6) return;
+    let n = 1;
+    while ((n - 1) * B + bed < L - 1e-6) n++;
+    let prev = 0;
+    for (let k = 1; k < n; k++) {
+      const lo = Math.max(L - (n - 1 - k) * B - bed, prev + 1);
+      const hi = Math.min(k * B, prev + B);
+      if (!(hi >= lo)) { prev = lo; continue; }
+      const s = (lo + hi) / 2;
+      const c = along + s;
+      out.push(vertical
+        ? boxLoop({ minX: c - width / 2, maxX: c + width / 2, minY: lo0, maxY: hi0 })
+        : boxLoop({ minX: lo0, maxX: hi0, minY: c - width / 2, maxY: c + width / 2 }));
+      prev = s;
+    }
+  };
+  // A vertical corridor splits the drawer across its width, so it runs the full
+  // height, and the other way round.
+  axis(true, bb.maxX - bb.minX, Number(bedW), bb.minY, bb.maxY, bb.minX);
+  axis(false, bb.maxY - bb.minY, Number(bedH), bb.minX, bb.maxX, bb.minY);
+  return out;
+}
+
 // Placement for one container + item list. Returns
 //   { placements: [{ i, x, y, rot, pinned }], unplaced: [{ i, name, reason }],
 //     stats: {...} }
@@ -746,7 +800,7 @@ export function nestLayout(containerOuter, items, opts = {}) {
     clearance: o.clearance, border: o.border, minWeb: o.minWeb,
     rotationStep: o.rotationStep, rotationFree: !!o.rotationFree,
     notchPolicy: o.notchPolicy, notchClear: o.notchClear,
-    comfortWeb: o.comfortWeb, labelSpace: o.labelSpace,
+    comfortWeb: o.comfortWeb, labelSpace: o.labelSpace, corridors: 0,
     notchWarnings: [], pinned: [], labelled: 0,
   };
 
@@ -940,6 +994,21 @@ export function nestLayout(containerOuter, items, opts = {}) {
       ? nestDisc({ x: v.notch.x + X, y: v.notch.y + Y }, o.notchClear) : null,
   });
 
+  // A fixed obstacle: a loop the pack routes around that is not an item and
+  // never appears in the result. Seam corridors are the only caller today. It
+  // is shaped like a pinned record because that is exactly how it behaves, and
+  // it carries `obstacle` so the places that report on items can skip it.
+  const obstacleRecord = loop => {
+    const bb = bboxOf(loop);
+    return {
+      i: -1, obstacle: true, pinned: true, v: { angle: 0 }, X: 0, Y: 0,
+      bb, pbb: bb, infl: loop, loops: [loop], label: null, pocket: loop, disc: null,
+    };
+  };
+  const obsBase = (Array.isArray(o.obstacles) ? o.obstacles : [])
+    .filter(L => Array.isArray(L) && L.length >= 3)
+    .map(obstacleRecord);
+
   // Pinned items are not nested: they keep their exact x / y / rot and become
   // fixed obstacles the rest of the pack has to route around.
   const pinIdx = [], freeIdx = [];
@@ -986,7 +1055,7 @@ export function nestLayout(containerOuter, items, opts = {}) {
   }
 
   function runPass(order) {
-    const placed = pinBase.slice();
+    const placed = pinBase.concat(obsBase);
     const missed = [];
     for (const i of order) {
       // pack_poly's anchor set, and it is what lets a part tuck into the
@@ -1039,6 +1108,9 @@ export function nestLayout(containerOuter, items, opts = {}) {
     }
     let bb = null;
     for (const p of placed) {
+      // A corridor is foam kept clear, not something packed, so it has no
+      // business inflating the reported extent of the pack.
+      if (p.obstacle) continue;
       bb = bb ? {
         minX: Math.min(bb.minX, p.pbb.minX), minY: Math.min(bb.minY, p.pbb.minY),
         maxX: Math.max(bb.maxX, p.pbb.maxX), maxY: Math.max(bb.maxY, p.pbb.maxY),
@@ -1102,6 +1174,7 @@ export function nestLayout(containerOuter, items, opts = {}) {
   }
 
   const placements = best.placed
+    .filter(p => !p.obstacle)
     .map(p => ({ i: p.i, x: p.X, y: p.Y, rot: p.v.angle, pinned: p.pinned }))
     .sort((a, b) => a.i - b.i);
   const unplaced = best.missed.concat(pinFailed)
@@ -1127,7 +1200,7 @@ export function nestLayout(containerOuter, items, opts = {}) {
           if (clipArea(p.disc, q.pocket, CT.ctIntersection) > NEST_TOL) { sealed = true; break; }
         }
       }
-      if (sealed) notchWarnings.push(p.i);
+      if (sealed && !p.obstacle) notchWarnings.push(p.i);
     }
     notchWarnings.sort((a, b) => a - b);
   }
@@ -1143,7 +1216,8 @@ export function nestLayout(containerOuter, items, opts = {}) {
       budgetHit,
       tests,
       bbox: best.bbox,
-      labelled: best.placed.filter(p => p.label).length,
+      labelled: best.placed.filter(p => !p.obstacle && p.label).length,
+      corridors: obsBase.length,
       area: best.area,
       notchWarnings,
       pinned: pinIdx.slice(),

@@ -1,6 +1,6 @@
 ---
 file: README.md
-version: 1.1
+version: 1.2
 author: Sam Cao
 created: 2026-07-20
 last_updated: 2026-09-19
@@ -712,8 +712,19 @@ the panel says so if you ask for one without the other.
 
 Per tool, the selection panel adds **Pin in place** and **Keep this angle**.
 
-Not wired up yet: seam corridors, which would reserve a clear band where the
-cut template's seams will fall so a tiled drawer's seams miss the pockets.
+**Keep the tiling seams clear** appears once you have set a bed that the drawer
+is bigger than. `splitTiles` runs after a layout exists and steers each seam to
+the position crossing the fewest pockets, which a tightly nested drawer can
+defeat outright: if the pockets tile it evenly, every legal seam cuts something.
+Ticking the option reserves a band one web wide where each seam will fall and
+packs around it, which is the only order in which the nester can help. A pocket
+cut across a seam still works, so this is a preference and never a constraint:
+if keeping the band clear costs a tool its place, the corridors are dropped, the
+pack is run again without them, and the readout says a seam will cross a pocket.
+Off by default, because the bed is only known once you have chosen one and
+forcing corridors on a drawer that barely fits its tools is the wrong trade.
+With puzzle tabs on, the tabs shrink the usable bed and shift the real seams a
+few millimetres off the reserved band.
 
 ## How it works
 

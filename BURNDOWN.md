@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.9
+version: 1.10
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-19
@@ -114,10 +114,19 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - ✅ README: the auto-sort section said "None of this has a button yet", which
   stopped being true. Rewritten to describe the panel, and the nesting PRD's
   status and plan updated to match what shipped.
-- ▶ NEXT: nesting step 9, seam corridors, the last unbuilt step and default
-  off by design. Then resume-editing step 2 (library re-edit, now with the
-  load-time prompt Sam chose for open question 3), and autosave, step 5 and
-  independent of everything.
+- ✅ Nesting step 9: seam corridors, reserved through a new `obstacles` option
+  on nestLayout so a corridor behaves exactly as a pinned pocket without being
+  an item. Dropped automatically, and reported, when keeping the band clear
+  costs a tool its place. 624 checks — v1.26.0
+  - ⚠ Planned against the bare bed, not the tab-shrunk one, so puzzle tabs
+    move the real seams a few mm off the reserved band. Documented in the
+    README rather than left as a surprise; the preference-not-constraint rule
+    already tolerates it.
+- ✅ **docs/nesting_prd_v1.1.md is complete**, steps 1-9, bar the progress
+  reporting step 7 listed.
+- ▶ NEXT: resume-editing step 2 (library re-edit, now with the load-time
+  prompt Sam chose for open question 3), then autosave, step 5 and independent
+  of everything. Steps 3 and 4 need Sam's call first, see below.
 
 ## Known gaps opened here
 - **Progress reporting for a large nest** (nesting step 7). nestLayout is

@@ -23,7 +23,7 @@ import {
   buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate,
   buildLayoutGridBin, gridContainerLoop, buildHolster, roundedRect, splitTiles,
   layoutPockets, layoutLabelGeometry, layoutLabelConflicts, labelMinHeight,
-  nestLayout, applyNest, PACK_PROFILES, PACK_KEYS, packNormalize,
+  nestLayout, applyNest, seamCorridors, PACK_PROFILES, PACK_KEYS, packNormalize,
   packProfileValues, packProfileMatch,
 } from './holders.js';
 import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
@@ -125,7 +125,14 @@ const state = {
     // by name, editing that profile would silently change the geometry of
     // every insert that used it, and a drawer cut six months ago would come
     // back with different webs.
-    pack: { profile: 'Dense', modified: false, values: packNormalize(PACK_PROFILES[0].values) },
+    pack: {
+      profile: 'Dense', modified: false,
+      values: packNormalize(PACK_PROFILES[0].values),
+      // Off by design. The bed is only known once a bed has been chosen, and
+      // forcing corridors on a drawer that barely fits its tools is the wrong
+      // trade (nesting PRD step 9).
+      seams: false,
+    },
     // Tool labels. Off by default: an unlabelled layout must export exactly
     // what it exports today. `process` drives the minimum legible cap height,
     // which is a property of the machine, not a style preference.
@@ -2802,6 +2809,12 @@ function syncNestPanel() {
   $('layNestLabelSpace').value = v.labelSpace;
   $('layNestRestarts').value = String(v.restarts);
   $('layNestDelProfile').hidden = !(match.name && !packIsBuiltIn(match.name));
+  // The corridor option only means anything once a bed is set and the drawer is
+  // bigger than it, so it stays out of the way until then rather than sitting
+  // there as a tick that does nothing.
+  const bed = layBedView();
+  $('layNestSeamRow').hidden = !(bed && bed.w > 10 && bed.h > 10);
+  $('layNestSeams').checked = !!L.pack.seams;
   $('layNestBtn').disabled = !L.items.length;
   $('layNestUndoBtn').hidden = !layNestUndoSnap;
   const warn = $('layNestStoreWarn');
@@ -2825,11 +2838,38 @@ function nestFieldChanged(key, value) {
   syncNestPanel();
 }
 
+// The seam corridors this drawer would want, or [] when it does not tile: no
+// bed chosen, or a layout that already fits the one that is.
+function layCorridors() {
+  const L = state.layout;
+  if (!(L.pack && L.pack.seams)) return [];
+  const bed = layBedView();
+  if (!bed || !(bed.w > 10) || !(bed.h > 10)) return [];
+  return seamCorridors(layContainerLoop(), bed.w, bed.h,
+    { minWeb: packNormalize(L.pack.values).minWeb });
+}
+
 function layNest() {
   const L = state.layout;
   if (!L.items.length) { toast('Nothing to nest — add some tools to the drawer first.'); return null; }
   const before = L.items.map(it => ({ x: it.x, y: it.y, rot: it.rot }));
-  const res = nestLayout(layContainerLoop(), L.items, layNestOpts());
+  const loop = layContainerLoop();
+  const opts = layNestOpts();
+  const corridors = layCorridors();
+  let res = corridors.length
+    ? nestLayout(loop, L.items, { ...opts, obstacles: corridors })
+    : nestLayout(loop, L.items, opts);
+  // A pocket cut across a seam still works, so the corridors are a preference.
+  // If keeping them clear costs a tool its place, they go and the pack is run
+  // again without them, and the panel says the seams will cross pockets.
+  let dropped = false;
+  if (corridors.length && res.unplaced.length) {
+    const plain = nestLayout(loop, L.items, opts);
+    if (plain.placements.length > res.placements.length) {
+      res = plain;
+      dropped = true;
+    }
+  }
   const moved = applyNest(L.items, res);
   L.items.length = 0;
   for (const it of moved) L.items.push(it);
@@ -2852,6 +2892,8 @@ function layNest() {
     if (room.length) bits.push(`${room.length} with nowhere left to go`);
     bits.push('left where they were');
   }
+  if (st.corridors) bits.push(`${st.corridors} tiling seam${st.corridors === 1 ? '' : 's'} kept clear`);
+  if (dropped) bits.push('the seam corridors were dropped to fit everything, so a seam will cross a pocket');
   if (st.budgetHit) bits.push('the work budget stopped the search early, so a denser pack may exist');
   if ((st.notchWarnings || []).length) {
     bits.push(`${st.notchWarnings.length} finger notch${st.notchWarnings.length === 1 ? '' : 'es'} may be sealed`);
@@ -3541,6 +3583,13 @@ $('layNestNotch').addEventListener('change', e =>
   nestFieldChanged('notchPolicy', e.target.value));
 $('layNestLabelSpace').addEventListener('change', e =>
   nestFieldChanged('labelSpace', e.target.value));
+// Not one of the seven packing values, so it is not part of the profile and not
+// part of the "modified" comparison: it is a property of this drawer and its
+// bed, not of how tightly you like things packed.
+$('layNestSeams').addEventListener('change', e => {
+  state.layout.pack.seams = !!e.target.checked;
+  syncNestPanel();
+});
 $('layNestSaveProfile').addEventListener('click', () => {
   const suggested = state.layout.pack.profile && state.layout.pack.modified
     ? `${state.layout.pack.profile} 2` : '';
@@ -5439,7 +5488,10 @@ function loadProject(p, opts = {}) {
         const pk = p.layout.pack || {};
         const values = packNormalize(pk.values);
         const match = packProfileMatch(values, packCustomLoad(), pk.profile);
-        return { profile: match.name, modified: match.modified, values };
+        return {
+          profile: match.name, modified: match.modified, values,
+          seams: !!pk.seams,
+        };
       })(),
       // Additive and optional: a project saved before snapping existed has no
       // `snap` key, and must open with it off at the default pitch rather than
@@ -6038,6 +6090,7 @@ window.__app = {
   nest: {
     run: () => layNest(), undo: () => layNestUndoAction(),
     opts: () => layNestOpts(), sync: () => syncNestPanel(),
+    corridors: () => layCorridors(),
     saveAs: name => packSaveAs(name), remove: name => packDelete(name),
     custom: () => packCustomLoad(), key: PACK_KEY,
     get pack() { return state.layout.pack; },
