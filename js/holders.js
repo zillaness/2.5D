@@ -786,9 +786,21 @@ export function seamCorridors(containerOuter, bedW, bedH, opts = {}) {
 //     stats: {...} }
 // and never mutates `items`. `reason` is 'tooLarge' (does not fit the empty
 // container in any allowed orientation) or 'noRoom' (would fit, nothing left).
-export function nestLayout(containerOuter, items, opts = {}) {
+// The pack itself, as a generator. Both exported drivers run this same body,
+// so the synchronous answer and the yielding one are not two implementations
+// that have to be kept agreeing: they are one, driven two ways.
+function* nestCore(containerOuter, items, opts = {}) {
   const o = { ...NEST_DEFAULTS, ...opts };
-  const list = Array.isArray(items) ? items.slice() : [];
+  // A per-item snapshot, not items.slice(). The shallow copy was safe only
+  // because this function could not be interrupted: list[i] aliased the
+  // caller's item, and nothing could edit one between reads. Now that it
+  // yields, a drag or a rotation-lock toggle landing between two chunks would
+  // change `rot`, `rotLock` or `pin` under nestAngles(list[i], o), which is
+  // re-read for every later item and every later pass. The answer would then
+  // depend on when the user happened to click, which is exactly the
+  // determinism this module is built to refuse.
+  const list = (Array.isArray(items) ? items : [])
+    .map(it => (it && typeof it === 'object' ? { ...it } : it));
   const ClipperLib = CL();
   const CT = ClipperLib.ClipType;
   const h = Math.max(0, Number(o.minWeb) || 0) / 2;
@@ -1054,10 +1066,19 @@ export function nestLayout(containerOuter, items, opts = {}) {
     return out;
   }
 
-  function runPass(order) {
+  function* runPass(order, pass) {
     const placed = pinBase.concat(obsBase);
     const missed = [];
+    let done = 0;
     for (const i of order) {
+      // The only yield point. One per item rather than one per candidate:
+      // a candidate is microseconds and a yield around each would cost more
+      // than the work, while an item is tens of milliseconds, which is a
+      // chunk worth interrupting. Counting from here rather than after the
+      // placement also means the last item's progress is reported before the
+      // work is done rather than after it, which is what a readout is for.
+      yield { pass, item: done++, items: order.length,
+        placed: placed.length - obsBase.length, tests };
       // pack_poly's anchor set, and it is what lets a part tuck into the
       // notch of an earlier one. Its `h` gap is already baked in here: these
       // are the INFLATED bboxes, each carrying minWeb / 2 on every side, so
@@ -1139,7 +1160,7 @@ export function nestLayout(containerOuter, items, opts = {}) {
     const key = order.map(shapeKey).join('>');
     if (seen.has(key)) continue;
     seen.add(key);
-    const run = runPass(order);
+    const run = yield* runPass(order, r);
     // More placed wins outright; density only breaks a tie in the count.
     if (!best || run.placed.length > best.placed.length ||
         (run.placed.length === best.placed.length && run.area < best.area - NEST_EPS)) {
@@ -1223,6 +1244,54 @@ export function nestLayout(containerOuter, items, opts = {}) {
       pinned: pinIdx.slice(),
     },
   };
+}
+
+// The synchronous pack, unchanged in name, signature and answer: it drains the
+// generator without ever giving the event loop a turn, which is precisely what
+// it did before it was one. Forty-odd callers and every existing test go on
+// reading it exactly as they did.
+export function nestLayout(containerOuter, items, opts = {}) {
+  const g = nestCore(containerOuter, items, opts);
+  let s = g.next();
+  while (!s.done) s = g.next();
+  return s.value;
+}
+
+// One macrotask. MessageChannel rather than setTimeout(0) because nested
+// setTimeout is clamped to 4 ms after five levels, and a pack yields hundreds
+// of times: the clamp alone would add seconds. No clock is read.
+const nestYield = () => new Promise(res => {
+  const ch = new MessageChannel();
+  ch.port1.onmessage = () => { ch.port1.close(); res(); };
+  ch.port2.postMessage(0);
+});
+
+// The same pack, yielding to the browser between items, so the tab repaints and
+// can be cancelled. Returns exactly what nestLayout returns for the same input,
+// or null when cancelled. opts.onProgress receives each chunk boundary;
+// opts.signal is an AbortSignal.
+//
+// This is not faster. It is slower by the macrotask overhead, tens of
+// milliseconds on a run of seconds. What it buys is a run you can watch and
+// escape rather than a tab that has stopped answering.
+export async function nestLayoutAsync(containerOuter, items, opts = {}) {
+  const g = nestCore(containerOuter, items, opts);
+  const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+  const signal = opts.signal || null;
+  let s = g.next();
+  while (!s.done) {
+    if (signal && signal.aborted) {
+      // Unwind the generator so nothing is left suspended mid-pass. There is
+      // no try/finally anywhere in nestCore, so there is nothing to clean up
+      // and nothing that can throw on the way out.
+      g.return(null);
+      return null;
+    }
+    if (onProgress) onProgress(s.value);
+    await nestYield();
+    s = g.next();
+  }
+  return s.value;
 }
 
 // Apply a nest result without mutating anything: a NEW array the same length,

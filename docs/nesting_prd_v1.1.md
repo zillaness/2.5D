@@ -1,6 +1,6 @@
 ---
 file: nesting_prd_v1.1.md
-version: 1.4
+version: 1.5
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-19
@@ -44,7 +44,20 @@ bare bed rather than the tab-shrunk one: puzzle tabs move the real seams a few
 millimetres off the reserved band, which the README says and which the
 preference-not-constraint rule already tolerates.
 
-Still not built: progress reporting for large sets, which step 7 listed. `nestLayout` is synchronous and bounded by its own
+Progress reporting, which step 7 listed, shipped on 2026-09-19 as well:
+`nestLayout` became a generator with two drivers, so the synchronous export and
+a new `nestLayoutAsync` run the same body and cannot drift apart. The async one
+yields a macrotask between items, which is what makes the tab repaint and the
+run cancellable.
+
+**Criterion 6 is not met and this document should stop implying it is.**
+Measured on the 30-item twin fixture in the shipped profiles: 3.5 s under Dense
+and 12.8 s under Access, against the 1.3 to 1.5 s recorded above, which was
+measured on a smaller set. The first branch of criterion 6, 30 items under two
+seconds, is failed. What shipped is its second branch: the run yields, reports
+and can be escaped. The cost is concentrated in `validAt`, where Access runs
+about 13 times slower per candidate test than Dense, and a cheap-reject or
+caching pass there is the real fix and is not this one. `nestLayout` is synchronous and bounded by its own
 test budget, so a large pack blocks the tab for the second or two it takes;
 chunking it wants a worker and is its own change. Success criterion 6 (30 items
 under 2 s) is still guarded only by a loose 8000 ms ceiling, measuring about
@@ -422,6 +435,7 @@ Sign-off to build steps 1 to 4, or a redirect. Nothing in this document has
 been implemented.
 
 ## CHANGELOG
+- v1.5 (2026-09-19): Progress reporting shipped, as a generator core with a synchronous and an async driver rather than the worker an earlier note assumed. Records that criterion 6's first branch is failed by a wide margin, with measured numbers, and that the cost is in validAt rather than in the loop structure.
 - v1.4 (2026-09-19): Step 9 shipped in v1.26.0, so this PRD is complete except for the progress reporting step 7 listed. Records that corridors are planned against the bare bed, so puzzle tabs shift the real seams slightly off the reserved band, and that the corridor position is the midpoint of each seam's legal window because there are no pockets yet to be clear of.
 - v1.3 (2026-09-19): Steps 5 to 8 shipped in v1.26.0. Records the two departures from this plan: comfortWeb had to be implemented in the scorer before profiles could honestly carry it, and a reserved label is carried as its own loop rather than unioned into the pocket, since the union is two disjoint paths. Step 9 and progress reporting remain unbuilt.
 - v1.0 (2026-09-04): Initial draft for sign-off.

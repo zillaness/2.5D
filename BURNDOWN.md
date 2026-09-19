@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.11
+version: 1.12
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-19
@@ -140,9 +140,36 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   it needs the same change.
 
 ## Known gaps opened here
-- **Progress reporting for a large nest** (nesting step 7). nestLayout is
-  synchronous and bounded by its own test budget, so a big pack blocks the tab
-  for the second or two it takes. Chunking it wants a worker.
+- ~~**Progress reporting for a large nest.**~~ CLOSED 2026-09-19, and the note
+  that said "chunking it wants a worker" was **wrong twice over**, both
+  corrected by measurement rather than argument:
+  - A classic Blob Worker **does** construct and round-trip from a `file://`
+    page in this repo's own Chromium against the real dist bundle
+    (`location.origin` is `file://`, the URL is `blob:null/...`, and it
+    answered). The "opaque origin blocks blob workers" folklore is false. What
+    does fail there is `{type:'module'}` and `importScripts` of a sibling blob,
+    so a worker payload would have to be one pre-concatenated build-time
+    string.
+  - The deeper error: chunking wants a **yield point**, not a worker, and
+    `nestLayout`'s per-item loop already was one. A worker was the larger
+    change (a second esbuild entry, a second minified Clipper, a
+    `globalThis.ClipperLib` change, a `self.document` shim for the label
+    glyphs, a hand-written item projection whose omissions fail silently) and,
+    decisively, the suite never loads `dist/` at all, so the worker branch
+    users ran could never be the branch CI exercised.
+- **The nest is slower than criterion 6 claims, by a lot.** Measured on the
+  30-item twin fixture in the shipped profiles: **3.5 s under Dense and 12.8 s
+  under Access**, not the 1.3-1.5 s the nesting PRD records. Criterion 6's
+  first branch (30 items under 2 s) is not met and is not met by this change
+  either; what shipped is its second branch, yielding to the event loop. The
+  cost driver is `validAt`: Access is ~13x slower per candidate test because
+  `labelSpace: 'reserve'` adds a second loop to every Clipper call,
+  `notchPolicy: 'require'` adds disc booleans, and a rounded-rect container
+  makes `limitIsRect` false so every containment test runs Clipper. A caching
+  or cheap-reject pass inside `validAt` is the real win and is still owed.
+- **The overfull drawer is still unbounded.** The budget gate disarms itself
+  while anything is unplaced, which is exactly the case a user most wants to
+  escape. It is now watchable and cancellable; it is not shorter.
 - **The rectified copy is re-encoded on every re-edit.** Restoring a project
   decodes its rectified JPEG and re-saving re-encodes it at quality 0.85, so
   each round through the queue re-edit path costs one generation of lossy

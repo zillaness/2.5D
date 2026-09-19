@@ -11913,6 +11913,7 @@ const nestUI = await page.evaluate(async () => {
   app.nest.sync();
   const heaped = { poses: poses(), conflicts: conflicts() };
   $('layNestBtn').click();
+  await app.nest.pending();
   const nested = {
     poses: poses(), conflicts: conflicts(),
     info: $('layNestInfo').textContent,
@@ -11933,6 +11934,7 @@ const nestUI = await page.evaluate(async () => {
   ]);
   const pinnedBefore = { ...poses()[0] };
   $('layNestBtn').click();
+  await app.nest.pending();
   const withPins = {
     poses: poses(), conflicts: conflicts(),
     pinnedMoved: JSON.stringify(poses()[0]) !== JSON.stringify(pinnedBefore),
@@ -12176,7 +12178,7 @@ const seamNest = await page.evaluate(async () => {
   $('layNestSeams').checked = true;
   $('layNestSeams').dispatchEvent(new Event('change', { bubbles: true }));
   const onUI = { flag: !!app.state.layout.pack.seams, corridors: app.nest.corridors().length };
-  const ran = app.nest.run();
+  const ran = await app.nest.run();
   const ranUI = { corridors: ran.stats.corridors, info: $('layNestInfo').textContent };
 
   // It rides the project, and is not one of the seven packing values, so it is
@@ -12239,6 +12241,238 @@ check('the option rides the project and is not part of the profile comparison',
   seamNest.restored === 3,
   `reopened with seams ${seamNest.reopened.seams}, modified ${seamNest.reopened.modified} ` +
   `(was ${seamNest.modAfter}), step ${seamNest.restored}`);
+
+// ---------- the nest that yields (nesting PRD, criterion 6) ----------
+// nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
+// packers to keep agreeing. The async one yields a macrotask between items, so
+// the tab repaints and the run can be cancelled; it is slower by that overhead
+// and returns the identical answer.
+const nestAsync = await page.evaluate(async () => {
+  const { nestLayout, nestLayoutAsync, roundedRect } = await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const mk = (name, outer) => ({
+    name, outer, holes: [], circles: [], x: 0, y: 0, rot: 0, depth: null, thickness: 6,
+  });
+  const C = roundedRect(110, 80, 220, 160, 4);
+  const items = [
+    mk('a', rect(60, 30)), mk('b', rect(50, 40)), mk('c', rect(40, 40)),
+    mk('d', rect(70, 25)), mk('e', rect(30, 30)),
+  ];
+  const opts = { rotationStep: 90 };
+
+  const sync = nestLayout(C, items, opts);
+  const recs1 = [];
+  const async1 = await nestLayoutAsync(C, items, { ...opts, onProgress: p => recs1.push(p) });
+  const recs2 = [];
+  const async2 = await nestLayoutAsync(C, items, { ...opts, onProgress: p => recs2.push(p) });
+
+  // The event loop really turned. A self-rescheduling macrotask counts how many
+  // times it got a turn while the pack ran; a synchronous pack would let it run
+  // exactly none. requestAnimationFrame is deliberately NOT used: a headless
+  // browser with nothing to composite may never fire one, which would make this
+  // assert the harness rather than the code.
+  let turns = 0;
+  let spin = true;
+  const tick = () => { if (spin) { turns++; setTimeout(tick, 0); } };
+  setTimeout(tick, 0);
+  await nestLayoutAsync(C, items, opts);
+  spin = false;
+
+  // Cancel from inside the FIRST progress callback, so this is an ordering
+  // assertion and never a race against a timer.
+  const ctl = new AbortController();
+  let seen = 0;
+  const cancelled = await nestLayoutAsync(C, items, {
+    ...opts, signal: ctl.signal,
+    onProgress: () => { seen++; ctl.abort(); },
+  });
+  // And an abandoned run leaves no residue: the next one is still the answer.
+  const after = await nestLayoutAsync(C, items, opts);
+
+  // A pack whose items are mutated mid-run must not be able to read the change.
+  // The generator snapshots each item on entry, so a rotation lock toggled
+  // between chunks cannot steer a pack that is already under way.
+  const live = items.map(it => ({ ...it }));
+  const meddled = await nestLayoutAsync(C, live, {
+    ...opts,
+    onProgress: () => { for (const it of live) { it.rot = 45; it.rotLock = 'current'; } },
+  });
+
+  return {
+    identical: JSON.stringify(sync) === JSON.stringify(async1),
+    twiceSame: JSON.stringify(async1) === JSON.stringify(async2),
+    progressSame: JSON.stringify(recs1) === JSON.stringify(recs2),
+    n: recs1.length, placed: sync.placements.length, passes: sync.stats.passes,
+    everyItemInRange: recs1.every(r => r.item < r.items && r.item >= 0),
+    testsRise: recs1.every((r, i) => i === 0 || r.tests >= recs1[i - 1].tests),
+    turns, chunks: recs1.length,
+    cancelled, seen,
+    afterCancel: JSON.stringify(after) === JSON.stringify(sync),
+    meddleSafe: JSON.stringify(meddled) === JSON.stringify(sync),
+  };
+});
+
+check('the async nest returns exactly what the synchronous one returns, twice over',
+  nestAsync.identical && nestAsync.twiceSame && nestAsync.placed === 5,
+  `sync === async ${nestAsync.identical}, and async === async ${nestAsync.twiceSame}, ` +
+  `${nestAsync.placed} placed`);
+
+check('progress is exactly reproducible, complete, and monotonic in work done',
+  nestAsync.progressSame && nestAsync.n === 5 * nestAsync.passes &&
+  nestAsync.everyItemInRange && nestAsync.testsRise,
+  `${nestAsync.n} progress records over ${nestAsync.passes} pass(es) of 5 items, ` +
+  `identical across two runs ${nestAsync.progressSame}, tests non-decreasing ` +
+  `${nestAsync.testsRise}`);
+
+check('the event loop actually turns during a nest, rather than the tab going dead',
+  nestAsync.turns >= 2,
+  `an interleaved macrotask got ${nestAsync.turns} turn(s) across ${nestAsync.chunks} chunks; ` +
+  'a synchronous pack would have given it none');
+
+check('cancelling from the first chunk returns null and leaves no residue behind',
+  nestAsync.cancelled === null && nestAsync.seen === 1 && nestAsync.afterCancel,
+  `cancelled after ${nestAsync.seen} chunk returning ${nestAsync.cancelled}; the next run ` +
+  `still matches the synchronous answer ${nestAsync.afterCancel}`);
+
+check('editing the drawer mid-nest cannot steer a pack already under way',
+  nestAsync.meddleSafe,
+  `every item rotated and locked from inside progress; answer unchanged ` +
+  `${nestAsync.meddleSafe}`);
+
+// ---------- the autosave slot (resume editing, plan step 5) ----------
+// The backend of last resort: no writable folder, or a tab that died before
+// Next. One slot, written on a debounce after an edit settles, restored only
+// through a prompt that names the tool and when it was written.
+const autosave = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const before = {
+    step: app.state.step, trace: app.traceEditor.getTrace(),
+    image: app.state.image, rect: app.state.rect, confirm: window.confirm,
+  };
+  // The clock is injected precisely so a test can hold it still.
+  let now = 1_000_000;
+  app.autosave.clock = () => now;
+
+  const mk = (w, h, fill) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = fill; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#303030'; g.fillRect(w * 0.25, h * 0.25, w * 0.4, h * 0.35);
+    return c;
+  };
+  const rc = mk(400, 300, '#f2f2f0');
+  app.state.image = mk(600, 450, '#2a2a2a');
+  app.state.rect = { canvas: rc, pxPerMm: 4 };
+  app.state.rectDirty = false;
+  app.traceEditor.setRectified(rc, 4);
+  app.state.fileName = 'awl';
+
+  await app.autosave.done();
+  const empty = await app.autosave.read();
+
+  // Nothing to rescue until there is a trace worth coming back to.
+  app.traceEditor.setTrace([], []);
+  app.autosave.touch();
+  const idleTouch = app.autosave.pending;
+
+  app.traceEditor.setTrace(
+    [{ x: 10, y: 10 }, { x: 60, y: 10 }, { x: 60, y: 35 }, { x: 10, y: 35 }], []);
+  const wrote = await app.autosave.flush();
+  const slot = await app.autosave.read();
+
+  // Too young to be a crash: this is the running tab's own work.
+  const fresh = await app.autosave.offer();
+
+  // Old enough, and nothing on screen to protect: it asks.
+  now += 45 * 60 * 1000;
+  app.traceEditor.setTrace([], []);
+  let asked = null;
+  window.confirm = m => { asked = m; return false; };
+  const declined = await app.autosave.offer();
+  const stillThere = !!(await app.autosave.read());
+
+  // Never over the top of work in progress.
+  app.traceEditor.setTrace([{ x: 0, y: 0 }, { x: 9, y: 0 }, { x: 9, y: 9 }], []);
+  let asked2 = 'NOT ASKED';
+  window.confirm = () => { asked2 = 'ASKED'; return true; };
+  const busy = await app.autosave.offer();
+
+  // Accepted: the trace comes back, photo and all.
+  app.traceEditor.setTrace([], []);
+  app.state.image = null;
+  window.confirm = m => { asked = m; return true; };
+  const restored = await app.autosave.offer();
+  await wait(600);
+  const back = {
+    outer: app.traceEditor.getTrace().outer.length,
+    image: !!app.state.image, rect: !!app.state.rect,
+  };
+
+  // Saving it properly clears the slot.
+  await app.autosave.done();
+  const cleared = await app.autosave.read();
+
+  // A slot the build cannot read is discarded rather than thrown. The trace
+  // goes first: the offer refuses to speak over work in progress, which the
+  // check above is what proves.
+  app.traceEditor.setTrace([], []);
+  await app.autosave.write({ text: '{not json', name: 'broken', at: 1 });
+  window.confirm = () => true;
+  const bad = await app.autosave.offer();
+  const goneAfterBad = await app.autosave.read();
+
+  window.confirm = before.confirm;
+  app.autosave.clock = null;
+  await app.autosave.done();
+  app.state.image = before.image;
+  app.state.rect = before.rect;
+  if (before.rect) app.traceEditor.setRectified(before.rect.canvas, before.rect.pxPerMm);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles || []);
+  app.goStep(before.step);
+
+  return {
+    empty, idleTouch, wrote,
+    slot: slot && { name: slot.name, at: slot.at, hasPhoto: /"photo":"data:/.test(slot.text) },
+    fresh, declined, asked, stillThere, busy, asked2, restored, back, cleared,
+    bad, goneAfterBad, restoredStep: app.state.step,
+  };
+});
+
+check('the autosave slot starts empty, and an empty trace never fills it',
+  autosave.empty === null && autosave.idleTouch === false && autosave.wrote === true &&
+  autosave.slot && autosave.slot.name === 'awl' && autosave.slot.at === 1000000 &&
+  autosave.slot.hasPhoto,
+  `idle touch pending ${autosave.idleTouch}; slot “${autosave.slot && autosave.slot.name}” ` +
+  `at ${autosave.slot && autosave.slot.at} carrying its photo ${autosave.slot && autosave.slot.hasPhoto}`);
+
+check('a slot younger than the session is this tab’s own work and is never offered back',
+  autosave.fresh === 'fresh',
+  `offer returned ${autosave.fresh}`);
+
+check('an old slot asks, naming the tool and how long ago, and declining keeps it',
+  autosave.declined === 'declined' && autosave.stillThere &&
+  /closed while you were tracing/.test(autosave.asked || '') &&
+  /awl/.test(autosave.asked || '') && /45 minutes ago/.test(autosave.asked || ''),
+  (autosave.asked || '(nothing asked)').replace(/\n/g, ' | '));
+
+check('it never offers over the top of work already on screen',
+  autosave.busy === 'busy' && autosave.asked2 === 'NOT ASKED',
+  `offer returned ${autosave.busy} without asking (${autosave.asked2})`);
+
+check('accepting brings the trace back with its photo, and saving properly clears the slot',
+  autosave.restored === 'restored' && autosave.back.outer === 4 &&
+  autosave.back.image && autosave.back.rect && autosave.cleared === null,
+  `${autosave.back.outer} points back with photo ${autosave.back.image}; slot after a ` +
+  `proper save: ${autosave.cleared}`);
+
+check('a slot this build cannot read is discarded rather than thrown, and says so',
+  autosave.bad === 'failed' && autosave.goneAfterBad === null &&
+  autosave.restoredStep === 3,
+  `offer returned ${autosave.bad}, slot after: ${autosave.goneAfterBad}`);
 
 // ---------- bed tiling for the cut template ----------
 

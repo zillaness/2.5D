@@ -35,7 +35,7 @@ photo never leaves your machine.
 ## Running it
 
 **No hosting needed** — grab [`dist/2.5d-local.html`](dist/2.5d-local.html)
-(one self-contained ~700 KB file, everything inlined) and double-click it. It
+(one self-contained ~1.2 MB file, everything inlined) and double-click it. It
 runs entirely offline; rebuild it after source changes with `npm run build`.
 
 For development, the un-bundled source needs a static server (browsers block

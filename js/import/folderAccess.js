@@ -18,8 +18,15 @@
 // One IndexedDB database, one store, one key. The PRD names this key, and
 // the labelling and nesting work reads nothing else out of it.
 const DB_NAME = '2p5d.folder.v1';
+const DB_VERSION = 2;
 const STORE = 'handles';
 const KEY = 'folder';
+// The autosave slot lives in the same database, in a store of its own rather
+// than sharing the handle store, because a project blob is not a handle and a
+// store called 'handles' holding one would be a lie the next reader believes.
+// One slot, overwritten: keeping revisions is a different feature.
+const SESSION_STORE = 'session';
+const AUTOSAVE_KEY = 'autosave';
 
 // A folder of traces should not be a filesystem crawl. These caps keep a
 // mis-picked home directory from hanging the tab.
@@ -102,20 +109,21 @@ export async function ensurePermission(handle, mode = 'read') {
 function openDb() {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') { reject(new Error('no indexedDB')); return; }
-    const req = indexedDB.open(DB_NAME, 1);
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+      if (!db.objectStoreNames.contains(SESSION_STORE)) db.createObjectStore(SESSION_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error || new Error('indexedDB open failed'));
   });
 }
 
-function runTx(db, mode, fn) {
+function runTx(db, mode, fn, store = STORE) {
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, mode);
-    const req = fn(tx.objectStore(STORE));
+    const tx = db.transaction(store, mode);
+    const req = fn(tx.objectStore(store));
     tx.oncomplete = () => resolve(req ? req.result : undefined);
     tx.onerror = () => reject(tx.error || new Error('indexedDB transaction failed'));
     tx.onabort = () => reject(tx.error || new Error('indexedDB transaction aborted'));
@@ -150,6 +158,61 @@ export async function recallFolder() {
     return { handle: got.handle, label: got.label || got.handle.name || '' };
   } catch {
     return null;
+  } finally {
+    if (db) try { db.close(); } catch { /* already gone */ }
+  }
+}
+
+// ---------- the autosave slot (resume editing PRD, plan step 5) ----------
+//
+// The backend of last resort, for the case where neither sibling file exists:
+// no writable folder, or a tab that died before Next. Every read and write is
+// wrapped, because a browser in private mode, with storage blocked, or simply
+// out of quota must leave the app working rather than throwing on startup.
+//
+// `at` is passed in rather than read here. This module is not allowed to read
+// the clock, and the tests depend on that.
+export async function writeAutosave(record) {
+  if (!record || typeof record.text !== 'string') return false;
+  let db = null;
+  try {
+    db = await openDb();
+    await runTx(db, 'readwrite',
+      s => s.put({
+        text: record.text,
+        name: String(record.name || 'your trace'),
+        at: Number(record.at) || 0,
+      }, AUTOSAVE_KEY),
+      SESSION_STORE);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (db) try { db.close(); } catch { /* already gone */ }
+  }
+}
+
+export async function readAutosave() {
+  let db = null;
+  try {
+    db = await openDb();
+    const got = await runTx(db, 'readonly', s => s.get(AUTOSAVE_KEY), SESSION_STORE);
+    return got && typeof got.text === 'string' ? got : null;
+  } catch {
+    return null;
+  } finally {
+    if (db) try { db.close(); } catch { /* already gone */ }
+  }
+}
+
+export async function clearAutosave() {
+  let db = null;
+  try {
+    db = await openDb();
+    await runTx(db, 'readwrite', s => s.delete(AUTOSAVE_KEY), SESSION_STORE);
+    return true;
+  } catch {
+    return false;
   } finally {
     if (db) try { db.close(); } catch { /* already gone */ }
   }

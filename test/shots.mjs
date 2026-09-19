@@ -123,7 +123,7 @@ await page.evaluate(t => {
   ]) S.layout.items.push(it);
   app.goStep(4);
   app.nest.sync();
-  app.nest.run();
+  return app.nest.run();
 }, TOOLS);
 // The 3D preview, so the shot shows what the README says Step 4 puts on screen
 // together: the 2D layout, the solid and the export row.

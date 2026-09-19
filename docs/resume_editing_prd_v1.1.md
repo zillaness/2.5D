@@ -1,6 +1,6 @@
 ---
 file: resume_editing_prd_v1.1.md
-version: 1.1
+version: 1.2
 author: Sam Cao
 created: 2026-09-14
 last_updated: 2026-09-19
@@ -10,8 +10,7 @@ ai_update: Update last_updated and version. Rename file to match. Append changel
 
 # PRD: Getting back to a tool you already traced
 
-Status: **Step 1 SHIPPED in v1.25.1, 2026-09-19. Steps 2 to 6 not built, and
-steps 3 and 4 need re-deciding.** · 2026-09-14 ·
+Status: **SHIPPED, steps 1 to 6, across v1.25.1 to v1.26.3 on 2026-09-19.** · 2026-09-14 ·
 target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 **v1.1 correction.** v1.0 of this document was wrong about the central fact it
@@ -282,5 +281,6 @@ Sign-off on the scope and the plan. Open questions 1 and 2 change the
 interaction; 3 changes which file is authoritative. The rest are defaults.
 
 ## CHANGELOG
+- v1.2 (2026-09-19): Steps 2 to 6 shipped. Step 2 names what differs rather than the timestamps the option described, because this module may not read the clock and "4 points, 50 x 25 mm" says more than "newer" anyway. Steps 3 and 4 were rebuilt against the corrected fact and came out much smaller than v1.0 scoped them. Step 5's autosave lives in its own IndexedDB store beside the folder handle, with the clock injected. Along the way loadProject was found to keep a foreign photo when the project it loaded had none, which let Step 2 re-rectify the wrong frame.
 - v1.0 (2026-09-14): Initial draft, from Sam's 2026-09-13 and 2026-09-14 notes on Undo after Next and on exporting a trace with or without its file.
 - v1.1 (2026-09-19): Corrects the central factual claim. `serializeProject(includePhoto)` gates only the original camera photo; `rectified` is written by both forms, so the small save is neither a few KB nor Step-2-disabled and does not cost the ability to edit the trace. Rewrites the two-saves table and the consequence argument, narrows success criterion 4, and marks plan steps 3 and 4 for re-decision since both were scoped against the wrong difference. Records Sam's answers to open questions 1, 2 and 3 (click; reopening changes neither status nor tick; ask at load time when the sibling and the library disagree) and marks step 1 shipped in v1.25.1, with the two build findings and the `rectified` re-encode caveat.

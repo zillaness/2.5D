@@ -23,7 +23,7 @@ import {
   buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate,
   buildLayoutGridBin, gridContainerLoop, buildHolster, roundedRect, splitTiles,
   layoutPockets, layoutLabelGeometry, layoutLabelConflicts, labelMinHeight,
-  nestLayout, applyNest, seamCorridors, PACK_PROFILES, PACK_KEYS, packNormalize,
+  nestLayout, nestLayoutAsync, applyNest, seamCorridors, PACK_PROFILES, PACK_KEYS, packNormalize,
   packProfileValues, packProfileMatch,
 } from './holders.js';
 import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
@@ -45,6 +45,7 @@ import { importCad } from './import/cadImport.js';
 import { tracesFromFiles, thumbFromImage, isProject } from './import/traceFolder.js';
 import {
   hasDirectoryPicker, pickFolder, walkFolder, ensurePermission,
+  writeAutosave, readAutosave, clearAutosave,
   rememberFolder, recallFolder, writeProjectFile,
 } from './import/folderAccess.js';
 
@@ -173,7 +174,10 @@ const cornerEditor = new CornerEditor($('cornerCanvas'), () => { state.rectDirty
 const traceEditor = new TraceEditor($('traceCanvas'), {
   onChange: (throttled) => {
     updateTraceInfo();
-    if (!throttled) { updateStepButtons(); refreshMeasurePanel(); }
+    // `throttled` is the editor saying a gesture is still in flight. A snapshot
+    // of a half-dragged vertex is worse than no snapshot, so the autosave only
+    // hears about edits that have settled.
+    if (!throttled) { updateStepButtons(); refreshMeasurePanel(); autosaveTouch(); }
   },
   onSelect: () => {
     syncHolePanel();
@@ -1534,6 +1538,9 @@ async function queueNext() {
     json: item.json, jsonPath: item.jsonPath,
   });
   queueReediting = null;
+  // The trace is on disk and in the library now, so the slot has nothing left
+  // to rescue.
+  autosaveDone();
   const nxt = queueAdvance(item, 'next');
   const tail = nxt
     ? ` Now on “${nxt.name}”.`
@@ -2816,6 +2823,19 @@ function layNestOpts() {
 // is putting them back rather than re-deriving anything.
 let layNestUndoSnap = null;
 
+// While a pack is running the button is the way out of it, and nothing else in
+// the panel should invite an edit to the drawer it is packing.
+function syncNestRunning() {
+  const on = !!layNestRun;
+  $('layNestBtn').textContent = on ? '\u2715 Cancel' : '\u2337 Nest';
+  $('layNestBtn').title = on
+    ? 'Stop the pack. Every tool stays where it is now.'
+    : 'Auto-sort every unpinned tool into the container. One undoable action.';
+  $('layNestBtn').disabled = false;
+  $('layNestProfile').disabled = on;
+  $('layNestUndoBtn').hidden = !layNestUndoSnap || on;
+}
+
 function syncNestPanel() {
   const L = state.layout;
   if (!L.pack) {
@@ -2862,8 +2882,8 @@ function syncNestPanel() {
   const bed = layBedView();
   $('layNestSeamRow').hidden = !(bed && bed.w > 10 && bed.h > 10);
   $('layNestSeams').checked = !!L.pack.seams;
-  $('layNestBtn').disabled = !L.items.length;
-  $('layNestUndoBtn').hidden = !layNestUndoSnap;
+  $('layNestBtn').disabled = !L.items.length && !layNestRun;
+  $('layNestUndoBtn').hidden = !layNestUndoSnap || !!layNestRun;
   const warn = $('layNestStoreWarn');
   warn.hidden = libAvailable();
   warn.textContent = warn.hidden ? ''
@@ -2896,26 +2916,63 @@ function layCorridors() {
     { minWeb: packNormalize(L.pack.values).minWeb });
 }
 
-function layNest() {
+// The run in flight, or null. A nest now yields to the browser between items,
+// which means the buttons it was started from are live while it runs: without
+// this, a second press would start a second pack over the same items and the
+// two would race to write them. The snapshot taken for undo would be the
+// second run's view of a drawer the first had already moved.
+let layNestRun = null;
+// The run as a promise, so a caller that did not start it can still wait for
+// it. The click handler starts one and returns; without this there is no
+// handle to await, and the only alternative is polling a flag.
+let layNestSettled = null;
+
+function layNestProgress(p) {
+  const pass = p.pass + 1;
+  $('layNestInfo').textContent =
+    `Nesting ${p.item + 1} of ${p.items}` +
+    (pass > 1 ? `, attempt ${pass}` : '') +
+    `. ${p.placed} placed so far. Cancel leaves everything where it is.`;
+}
+
+// Nesting is now async, because a large pack is seconds of Clipper work and a
+// tab that has stopped answering is not a progress indicator. The answer is the
+// same one nestLayout gives: both drive the same generator.
+async function layNest() {
   const L = state.layout;
+  if (layNestRun) { toast('A nest is already running.'); return null; }
   if (!L.items.length) { toast('Nothing to nest — add some tools to the drawer first.'); return null; }
   const before = L.items.map(it => ({ x: it.x, y: it.y, rot: it.rot }));
   const loop = layContainerLoop();
   const opts = layNestOpts();
   const corridors = layCorridors();
-  let res = corridors.length
-    ? nestLayout(loop, L.items, { ...opts, obstacles: corridors })
-    : nestLayout(loop, L.items, opts);
-  // A pocket cut across a seam still works, so the corridors are a preference.
-  // If keeping them clear costs a tool its place, they go and the pack is run
-  // again without them, and the panel says the seams will cross pockets.
-  let dropped = false;
-  if (corridors.length && res.unplaced.length) {
-    const plain = nestLayout(loop, L.items, opts);
-    if (plain.placements.length > res.placements.length) {
-      res = plain;
-      dropped = true;
+  const ctl = new AbortController();
+  layNestRun = ctl;
+  syncNestRunning();
+  const run = o => nestLayoutAsync(loop, L.items,
+    { ...o, onProgress: layNestProgress, signal: ctl.signal });
+  let res = null, dropped = false;
+  try {
+    res = corridors.length ? await run({ ...opts, obstacles: corridors }) : await run(opts);
+    // A pocket cut across a seam still works, so the corridors are a
+    // preference. If keeping them clear costs a tool its place, they go and the
+    // pack runs again without them, and the panel says a seam will cross a
+    // pocket.
+    if (res && corridors.length && res.unplaced.length) {
+      const plain = await run(opts);
+      if (plain && plain.placements.length > res.placements.length) {
+        res = plain;
+        dropped = true;
+      }
     }
+  } finally {
+    layNestRun = null;
+    syncNestRunning();
+  }
+  if (!res) {
+    $('layNestInfo').textContent = 'Nest cancelled. Every tool is where it was.';
+    toast('Nest cancelled.');
+    return null;
   }
   const moved = applyNest(L.items, res);
   L.items.length = 0;
@@ -3601,7 +3658,13 @@ $('laySnapPitch').addEventListener('change', e => {
   syncSnapFields();
 });
 
-$('layNestBtn').addEventListener('click', () => { layNest(); });
+// One button, two jobs: it starts the pack, and while the pack is running it
+// is the way out of it. A separate Cancel would sit dead for the whole of every
+// small nest, which is most of them.
+$('layNestBtn').addEventListener('click', () => {
+  if (layNestRun) { layNestRun.abort(); return; }
+  layNestSettled = layNest();
+});
 $('layNestUndoBtn').addEventListener('click', () => { layNestUndoAction(); });
 // Picking a profile SEEDS every value; it does not lock any of them. The
 // "(modified)" row is a readout of where the settings already are, so choosing
@@ -5354,6 +5417,95 @@ $('exportDxfBtn').addEventListener('click', () => {
   deliverExport(toDXF(p.outer, p.holes, h, p.opts), `${state.fileName}-outline.dxf`);
 });
 
+// ---------- autosave (resume editing PRD, plan step 5) ----------
+//
+// Last of the three ways back into a traced tool, and deliberately last: the
+// queue re-edit and the library re-edit both work off files that already exist
+// on disk, and between them they cover the case where a folder is open at all.
+// This is for the rest: no writable folder, or a tab that died before Next.
+//
+// One slot, overwritten. Written on a debounce after an edit settles, never
+// mid-gesture. Restored only through an explicit prompt, never silently, and
+// never on top of work already on screen.
+const AUTOSAVE_DEBOUNCE = 2000;
+const AUTOSAVE_MIN_AGE = 20000;  // below this the slot is this session's own
+let autosaveTimer = null;
+let autosavePending = false;
+// The one place in the app allowed to read the clock, and it is injected so the
+// tests can hold it still. Everything downstream of this takes `at` as a number.
+let autosaveClock = () => Date.now();
+
+function autosaveTouch() {
+  // Nothing to save until there is a trace worth coming back to.
+  const t = traceEditor.outer;
+  if (!t || t.length < 3) return;
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosavePending = true;
+  autosaveTimer = setTimeout(() => { autosaveTimer = null; autosaveFlush(); }, AUTOSAVE_DEBOUNCE);
+}
+
+// serializeProject(true) on purpose: the photo is what makes the restored trace
+// editable, and this slot exists precisely for the case where no sibling photo
+// is on disk to supply it.
+async function autosaveFlush() {
+  autosavePending = false;
+  const t = traceEditor.outer;
+  if (!t || t.length < 3) return false;
+  return writeAutosave({
+    text: serializeProject(true),
+    name: state.fileName || 'your trace',
+    at: autosaveClock(),
+  });
+}
+
+// Forget the slot, because the work in it is now somewhere durable.
+function autosaveDone() {
+  if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
+  autosavePending = false;
+  return clearAutosave();
+}
+
+const autosaveAge = ms => {
+  const m = Math.round(ms / 60000);
+  if (m < 1) return 'less than a minute ago';
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'} ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  const d = Math.round(h / 24);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+};
+
+// Offer the slot back, once, on startup. Explicit: it names the tool and when
+// it was written, and it never loads anything without an answer. Declining
+// leaves both the slot and the session untouched, so a mis-click costs nothing
+// and the offer comes back next time.
+async function autosaveOffer() {
+  const slot = await readAutosave();
+  if (!slot || !slot.text) return 'none';
+  // A slot younger than the session that wrote it is this tab's own work, not a
+  // crash to recover from, and offering to restore what is already on screen
+  // reads as a bug.
+  const age = autosaveClock() - (slot.at || 0);
+  if (age < AUTOSAVE_MIN_AGE) return 'fresh';
+  // Never over the top of work in progress. Someone who has already started
+  // tracing did not come here to have it replaced.
+  if (traceEditor.outer && traceEditor.outer.length >= 3) return 'busy';
+  const take = confirm(
+    `2.5D closed while you were tracing \u201c${slot.name}\u201d, ${autosaveAge(age)}.\n\n` +
+    'OK brings that trace back, photo and all.\n' +
+    'Cancel leaves it alone; it will be offered again next time.');
+  if (!take) return 'declined';
+  try {
+    loadProject(JSON.parse(slot.text), { quiet: true });
+  } catch {
+    await autosaveDone();
+    toast('That recovered trace could not be read, so it has been discarded.', 6000);
+    return 'failed';
+  }
+  toast(`Brought back “${slot.name}”. Saving it properly clears the recovered copy.`, 6000);
+  return 'restored';
+}
+
 // ---------- project save / move / load ----------
 // The whole working state as JSON: paper + corners, trace, holes, model
 // settings, and the rectified image (so editing continues without the photo).
@@ -5707,6 +5859,7 @@ $('projDownloadBtn').addEventListener('click', () => {
   const blob = new Blob([$('projText').value || serializeProject($('projIncludePhoto').checked)],
     { type: 'application/json' });
   downloadBlob(blob, `${state.fileName}-project.json`);
+  autosaveDone();
   toast('Project file download started — check your downloads folder.');
 });
 $('projCopyBtn').addEventListener('click', async () => {
@@ -5885,6 +6038,7 @@ $('libSaveBtn').addEventListener('click', () => {
   const entry = libEntryFromTrace(name);
   if (!entry) { toast('No outline to save yet.'); return; }
   libCommit(entry);
+  autosaveDone();
 });
 
 $('libList').addEventListener('change', () => refreshLibList());
@@ -6072,6 +6226,12 @@ function loadOutlineIntoSession(o) {
 }
 
 refreshLibList();
+
+// The offer runs once, after the page has settled, and only ever asks: an app
+// that silently reinstates a trace you had abandoned is worse than one that
+// forgets. A browser with no IndexedDB, or a blocked one, resolves to 'none'
+// and nothing is said.
+autosaveOffer().catch(() => {});
 
 // ---------- vector CAD import (DXF / SVG) ----------
 
@@ -6314,8 +6474,21 @@ window.__app = {
   },
   // Auto-sort: the action, its undo, the profile store and the resolved
   // options the packer is actually handed.
+  // The autosave slot: its clock, so a test can hold it still, and the three
+  // acts that touch it.
+  autosave: {
+    flush: () => autosaveFlush(), offer: () => autosaveOffer(),
+    done: () => autosaveDone(), read: () => readAutosave(),
+    write: r => writeAutosave(r), touch: () => autosaveTouch(),
+    get pending() { return autosavePending; },
+    set clock(fn) { autosaveClock = typeof fn === 'function' ? fn : (() => Date.now()); },
+  },
   nest: {
-    run: () => layNest(), undo: () => layNestUndoAction(),
+    run: () => { layNestSettled = layNest(); return layNestSettled; },
+    pending: () => layNestSettled || Promise.resolve(null),
+    undo: () => layNestUndoAction(),
+    cancel: () => { const on = !!layNestRun; if (on) layNestRun.abort(); return on; },
+    get running() { return !!layNestRun; },
     opts: () => layNestOpts(), sync: () => syncNestPanel(),
     corridors: () => layCorridors(),
     saveAs: name => packSaveAs(name), remove: name => packDelete(name),
