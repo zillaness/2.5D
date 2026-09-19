@@ -8,7 +8,8 @@
     "serve": "npx serve .",
     "build": "node build.mjs",
     "test": "node test/e2e.mjs",
-    "shots": "node test/shots.mjs"
+    "shots": "node test/shots.mjs",
+    "smoke": "node build.mjs && node test/dist-smoke.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
