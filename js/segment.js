@@ -194,3 +194,97 @@ export function segmentObject(diffMap, options) {
   for (let i = 0; i < w * h; i++) objMask[i] = labels[i] === best ? 1 : 0;
   return objMask;
 }
+
+// Every object in the frame, not just the biggest one.
+//
+// segmentObject answers "where is the tool on this sheet" and takes the largest
+// blob, which is right when there is one object and a background. A drawer has
+// a dozen objects and the same background, so this shares that function's whole
+// prefix (threshold, clear the border band, morphClean, labelComponents) and
+// differs only in the tail: keep every component at or above a minimum area
+// instead of the single largest.
+//
+// segmentObject is deliberately NOT re-expressed in terms of this. It is on the
+// shipped single-tool path, criterion 1 of the drawer-scan PRD says it does not
+// move, and re-expressing it would put a dozen traced outlines at risk to save
+// fifteen lines.
+//
+// Each component comes back CROPPED TO ITS BOUNDING BOX, addressed
+// mask[(y - y0) * w + (x - x0)] for a frame pixel (x, y). That is not a
+// micro-optimisation. A full-frame mask per component is 7.3 MB at scan
+// resolution, so twelve tools held at once while they are traced is 88 MB on
+// top of labelComponents' own 29 MB of labels. Cropped, it is a few MB.
+// Tracing a cropped sub-rect and adding (x0, y0) back gives an identical loop
+// set, holes included, because traceBoundaries reads 0 outside its own bounds,
+// so a component flush against a crop edge still closes.
+//
+// options: { threshold, cleanupRadius = 2, marginPx = 6, minAreaPx = 25 }
+// returns: [{ mask, w, h, x0, y0, area }], biggest first, or [] when nothing
+// survives. Never null: callers read .length.
+export function segmentObjects(diffMap, options) {
+  const { diff, w, h } = diffMap;
+  const {
+    threshold, cleanupRadius = 2, marginPx = 6, minAreaPx = 25,
+  } = options || {};
+
+  let mask = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) mask[i] = diff[i] >= threshold ? 1 : 0;
+
+  // Clear the margin band.
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x < marginPx || y < marginPx || x >= w - marginPx || y >= h - marginPx) {
+        mask[y * w + x] = 0;
+      }
+    }
+  }
+
+  mask = morphClean(mask, w, h, cleanupRadius);
+
+  // morphClean returns its input unchanged at radius 0, so `mask` may alias the
+  // threshold mask above. Nothing below writes into it.
+  const { labels, sizes } = labelComponents(mask, w, h);
+  if (!sizes.length) return [];
+
+  // One pass for the extents of every component that is big enough, then one
+  // allocation each. Two passes rather than one so nothing is allocated for a
+  // component that is about to be thrown away.
+  const keep = [];
+  const box = new Map();
+  for (let i = 0; i < sizes.length; i++) {
+    if (sizes[i] >= minAreaPx) {
+      keep.push(i);
+      box.set(i, { minX: w, minY: h, maxX: -1, maxY: -1 });
+    }
+  }
+  if (!keep.length) return [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const b = box.get(labels[y * w + x]);
+      if (!b) continue;
+      if (x < b.minX) b.minX = x;
+      if (x > b.maxX) b.maxX = x;
+      if (y < b.minY) b.minY = y;
+      if (y > b.maxY) b.maxY = y;
+    }
+  }
+
+  const out = [];
+  for (const id of keep) {
+    const b = box.get(id);
+    if (b.maxX < b.minX) continue;
+    const cw = b.maxX - b.minX + 1, ch = b.maxY - b.minY + 1;
+    const sub = new Uint8Array(cw * ch);
+    for (let y = b.minY; y <= b.maxY; y++) {
+      const srcRow = y * w, dstRow = (y - b.minY) * cw;
+      for (let x = b.minX; x <= b.maxX; x++) {
+        if (labels[srcRow + x] === id) sub[dstRow + (x - b.minX)] = 1;
+      }
+    }
+    out.push({ mask: sub, w: cw, h: ch, x0: b.minX, y0: b.minY, area: sizes[id] });
+  }
+  // Biggest first, ties by position, so the order is the geometry's and not the
+  // flood fill's raster seed order.
+  out.sort((p, q) => (q.area - p.area) || (p.y0 - q.y0) || (p.x0 - q.x0));
+  return out;
+}

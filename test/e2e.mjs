@@ -12442,6 +12442,108 @@ check('the scan flag rides the project, defaults off, and does not outlive the r
   `scan key opens ${scanMode.old}; switching to the coin reference leaves it ` +
   `${scanMode.leftRect}; page handed back ${scanMode.restored}`);
 
+// ---------- drawer scan step 2: every object, not just the biggest ----------
+// segmentObject answers "where is the tool on this sheet" by taking the largest
+// blob. A drawer has a dozen objects against the same background, so
+// segmentObjects shares that function's whole prefix and differs only in the
+// tail. segmentObject itself does not move: it is on the shipped single-tool
+// path, and both are driven here off ONE diff map so the comparison is exact.
+//
+// Pure module work on a fabricated canvas; no page state is touched.
+const scanSeg = await page.evaluate(async () => {
+  const { computeDiffMap, segmentObject, segmentObjects } = await import('/js/segment.js');
+
+  // A 600 x 400 px drawer at 1 px/mm, liner grey, tools near-black, everything
+  // well inside the border band computeDiffMap samples its background from.
+  const draw = withBolt => {
+    const c = document.createElement('canvas');
+    c.width = 600; c.height = 400;
+    const g = c.getContext('2d');
+    g.fillStyle = '#b0b0b0'; g.fillRect(0, 0, 600, 400);
+    g.fillStyle = '#2c2c2c';
+    // Seven tools, none touching, one clearly the largest.
+    const tools = [
+      [60, 60, 120, 28], [60, 120, 90, 24], [60, 180, 70, 20],
+      [220, 60, 40, 200], [300, 60, 150, 30], [300, 130, 60, 60],
+      [300, 230, 100, 40],
+    ];
+    for (const [x, y, w, h] of tools) g.fillRect(x, y, w, h);
+    // A 4 x 4 mm bolt head: real, and not a tool that gets a pocket.
+    if (withBolt) g.fillRect(500, 320, 4, 4);
+    return { canvas: c, tools };
+  };
+
+  const { canvas, tools } = draw(false);
+  const dm = computeDiffMap(canvas);
+  const opts = { threshold: 40, cleanupRadius: 1, marginPx: 6 };
+
+  // Seven separated blobs come back as seven candidates.
+  const found = segmentObjects(dm, { ...opts, minAreaPx: 100 });
+
+  // The same diff map through the shipped single-object path. Its set-pixel
+  // count must equal the largest candidate's area, which is what proves the
+  // shared prefix really is shared and that segmentObject has not moved.
+  const one = segmentObject(dm, opts);
+  let onePixels = 0;
+  for (let i = 0; i < one.length; i++) onePixels += one[i];
+
+  // The bolt head is below the minimum and is dropped, while everything else
+  // is unchanged.
+  const withBolt = computeDiffMap(draw(true).canvas);
+  const kept = segmentObjects(withBolt, { ...opts, minAreaPx: 100 });
+  const keptAll = segmentObjects(withBolt, { ...opts, minAreaPx: 4 });
+
+  // Every mask is cropped to its own bounding box, and the crop lands where the
+  // tool was drawn. The largest is the 40 x 200 bar.
+  const big = found[0];
+  const expect = tools.reduce((a, t) => (t[2] * t[3] > a[2] * a[3] ? t : a));
+  const cropOk = Math.abs(big.x0 - expect[0]) <= 2 && Math.abs(big.y0 - expect[1]) <= 2 &&
+    Math.abs(big.w - expect[2]) <= 4 && Math.abs(big.h - expect[3]) <= 4;
+  const bytesCropped = found.reduce((n, p) => n + p.mask.length, 0);
+  const bytesFullFrame = found.length * dm.w * dm.h;
+
+  // Nothing survives, and it says so with an empty array rather than null: the
+  // callers read .length.
+  const blank = document.createElement('canvas');
+  blank.width = 120; blank.height = 90;
+  const bg = blank.getContext('2d');
+  bg.fillStyle = '#b0b0b0'; bg.fillRect(0, 0, 120, 90);
+  const none = segmentObjects(computeDiffMap(blank), { ...opts, minAreaPx: 100 });
+
+  return {
+    n: found.length, areas: found.map(p => p.area),
+    onePixels, biggest: big.area, cropOk,
+    box: { x0: big.x0, y0: big.y0, w: big.w, h: big.h },
+    expect, bytesCropped, bytesFullFrame,
+    withBolt: kept.length, keptAll: keptAll.length,
+    none: Array.isArray(none) ? none.length : 'not an array',
+    descending: found.every((p, i) => i === 0 || p.area <= found[i - 1].area),
+  };
+});
+
+check('seven separated tools come back as seven candidates, biggest first',
+  scanSeg.n === 7 && scanSeg.descending,
+  `${scanSeg.n} candidates of areas ${JSON.stringify(scanSeg.areas)}`);
+
+check('segmentObject has not moved: its mask is exactly the largest candidate',
+  scanSeg.onePixels === scanSeg.biggest,
+  `the single-object path set ${scanSeg.onePixels} pixels; the largest candidate has ` +
+  `${scanSeg.biggest}`);
+
+check('a 4 mm bolt head is not a tool, and the minimum area is what decides it',
+  scanSeg.withBolt === 7 && scanSeg.keptAll === 8,
+  `with the bolt in frame: ${scanSeg.withBolt} above the minimum, ${scanSeg.keptAll} in total`);
+
+check('each mask is cropped to its own bounding box, which is what makes a dozen affordable',
+  scanSeg.cropOk && scanSeg.bytesCropped < scanSeg.bytesFullFrame / 4,
+  `largest crop ${scanSeg.box.w} × ${scanSeg.box.h} at ${scanSeg.box.x0}, ${scanSeg.box.y0} ` +
+  `against the drawn ${scanSeg.expect[2]} × ${scanSeg.expect[3]} at ${scanSeg.expect[0]}, ` +
+  `${scanSeg.expect[1]}; ${Math.round(scanSeg.bytesCropped / 1024)} KB of masks against ` +
+  `${Math.round(scanSeg.bytesFullFrame / 1024)} KB full-frame`);
+
+check('an empty drawer returns an empty array, never null',
+  scanSeg.none === 0, `returned ${scanSeg.none}`);
+
 // ---------- the nest that yields (nesting PRD, criterion 6) ----------
 // nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
 // packers to keep agreeing. The async one yields a macrotask between items, so
