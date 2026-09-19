@@ -743,6 +743,22 @@ Library entries saved from a photographed trace keep a thumbnail too; since
 browser storage stops at roughly 5 MB, a library closing on that ceiling is
 saved without photos and says so.
 
+**Snap to grid.** Free-form placement is right for nesting a plier's handles
+into a screwdriver's shaft and wrong for a row of sockets that should line up.
+Tick **Snap to grid** and every drag, arrow-key nudge and rotation-handle drag
+lands on a grid: **Snap pitch** offers 1, 2.5, 5 and 10 mm, defaulting to 5, and
+a Gridfinity bin adds a 42 mm cell pitch that disappears again, falling back to
+5 mm, when the container changes to something without cells. The grid is
+absolute layout millimetres, so two tools snapped at the same pitch line up with
+each other and with the container's own origin. Rotation snaps to a quarter turn
+whatever the pitch, but Shift still wins and gives the usual 15 degrees, so a
+finer angle stays reachable without turning snapping off; with snap on, one
+arrow press moves a whole pitch rather than the usual 1 mm. Snapping is a
+property of the gesture rather than of the layout, so turning it on moves
+nothing already placed, and turning it off leaves every snapped position exactly
+where it was. The setting saves with the project, and a project saved before
+snapping existed opens with it off.
+
 **The bed as a build plate.** Set a bed and its outline is drawn dashed under
 the container, showing where the drawer sits on the plate rather than only
 whether it fits. **⊹ Auto-centre** centres the layout on it. To place it by
