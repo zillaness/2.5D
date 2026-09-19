@@ -1,9 +1,9 @@
 ---
 file: BURNDOWN.md
-version: 1.7
+version: 1.8
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-12
+last_updated: 2026-09-19
 description: Ledger for the 2026-09-04 token burndown on the 2.5D holders branch.
 ai_update: Update last_updated and version. Filename is fixed (the burndown skill expects BURNDOWN.md), so do not rename. Append a ledger line after every committed unit and keep the NEXT line current.
 ---
@@ -71,10 +71,35 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - ✅ Deployed v1.25.0 to gh-pages — 90717c3
 - ✅ docs/resume_editing_prd_v1.0.md drafted (getting back to a traced tool:
   queue re-edit, honest naming of the two project saves, autosave last)
+
+## 2026-09-19
+- ✅ README: the Snap to grid subsection lane B2 never wrote. Part A had taken
+  the lane's single README anchor, so the feature shipped in v1.25.0 reachable
+  and undocumented — ec6fe67
+- ✅ README: frontmatter added, per Sam's ruling below. Points at Roadmap,
+  Shipped as the document's changelog rather than adding a second one — 2e35459
+- ✅ Resume editing step 1: queue re-edit, and with it Undo after Next.
+  601 checks, all passing, no console errors (593 before) — 6322758, v1.25.1
+- ⚠ **`docs/resume_editing_prd_v1.0.md` was wrong about the fact it argued
+  from,** found while building step 1 and corrected in place as v1.1.
+  `serializeProject(includePhoto)` gates only `photo`, the original camera
+  frame; `rectified` is written by both saves whenever one exists, and one
+  always exists once anything is traced, because tracing happens in Step 2 and
+  Step 2 rectifies. So the small save is not a few KB, Step 2 is not disabled
+  under it, and it does not cost the ability to edit the trace. It costs the
+  corners. The suite knew: test/e2e.mjs:6922 has said "the rectified copy
+  stays" since before the PRD was written. Steps 1 and 2 stand; **steps 3 and 4
+  were scoped against the wrong difference and need Sam's call.**
+- ✅ docs/drawer_scan_prd_v1.0.md drafted: one photo of a laid-out drawer with
+  all four corners in frame, typed width and depth for scale, every tool traced
+  in one pass. Takes the position that the silhouettes land in
+  `state.layout.items` rather than refactoring the `TraceEditor` singleton, and
+  states plainly that it asks for an exception to the batch PRD's quality-bar
+  rule — cca8870
 - ▶ NEXT: nesting steps 5-9 (the Nest button, profile picker, 2p5d.packprofiles.v1,
   label-space reservation, seam corridors) — the geometry is shipped but unreachable.
-  Then autosave of trace progress, which Sam raised on 2026-09-13 and which wants a
-  PRD once the queue's folder write is settled.
+  Then resume-editing step 2 (library re-edit, now with the load-time prompt Sam
+  chose for open question 3), and autosave, which is step 5 and independent.
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done
@@ -92,11 +117,27 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
 - Nesting implementation — needs sign-off on the PRD in item 3.
 
 ## Needs Sam's call, still open
-- **Sign-off on `docs/resume_editing_prd_v1.0.md`** (drafted 2026-09-14). Open
-  questions 1 and 2 change the interaction, 3 decides which file is
-  authoritative when the sibling project and the library entry disagree.
-- **Em dashes in repo docs.** Flagged three times, still unresolved.
-- **Frontmatter on README.md.** Flagged twice, still unresolved.
+- **`docs/resume_editing_prd_v1.1.md` steps 3 and 4.** Signed off 2026-09-19
+  and step 1 is shipped, but the correction above knocked the ground out from
+  under steps 3 and 4. Step 3's proposed wording was false; what is true is
+  narrower (the small save keeps the trace editable and loses the corners) and
+  may not earn a UI change at all. Step 4's case turns out to be rare and the
+  queue path already covers the part of it that came up.
+- **`docs/drawer_scan_prd_v1.0.md`.** Two decisions, in order: whether the
+  exception to the batch PRD's quality-bar rule is granted at all, and only
+  then scope, plan, and the `layout.items` landing position. Its open questions
+  3, 6 and 9 change what gets built.
+
+## Sam's calls, closed
+- **Em dashes in repo docs.** CLOSED 2026-09-19 after three flags: new docs are
+  written clean, existing ones are left alone. Not to be raised again.
+- **Frontmatter on README.md.** CLOSED 2026-09-19 after two flags: it goes on,
+  and the table GitHub renders from it is acceptable unless Sam asks for it
+  back out. Not to be raised again.
+- **Resume editing open questions 1 to 3.** CLOSED 2026-09-19. Click the tile,
+  with a pencil affordance. Reopening changes neither status nor tick, because
+  Next is the one thing that finishes a photo. When the sibling project and the
+  library entry disagree, ask at load time rather than letting either win.
 
 ## Notes
 - The handoff's "two e2e commit-message count assertions off by one" was
