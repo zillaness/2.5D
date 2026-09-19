@@ -1,3 +1,13 @@
+---
+file: README.md
+version: 1.0
+author: Sam Cao
+created: 2026-07-20
+last_updated: 2026-09-19
+description: User-facing guide to 2.5D, covering the four-step pipeline from photo to traced outline to printable solid to drawer layout.
+ai_update: Update last_updated and bump version. The filename is fixed, so do not rename this file. Record what shipped under Roadmap, Shipped, which is this document's changelog; do not add a second one.
+---
+
 # 2.5D — photo → traced outline → printable solid
 
 Take a picture of an object lying on a sheet of paper, type in the object's
