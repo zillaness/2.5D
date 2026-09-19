@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.8
+version: 1.9
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-19
@@ -96,10 +96,37 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
   `state.layout.items` rather than refactoring the `TraceEditor` singleton, and
   states plainly that it asks for an exception to the batch PRD's quality-bar
   rule — cca8870
-- ▶ NEXT: nesting steps 5-9 (the Nest button, profile picker, 2p5d.packprofiles.v1,
-  label-space reservation, seam corridors) — the geometry is shipped but unreachable.
-  Then resume-editing step 2 (library re-edit, now with the load-time prompt Sam
-  chose for open question 3), and autosave, which is step 5 and independent.
+- ✅ Nesting steps 5 and 6: profiles as data with their normaliser and the
+  "modified" comparison, comfortWeb as a real scoring term, and label
+  footprints the packer reserves for. 609 checks — 48eed42, v1.26.0
+  - ⚠ comfortWeb did not exist in the scorer at all. The profile table has
+    listed it since the PRD's v1.0, but steps 1-4 shipped no spread term, so a
+    profile carrying comfortWeb 12 would have exposed a dead knob. Built so
+    that at 0 it is identically zero and no pack that predates it moves.
+  - ⚠ A reserved label is carried as its own loop, not unioned into the pocket
+    as the PRD says: the label sits clear of the pocket by its margin, so the
+    union is two disjoint paths and every test in nestLayout takes one loop.
+    Carried beside the pocket the way the notch disc already is.
+- ✅ Nesting steps 7 and 8: the Nest button, the profile picker with all seven
+  values exposed, per-item pin and angle lock, undo over the whole nest, the
+  2p5d.packprofiles.v1 store, and the resolved-values persistence rule.
+  618 checks — 48ab6cd
+- ✅ README: the auto-sort section said "None of this has a button yet", which
+  stopped being true. Rewritten to describe the panel, and the nesting PRD's
+  status and plan updated to match what shipped.
+- ▶ NEXT: nesting step 9, seam corridors, the last unbuilt step and default
+  off by design. Then resume-editing step 2 (library re-edit, now with the
+  load-time prompt Sam chose for open question 3), and autosave, step 5 and
+  independent of everything.
+
+## Known gaps opened here
+- **Progress reporting for a large nest** (nesting step 7). nestLayout is
+  synchronous and bounded by its own test budget, so a big pack blocks the tab
+  for the second or two it takes. Chunking it wants a worker.
+- **The rectified copy is re-encoded on every re-edit.** Restoring a project
+  decodes its rectified JPEG and re-saving re-encodes it at quality 0.85, so
+  each round through the queue re-edit path costs one generation of lossy
+  compression. Noted against criterion 2 of the resume-editing PRD.
 
 ## Queue
 1. ~~e2e check-count self-reporting~~ done

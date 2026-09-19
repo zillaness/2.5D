@@ -1,6 +1,6 @@
 ---
 file: README.md
-version: 1.0
+version: 1.1
 author: Sam Cao
 created: 2026-07-20
 last_updated: 2026-09-19
@@ -678,10 +678,42 @@ and a knife. Laid out carefully by hand in rows they occupy a 486 by 307 mm
 patch. The nester fits the same twelve into 515 by 222 mm, about a quarter less
 foam, and that comparison is frozen as a test so it cannot quietly get worse.
 
-**None of this has a button yet.** The nester is geometry the module exposes and
-the test suite drives. The Nest control, the profile picker, the saved custom
-profiles and the reserving of label space all live in the Step 4 panel and are
-not wired up, so for now the only way to run it is from code.
+**Running it.** The Step 4 panel carries a **Packing profile** picker and a
+**⧉ Nest** button. One press sorts every unpinned tool and reports what
+happened: how many were nested, how many stayed pinned, how many were packed
+with their labels, and, for anything that did not fit, whether it was too large
+for the container in every allowed turn or whether the drawer simply ran out of
+room. Unplaced tools are left exactly where you had them. **↶ Undo nest** puts
+every tool back where it was in one go, because nesting is one action and not a
+tool-by-tool history.
+
+**Packing settings** opens the seven values underneath the picker: least web,
+comfortable web, rotation step, free rotation, whether a finger notch must stay
+reachable, whether label space is reserved, and how many restarts to run.
+Editing any of them keeps the profile's name and adds *(modified)*, so the
+picker never claims Access is in force when it is not. **Save as…** keeps the
+current settings as your own named profile in this browser, under
+`2p5d.packprofiles.v1`; the two built-ins cannot be overwritten or deleted, and
+a browser that refuses storage says so and still works for the session.
+
+**Comfortable web** is the spread: the spacing past which extra room stops
+earning anything, so a tool crowding its neighbours is pushed down the ranking
+while one that already has room is not rewarded for more. At 0, which is what
+Dense uses, the term is off entirely and the pack is as tight as the nester can
+make it.
+
+**Reserved label space** means a label is not decoration applied afterward but
+foam that has to exist: the glyph box plus its margin is packed as part of the
+tool, so the gap a name needs is there before anything is placed. Two tools
+stacked with 6 mm labels at a 2 mm margin come out 14 mm apart rather than
+sharing the bare 4 mm web. Labels stay horizontal, which is why Access limits
+rotation to quarter turns. Reserving only happens when labelling is actually on;
+the panel says so if you ask for one without the other.
+
+Per tool, the selection panel adds **Pin in place** and **Keep this angle**.
+
+Not wired up yet: seam corridors, which would reserve a clear band where the
+cut template's seams will fall so a tiled drawer's seams miss the pockets.
 
 ## How it works
 

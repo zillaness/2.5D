@@ -1,16 +1,17 @@
 ---
 file: nesting_prd_v1.1.md
-version: 1.2
+version: 1.3
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-13
+last_updated: 2026-09-19
 description: PRD for automatic nesting / auto-sort of tool outlines in 2.5D drawer and toolbox layouts.
 ai_update: Update last_updated and version. Rename file to match. Append changelog at bottom.
 ---
 
 # PRD: Nesting / auto-sort for drawer layouts
 
-Status: **Steps 1 to 4 SHIPPED in v1.25.0, 2026-09-13. Steps 5 to 9 not built.** · 2026-09-04 ·
+Status: **Steps 1 to 8 SHIPPED (1 to 4 in v1.25.0, 5 to 8 in v1.26.0). Step 9,
+seam corridors, not built.** · 2026-09-04 ·
 target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 Sam signed this off and steps 1 to 4 shipped in v1.25.0 on 2026-09-13:
@@ -18,12 +19,33 @@ nestLayout() in js/holders.js as pure geometry, the conflict-freeness property
 test that this document asks to gate the feature on, the notch-reach and
 minimum-web tests, and the 12-tool reference drawer.
 
-Nothing calls it yet. The Nest button, the profile picker, the
-2p5d.packprofiles.v1 custom-profile store, label-space reservation and seam
-corridors are steps 5 to 9 and remain unbuilt, so the nester ships as reachable
-geometry with no user-facing entry point. Success criterion 6 (30 items under
-2 s) is guarded only by a loose 8000 ms ceiling, measuring about 1.3 to 1.5 s
-in the test container.
+v1.26.0 on 2026-09-19 added steps 5 to 8: the profiles as data with their
+normaliser and their "modified" comparison, comfortWeb as a real scoring term,
+label footprints the packer reserves for, the Nest button and profile picker
+with all seven values exposed, the per-item pin and angle lock, undo over the
+whole nest, and the `2p5d.packprofiles.v1` custom-profile store. So the nester
+now has a user-facing entry point.
+
+Two departures from this plan, both recorded where they happened:
+
+- **comfortWeb did not exist in the scorer.** The profile table has listed it
+  since v1.0 of this document, but steps 1 to 4 shipped a scorer with no spread
+  term at all, so a profile carrying `comfortWeb: 12` would have exposed a knob
+  that did nothing. It is now a real term, built so that at `comfortWeb: 0` it
+  is identically zero and every pack that predates it is unchanged.
+- **A reserved label is carried as its own loop, not unioned into the pocket.**
+  This document says "unions the label box into the packed shape". A label sits
+  clear of its pocket by the margin, so that union is two disjoint paths, and
+  every test in `nestLayout` takes one loop. It is carried alongside the pocket
+  the way the finger notch's disc already is, which is the same reservation with
+  none of the multi-path handling.
+
+Still not built: **step 9, seam corridors**, and progress reporting for large
+sets, which step 7 listed. `nestLayout` is synchronous and bounded by its own
+test budget, so a large pack blocks the tab for the second or two it takes;
+chunking it wants a worker and is its own change. Success criterion 6 (30 items
+under 2 s) is still guarded only by a loose 8000 ms ceiling, measuring about
+1.3 to 1.5 s in the test container.
 
 ## Problem
 
@@ -338,22 +360,20 @@ Each step ends green and committed.
 3. **Notch reach + minimum web tests.** Including the adversarial case: a
    notch that would be sealed by a later placement.
 4. **Reference fixture.** The 12-tool drawer from success criterion 2.
-5. **Profiles as data**, before any UI: the two built-in presets as plain
-   objects, the resolution rules, and the "modified" comparison. Tested by
-   asserting that selecting a profile then nesting is identical to setting
-   its values by hand then nesting.
-6. **Label footprints in the packer**: `labelSpace: reserve` unions the label
-   box into the packed shape, plus the per-gap effective-web rule. Tested
-   with a label large enough to force the web open, asserting the gap
-   actually widens rather than the label overlapping.
-7. **UI**: Nest button, a profile picker with every value exposed and
-   editable beneath it, per-item pin / rotation-lock / label controls,
-   progress for large sets, and undo.
-8. **Persistence**: additive project fields for the resolved values plus
-   profile provenance, and the `2p5d.packprofiles.v1` custom-profile store
-   with the container library's write-probe and try/catch treatment.
-9. **Seam corridors**, behind a checkbox, last, once everything above is
-   green.
+5. **Profiles as data**, before any UI. SHIPPED v1.26.0, and it turned out to
+   need `comfortWeb` implemented in the scorer first, since the table had
+   always listed a setting nothing read.
+6. **Label footprints in the packer.** SHIPPED v1.26.0, as a loop carried
+   beside the pocket rather than unioned into it, for the reason above. The
+   test measures the gap: two stacked tools go from a 4 mm web to 14 mm for a
+   6 mm label at a 2 mm margin.
+7. **UI.** SHIPPED v1.26.0, except progress for large sets.
+8. **Persistence.** SHIPPED v1.26.0. The test proves both halves of the
+   resolved-values rule: move a profile after saving a project and the project
+   still reopens on its own numbers with its geometry unchanged, while the
+   panel reads "(modified)" because those numbers no longer agree with the
+   profile of that name.
+9. **Seam corridors**, behind a checkbox, last. NOT BUILT.
 
 Steps 1 to 4 are the feature. Steps 5 to 9 are what makes it usable.
 
@@ -392,6 +412,7 @@ Sign-off to build steps 1 to 4, or a redirect. Nothing in this document has
 been implemented.
 
 ## CHANGELOG
+- v1.3 (2026-09-19): Steps 5 to 8 shipped in v1.26.0. Records the two departures from this plan: comfortWeb had to be implemented in the scorer before profiles could honestly carry it, and a reserved label is carried as its own loop rather than unioned into the pocket, since the union is two disjoint paths. Step 9 and progress reporting remain unbuilt.
 - v1.0 (2026-09-04): Initial draft for sign-off.
 - v1.1 (2026-09-05): Replaced the single density-versus-spread objective with
   named packing profiles (Dense / Access), every value individually exposed
