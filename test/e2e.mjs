@@ -12544,6 +12544,166 @@ check('each mask is cropped to its own bounding box, which is what makes a dozen
 check('an empty drawer returns an empty array, never null',
   scanSeg.none === 0, `returned ${scanSeg.none}`);
 
+// ---------- drawer scan step 3: masks to millimetre parts ----------
+// scanParts runs retrace()'s pipeline, in retrace's order, scoped to one
+// component at a time: millimetres first, then collapse, simplify, smooth. The
+// order is load-bearing, and the grouping is component labelling rather than
+// any bounding-box clustering, which is what lets two interleaved tools stay
+// two tools.
+//
+// Pure module work on a fabricated canvas; no page state is touched.
+const scanParts = await page.evaluate(async () => {
+  const { computeDiffMap, segmentObjects } = await import('/js/segment.js');
+  const { scanParts, SCAN_DEFAULTS } = await import('/js/scan.js');
+
+  // 4 px/mm, so the fixture's millimetres are quarter-pixels and the
+  // tolerances mean something.
+  const PPM = 4;
+  const c = document.createElement('canvas');
+  c.width = 480; c.height = 400;             // 120 x 100 mm of drawer
+  const g = c.getContext('2d');
+  g.fillStyle = '#b0b0b0'; g.fillRect(0, 0, c.width, c.height);
+  const mm = v => Math.round(v * PPM);
+  const box = (x, y, w, h, fill) => {
+    g.fillStyle = fill;
+    g.fillRect(mm(x), mm(y), mm(w), mm(h));
+  };
+
+  // An L, and a block tucked into its inner corner. Their bounding boxes
+  // overlap; their outlines do not touch. This is the case the PRD rejects
+  // loopsToViews for, and the one a bbox clusterer gets wrong.
+  g.fillStyle = '#2c2c2c';
+  g.beginPath();
+  g.moveTo(mm(10), mm(10)); g.lineTo(mm(46), mm(10)); g.lineTo(mm(46), mm(20));
+  g.lineTo(mm(20), mm(20)); g.lineTo(mm(20), mm(50)); g.lineTo(mm(10), mm(50));
+  g.closePath(); g.fill();
+  box(26, 26, 18, 18, '#2c2c2c');           // the block in the L's corner
+
+  // A tool with a real through-hole in it.
+  box(60, 12, 40, 24, '#2c2c2c');
+  box(76, 20, 8, 8, '#b0b0b0');             // 8 x 8 mm hole, liner coloured
+
+  // Reading order bait: this one's top edge is LOWER on the page than the
+  // next, so a sort that just followed the segmenter's raster order would put
+  // them the wrong way round.
+  box(70, 62, 26, 20, '#2c2c2c');           // right, band 2
+  box(14, 66, 26, 20, '#2c2c2c');           // left, band 2, but found later
+
+  const dm = computeDiffMap(c);
+  const masks = segmentObjects(dm,
+    { threshold: 40, cleanupRadius: 1, marginPx: 4, minAreaPx: 60 });
+  const parts = scanParts(masks, PPM);
+
+  const bb = p => p.bbox;
+  const overlaps = (a, b) =>
+    a.minX < b.maxX && b.minX < a.maxX && a.minY < b.maxY && b.minY < a.maxY;
+  const byName = Object.fromEntries(parts.map(p => [p.name, p]));
+  // The L is the part whose bbox contains the block's.
+  const L = parts.find(p => bb(p).w > 30 && bb(p).h > 30);
+  const block = parts.find(p => p !== L && bb(p).w < 25 && bb(p).h < 25 && bb(p).minY < 50);
+  const holed = parts.find(p => p.holes.length > 0);
+
+  // Deep copy at the boundary: no two parts may share a point object, and no
+  // part may share one with its own hole.
+  const ids = new Set();
+  let shared = false;
+  for (const p of parts) {
+    for (const loop of [p.outer, ...p.holes]) {
+      for (const pt of loop) {
+        if (ids.has(pt)) shared = true;
+        ids.add(pt);
+      }
+    }
+  }
+
+  // The 2 mm feature again, but now through the whole pipeline rather than off
+  // the canvas: a 2 mm wide bar has to survive segmentation, tracing, simplify
+  // and smooth and still measure 2 mm.
+  const c2 = document.createElement('canvas');
+  c2.width = 400; c2.height = 200;
+  const g2 = c2.getContext('2d');
+  g2.fillStyle = '#b0b0b0'; g2.fillRect(0, 0, 400, 200);
+  g2.fillStyle = '#2c2c2c';
+  g2.fillRect(Math.round(20 * PPM), Math.round(10 * PPM), Math.round(2 * PPM), Math.round(30 * PPM));
+  const thin = scanParts(
+    segmentObjects(computeDiffMap(c2), { threshold: 40, cleanupRadius: 0, marginPx: 4, minAreaPx: 40 }),
+    PPM, { smooth: 0, simplify: 0.2 });
+
+  // The sliver gate must not be an orientation lottery. A long thin bar at 45
+  // degrees fills about 0.17 of its bounding box, which js/regions.js's 0.25
+  // would reject outright and silently.
+  const c3 = document.createElement('canvas');
+  c3.width = 600; c3.height = 600;
+  const g3 = c3.getContext('2d');
+  g3.fillStyle = '#b0b0b0'; g3.fillRect(0, 0, 600, 600);
+  g3.save();
+  g3.translate(300, 300); g3.rotate(Math.PI / 4);
+  g3.fillStyle = '#2c2c2c';
+  g3.fillRect(-Math.round(75 * PPM) / 2, -Math.round(8 * PPM) / 2,
+    Math.round(75 * PPM), Math.round(8 * PPM));
+  g3.restore();
+  const diag = scanParts(
+    segmentObjects(computeDiffMap(c3), { threshold: 40, cleanupRadius: 1, marginPx: 4, minAreaPx: 200 }),
+    PPM);
+  const diagFill = diag.length
+    ? diag[0].area / (diag[0].bbox.w * diag[0].bbox.h) : null;
+
+  return {
+    n: parts.length, names: parts.map(p => p.name),
+    order: parts.map(p => [Math.round(bb(p).minX), Math.round(bb(p).minY)]),
+    bothPresent: !!(L && block),
+    bboxesOverlap: !!(L && block && overlaps(bb(L), bb(block))),
+    lHoles: L ? L.holes.length : -1,
+    blockHoles: block ? block.holes.length : -1,
+    holedName: holed ? holed.name : null,
+    holeCount: holed ? holed.holes.length : 0,
+    holeArea: holed && holed.holes.length
+      ? Math.round(Math.abs(holed.holes[0].reduce((a, p, i, q) => {
+        const r = q[(i + 1) % q.length];
+        return a + (p.x * r.y - r.x * p.y);
+      }, 0) / 2)) : 0,
+    shared,
+    thinN: thin.length,
+    thinW: thin.length ? Math.round(thin[0].bbox.w * 100) / 100 : null,
+    diagN: diag.length, diagFill: diagFill && Math.round(diagFill * 1000) / 1000,
+    regionsGate: 0.25, scanGate: SCAN_DEFAULTS.minFill,
+  };
+});
+
+check('two tools whose bounding boxes overlap but whose outlines do not stay two tools',
+  scanParts.bothPresent && scanParts.bboxesOverlap &&
+  scanParts.lHoles === 0 && scanParts.blockHoles === 0,
+  `the L and the block tucked into its corner both came back with overlapping bounding ` +
+  `boxes (${scanParts.bboxesOverlap}), and neither swallowed the other as a hole ` +
+  `(${scanParts.lHoles}, ${scanParts.blockHoles})`);
+
+check('a through-hole stays a hole of its own tool, at roughly its drawn area',
+  scanParts.holeCount === 1 && Math.abs(scanParts.holeArea - 64) <= 12,
+  `${scanParts.holedName} carries ${scanParts.holeCount} hole of about ` +
+  `${scanParts.holeArea} mm² against the 8 × 8 drawn`);
+
+check('parts come back in reading order, not in the order the flood fill found them',
+  scanParts.n === 5 &&
+  JSON.stringify(scanParts.names) === JSON.stringify(
+    ['Tool 1', 'Tool 2', 'Tool 3', 'Tool 4', 'Tool 5']) &&
+  scanParts.order[3][0] < scanParts.order[4][0] &&
+  scanParts.order[3][1] > scanParts.order[2][1],
+  `${scanParts.n} parts at ${JSON.stringify(scanParts.order)}; the second band reads ` +
+  'left to right even though the right-hand tool sits higher');
+
+check('no two parts share a point object, so editing one can never move another',
+  !scanParts.shared, `shared vertices: ${scanParts.shared}`);
+
+check('a 2 mm feature survives the whole pipeline, not just the warp',
+  scanParts.thinN === 1 && Math.abs(scanParts.thinW - 2) <= 0.3,
+  `traced ${scanParts.thinW} mm wide against 2`);
+
+check('a long tool laid at 45° is still a tool, which the region suggester’s gate would refuse',
+  scanParts.diagN === 1 && scanParts.diagFill < scanParts.regionsGate &&
+  scanParts.diagFill > scanParts.scanGate,
+  `it fills ${scanParts.diagFill} of its bounding box: under the region suggester's ` +
+  `${scanParts.regionsGate}, over the scan's ${scanParts.scanGate}`);
+
 // ---------- the nest that yields (nesting PRD, criterion 6) ----------
 // nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
 // packers to keep agreeing. The async one yields a macrotask between items, so
