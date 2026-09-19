@@ -6,7 +6,8 @@ import { GRID_PITCHES, gridPitchMm, gridDims, analyzeGrid, autoCount } from './g
 import { rectify } from './homography.js';
 import { estimateDistortion } from './lens.js';
 import { detectPaperCorners } from './detectPaper.js';
-import { computeDiffMap, otsuThreshold, segmentObject } from './segment.js';
+import { computeDiffMap, otsuThreshold, segmentObject, segmentObjects } from './segment.js';
+import { scanParts, SCAN_DEFAULTS } from './scan.js';
 import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
@@ -193,7 +194,14 @@ const traceEditor = new TraceEditor($('traceCanvas'), {
     const si = traceEditor.selectedSectionIndex();
     if (si >= 1) { state.selRegion = si; refreshModelFields(); }
   },
-  onDraw: () => positionHoleTag(),
+  onDraw: (ctx, vp) => {
+    // Guarded, and positionHoleTag stays LAST. A throw in here would take the
+    // hole tag down with it for the rest of the session, and the symptom (the
+    // tag stops following holes) surfaces nowhere near the scan.
+    try { if (ctx && vp) scanDrawOverlay(ctx, vp); } catch { /* overlay only */ }
+    positionHoleTag();
+  },
+  onScanPick: mm => scanPickAt(mm),
   onHolePlaced: () => {
     syncHolePanel();
     positionHoleTag();
@@ -327,9 +335,20 @@ function goStep(n) {
   // Step 4 organises a drawer from the library or a folder, so it is the one
   // step past the first that needs no photo and no trace.
   if (n >= 2 && n !== 4 && !state.image && !state.rect) return; // rect alone = restored project
-  if (n === 2 && state.rectDirty && state.image) {
+  // ...unless a drawer scan is being reviewed. retrace() ends in
+  // setTrace(outer, holes): a fresh SINGLE-TOOL segmentation of the drawer,
+  // the largest blob as one outline with every other tool as its holes. And
+  // state.rectDirty is set by any corner nudge, by rotating the photo, by
+  // loading a file and by the queue clearing a trace. Without this guard, a
+  // user who scans a drawer, glances at Step 1, moves a handle and comes back
+  // loses every candidate and every in-flight edit, silently, in what is the
+  // most common movement in the whole feature.
+  if (n === 2 && state.rectDirty && state.image && !scanActive()) {
     if (!doRectify()) return;
-    retrace();
+    // A drawer is not retraced as one object. scanMaybeReview takes over the
+    // step when the scan is on, and returns false when it found nothing, in
+    // which case the ordinary single-tool retrace is still the right thing.
+    if (!scanMaybeReview()) retrace();
   }
   state.step = n;
   for (let i = 1; i <= 4; i++) {
@@ -349,6 +368,9 @@ function goStep(n) {
     // slider input, and at 7.3 megapixels of output over a 12 megapixel source
     // that queues multi-second main-thread warps on a drag.
     $('lensRow').hidden = state.reference !== 'rect' || scanOn();
+    // Which face of Step 2 is showing has to survive a trip to Step 4 and back.
+    $('scanPanel').hidden = !scanActive();
+    $('traceControls').hidden = scanActive();
     $('lensVal').textContent = state.lens.k1.toFixed(3);
     updateTraceInfo(); // also refreshes the optional underside entry point
     traceEditor.draw();
@@ -3827,6 +3849,281 @@ function layPlaceTool(src, at) {
   return state.layout.items.length - 1;
 }
 
+// ---------- reviewing a drawer scan (drawer scan, plan step 5) ----------
+//
+// A mode on Step 2 rather than a modal, so it reuses the trace canvas, its
+// viewport and the rectified drawer image instead of growing a second pan and
+// zoom that would have to be kept in register with the first.
+const scanActive = () => !!(state.scan && state.scan.active);
+
+// The margin the scan clears, in pixels. state.seg.marginMm is 2, which at
+// scan resolution is an eleven pixel strip cleared on every side: fine for a
+// sheet of paper, where the object is never at the edge, and wrong for a
+// drawer, where a tool commonly sits within 2 mm of a wall and would be
+// clipped or split. Two pixels is enough to swallow the warp's own edge.
+const SCAN_MARGIN_PX = 2;
+
+// Segment the rectified drawer and trace everything in it. Returns the parts,
+// or [] when nothing survives.
+function scanRun() {
+  if (!state.rect) return [];
+  const ppm = state.rect.pxPerMm;
+  const dm = state.diffMap || computeDiffMap(state.rect.canvas);
+  // A tenth of a percent of the drawer, floored at 30 square millimetres. The
+  // percentage wins on a big drawer and the floor on a small one, and either
+  // way a loose bolt at about 20 square millimetres is not a tool that gets a
+  // pocket.
+  const minAreaPx = Math.max(
+    Math.round(SCAN_DEFAULTS.minAreaMm2 * ppm * ppm),
+    Math.round(0.0005 * dm.w * dm.h));
+  const masks = segmentObjects(dm, {
+    threshold: state.seg.threshold,
+    cleanupRadius: state.seg.cleanup,
+    marginPx: SCAN_MARGIN_PX,
+    minAreaPx,
+  });
+  return scanParts(masks, ppm, {
+    simplify: state.seg.simplify,
+    smooth: state.seg.smooth,
+    detectHoles: state.seg.detectHoles,
+  });
+}
+
+// The candidates, drawn over the photo in the trace editor's own draw pass.
+// Screen space at device pixel ratio, with the world transform already
+// restored, so millimetres go through pxPerMm and then vp.toScreen().
+function scanDrawOverlay(ctx, vp) {
+  if (!scanActive() || !state.rect) return;
+  const ppm = state.rect.pxPerMm;
+  const parts = state.scan.parts || [];
+  const toS = p => vp.toScreen({ x: p.x * ppm, y: p.y * ppm });
+  ctx.save();
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    const path = loop => {
+      ctx.beginPath();
+      loop.forEach((p, k) => {
+        const q = toS(p);
+        if (k === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y);
+      });
+      ctx.closePath();
+    };
+    const on = part.picked !== false;
+    path(part.outer);
+    ctx.fillStyle = on ? 'rgba(90,170,255,0.22)' : 'rgba(150,150,150,0.10)';
+    ctx.fill();
+    for (const hole of part.holes) {
+      path(hole);
+      ctx.fillStyle = 'rgba(20,24,30,0.55)';
+      ctx.fill();
+    }
+    path(part.outer);
+    ctx.lineWidth = i === state.scan.sel ? 3 : 1.5;
+    ctx.strokeStyle = on
+      ? (i === state.scan.sel ? '#ffd479' : '#5aaaff')
+      : 'rgba(170,170,170,0.7)';
+    ctx.setLineDash(on ? [] : [5, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // The name, at the top-left of the part, so it reads against the photo.
+    const a = toS({ x: part.bbox.minX, y: part.bbox.minY });
+    ctx.font = '600 12px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillStyle = on ? '#ffffff' : 'rgba(210,210,210,0.8)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+    ctx.lineWidth = 3;
+    ctx.strokeText(part.name, a.x, a.y - 3);
+    ctx.fillText(part.name, a.x, a.y - 3);
+  }
+  ctx.restore();
+}
+
+// A press on the drawer picks the candidate under it. Smallest first, so a
+// little tool lying on a big one wins rather than being unreachable.
+function scanPickAt(mm) {
+  if (!scanActive()) return;
+  const parts = state.scan.parts || [];
+  const order = parts.map((p, i) => i)
+    .sort((a, b) => parts[a].area - parts[b].area);
+  for (const i of order) {
+    if (pointInPolygon(mm, parts[i].outer)) {
+      state.scan.sel = i;
+      parts[i].picked = parts[i].picked === false;
+      scanSyncPanel();
+      traceEditor.draw();
+      return;
+    }
+  }
+  state.scan.sel = -1;
+  scanSyncPanel();
+  traceEditor.draw();
+}
+
+function scanSyncPanel() {
+  const parts = (state.scan && state.scan.parts) || [];
+  const on = parts.filter(p => p.picked !== false).length;
+  const list = $('scanList');
+  list.textContent = '';
+  parts.forEach((part, i) => {
+    const row = document.createElement('div');
+    row.className = 'scan-row';
+    row.dataset.i = String(i);
+    row.style.cssText =
+      'display:flex; align-items:center; gap:6px; padding:3px 4px; border-radius:4px; ' +
+      (i === state.scan.sel ? 'background:var(--bg2)' : '');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = part.picked !== false;
+    box.title = 'Place this tool in the drawer';
+    box.addEventListener('change', () => {
+      part.picked = box.checked;
+      scanSyncPanel();
+      traceEditor.draw();
+    });
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.value = part.name;
+    name.className = 'scan-name';
+    name.style.cssText = 'flex:1; min-width:0';
+    name.title = 'What this tool is called. It is also what gets engraved if labels are on.';
+    name.addEventListener('change', () => {
+      part.name = name.value.trim() || part.name;
+      name.value = part.name;
+      traceEditor.draw();
+    });
+    const area = document.createElement('span');
+    area.className = 'hint';
+    area.style.cssText = 'margin:0; font-size:11px; white-space:nowrap';
+    area.textContent = `${Math.round(part.bbox.w)} × ${Math.round(part.bbox.h)} mm`;
+    row.append(box, name, area);
+    row.addEventListener('click', e => {
+      if (e.target === box || e.target === name) return;
+      state.scan.sel = i;
+      scanSyncPanel();
+      traceEditor.draw();
+    });
+    list.appendChild(row);
+  });
+  $('scanReviewHint').textContent = parts.length
+    ? `${parts.length} shape${parts.length === 1 ? '' : 's'} found, ${on} ticked. ` +
+      'Click a tool on the photo to tick or untick it, and rename anything you will ' +
+      'want engraved. Two tools that were touching come back as one shape.'
+    : 'Nothing was found. Check the corners are on the drawer, that the liner is ' +
+      'clear around the edge, and that the tools contrast with it.';
+  $('scanPlaceBtn').disabled = !on;
+  $('scanPlaceBtn').textContent = on === 1
+    ? 'Place this tool \u25b8' : `Place these ${on} tools \u25b8`;
+}
+
+// Enter the review. Everything the single-trace editor was showing goes, and
+// the tool buttons go with it: 'scan' is not one of them, so a click would
+// otherwise leave the mode with the review panel still on screen.
+function scanEnterReview(parts) {
+  if (!state.rect) { toast('Rectify the drawer first.'); return false; }
+  // The underside view locks the outline and makes setMode refuse everything
+  // but region and pan, so it has to be left before the mode can change.
+  if (state.back.showing) exitUnderside();
+  state.scan.active = true;
+  state.scan.parts = parts;
+  state.scan.sel = -1;
+  // A previous tool's sections draw in cyan over the drawer and are
+  // click-draggable, and traceEditor.sections IS state.regions, the same array.
+  state.regions.length = 0;
+  state.regions.push({
+    name: 'Base', pts: null, thickness: 5, zBase: 0,
+    top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 },
+  });
+  state.selRegion = 0;
+  traceEditor.setSections(state.regions);
+  traceEditor.setTrace([], []);
+  traceEditor.setCircles([]);
+  traceEditor.setMaskOverlay(null);
+  traceEditor.setMode('scan');
+  $('scanPanel').hidden = false;
+  $('traceControls').hidden = true;
+  $('panel2Title').textContent = 'Drawer scan \u2014 review';
+  for (const b of document.querySelectorAll('.tool-btn')) b.disabled = true;
+  scanSyncPanel();
+  refreshModelFields();
+  updateStepButtons();
+  goStep(2);
+  traceEditor.draw();
+  return true;
+}
+
+function scanExitReview() {
+  if (!state.scan) return;
+  state.scan.active = false;
+  state.scan.parts = [];
+  state.scan.sel = -1;
+  $('scanPanel').hidden = true;
+  $('traceControls').hidden = false;
+  $('panel2Title').textContent = 'Trace & holes';
+  for (const b of document.querySelectorAll('.tool-btn')) b.disabled = false;
+  traceEditor.setMode('edit');
+  traceEditor.draw();
+  updateStepButtons();
+}
+
+// Entering Step 2 with a drawer loaded scans it, rather than asking for one
+// more button press to do the only thing this mode is for. Only once: a review
+// already in progress is not re-run behind the user's back.
+function scanMaybeReview() {
+  if (!scanOn() || scanActive() || !state.rect) return false;
+  const parts = scanRun();
+  if (!parts.length) {
+    toast('Nothing in that drawer segmented as a tool. Check the corners, the ' +
+      'clear liner around the edge, and the detection threshold.', 7000);
+    return false;
+  }
+  scanEnterReview(parts);
+  toast(`Found ${parts.length} shape${parts.length === 1 ? '' : 's'} in the drawer.`, 5000);
+  return true;
+}
+
+$('scanAllBtn').addEventListener('click', () => {
+  for (const p of state.scan.parts) p.picked = true;
+  scanSyncPanel(); traceEditor.draw();
+});
+$('scanNoneBtn').addEventListener('click', () => {
+  for (const p of state.scan.parts) p.picked = false;
+  scanSyncPanel(); traceEditor.draw();
+});
+$('scanRedoBtn').addEventListener('click', () => {
+  const parts = scanRun();
+  if (!parts.length) { toast('Still nothing. Try a lower detection threshold.'); return; }
+  state.scan.parts = parts;
+  state.scan.sel = -1;
+  scanSyncPanel();
+  traceEditor.draw();
+  toast(`Found ${parts.length} shape${parts.length === 1 ? '' : 's'}.`);
+});
+$('scanCancelBtn').addEventListener('click', () => {
+  scanExitReview();
+  toast('Scan cancelled. The drawer photo is still loaded.');
+});
+$('scanPlaceBtn').addEventListener('click', () => { scanPlaceReviewed(); });
+
+// Accept the ticked candidates: they become the drawer, and Step 4 opens on it.
+function scanPlaceReviewed() {
+  const picked = (state.scan.parts || []).filter(p => p.picked !== false);
+  if (!picked.length) { toast('Tick at least one tool first.'); return null; }
+  const { w, h } = currentPaper();
+  const res = scanPlaceParts(picked, { w, h });
+  scanExitReview();
+  goStep(4);
+  const bits = [`Placed ${res.placed} tool${res.placed === 1 ? '' : 's'} in a ` +
+    `${fmtDim(w)} × ${fmtDim(h)} mm drawer`];
+  if (res.nearWall) {
+    bits.push(`${res.nearWall} of them sit inside the ${fmtDim(layBorderEff())} mm border, ` +
+      'so the insert will not build until you move them or reduce the border');
+  }
+  bits.push('every tool is pinned where it was photographed; untick a pin to let Nest move one');
+  toast(`${bits.join('. ')}.`, 8000);
+  return res;
+}
+
 // ---------- landing a drawer scan in the layout (drawer scan, plan step 4) ----------
 //
 // Drawer millimetres to layout millimetres is +5 on both axes, and it is worth
@@ -6696,6 +6993,14 @@ window.__app = {
     pose: part => scanPose(part),
     origin: SCAN_ORIGIN_MM,
     placeTool: (src, at) => layPlaceTool(src, at),
+    run: () => scanRun(),
+    review: parts => scanEnterReview(parts),
+    maybeReview: () => scanMaybeReview(),
+    exit: () => scanExitReview(),
+    pick: mm => scanPickAt(mm),
+    accept: () => scanPlaceReviewed(),
+    get active() { return scanActive(); },
+    get parts() { return (state.scan && state.scan.parts) || []; },
     get state() { return state.scan; },
   },
   // The autosave slot: its clock, so a test can hold it still, and the three

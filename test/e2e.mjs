@@ -12862,6 +12862,177 @@ check('Nest cannot throw away the positions the scan just measured',
 check('a scanned drawer round-trips through the save format with its provenance',
   scanDownstream.roundTrip, `items survived with source and pin intact: ${scanDownstream.roundTrip}`);
 
+// ---------- drawer scan step 5: the review, as a mode on Step 2 ----------
+// It reuses the trace canvas and its viewport rather than growing a second pan
+// and zoom. The candidates are drawn in the editor's own draw pass, so they
+// cannot fall out of register with the photo, and picked with a mode branch of
+// its own, because a left press in 'edit' mode that hits nothing starts a pan
+// and would have swallowed every tick.
+const scanReview = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const before = {
+    step: app.state.step, rect: app.state.rect, image: app.state.image,
+    diffMap: app.state.diffMap, trace: app.traceEditor.getTrace(),
+    reference: app.state.reference, paper: { ...app.state.paper },
+    scan: app.state.scan && { ...app.state.scan },
+    container: structuredClone(app.state.layout.container),
+    items: structuredClone(app.state.layout.items),
+    regions: structuredClone(app.state.regions),
+    mode: app.traceEditor.mode,
+  };
+
+  // A rectified drawer, 120 x 100 mm at 4 px/mm, with five tools in it.
+  const PPM = 4, DW = 120, DH = 100;
+  const c = document.createElement('canvas');
+  c.width = DW * PPM; c.height = DH * PPM;
+  const g = c.getContext('2d');
+  g.fillStyle = '#b0b0b0'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#2c2c2c';
+  const drawn = [[12, 10, 30, 12], [50, 10, 24, 14], [84, 10, 22, 22],
+    [12, 40, 40, 10], [60, 44, 30, 16]];
+  for (const [x, y, w, h] of drawn) {
+    g.fillRect(Math.round(x * PPM), Math.round(y * PPM),
+      Math.round(w * PPM), Math.round(h * PPM));
+  }
+  app.state.rect = { canvas: c, pxPerMm: PPM };
+  app.state.rectDirty = false;
+  app.state.diffMap = null;
+  app.traceEditor.setRectified(c, PPM);
+  app.state.reference = 'rect';
+  app.state.paper = { ...app.state.paper, size: 'custom', customW: DW, customH: DH };
+  app.state.scan = { on: true, active: false, parts: [] };
+
+  const entered = app.scan.maybeReview();
+  await wait(200);
+  const inReview = {
+    entered, active: app.scan.active, n: app.scan.parts.length,
+    mode: app.traceEditor.mode,
+    panelShown: !$('scanPanel').hidden,
+    traceControlsHidden: $('traceControls').hidden,
+    title: $('panel2Title').textContent,
+    toolsDisabled: Array.from(document.querySelectorAll('.tool-btn')).every(b => b.disabled),
+    rows: $('scanList').querySelectorAll('.scan-row').length,
+    // The single-trace editor is empty, so Step 3 is correctly dead: nothing
+    // has been loaded into traceEditor.outer to make it look modellable.
+    step3Dead: $('stepBtn3').disabled,
+    outer: app.traceEditor.getTrace().outer.length,
+    placeLabel: $('scanPlaceBtn').textContent,
+  };
+
+  // Clicking a tool on the photo unticks it, and clicking it again ticks it.
+  const p0 = app.scan.parts[0];
+  const inside = { x: (p0.bbox.minX + p0.bbox.maxX) / 2, y: (p0.bbox.minY + p0.bbox.maxY) / 2 };
+  app.scan.pick(inside);
+  const afterOne = { picked: p0.picked, label: $('scanPlaceBtn').textContent };
+  app.scan.pick(inside);
+  const afterTwo = { picked: p0.picked };
+  // A press on bare liner selects nothing and unticks nothing.
+  app.scan.pick({ x: DW - 4, y: DH - 4 });
+  const onLiner = { sel: app.state.scan.sel, stillTicked: app.scan.parts.every(p => p.picked !== false) };
+
+  // THE dangerous line. rectDirty is set by any corner nudge, by rotating the
+  // photo, by loading a file. Without the guard, coming back to Step 2 runs a
+  // fresh SINGLE-TOOL segmentation of the drawer and every candidate is gone,
+  // silently, in the most common movement in the whole feature.
+  app.state.rectDirty = true;
+  app.state.image = c;                 // goStep's condition also wants an image
+  app.goStep(1);
+  app.goStep(2);
+  await wait(200);
+  const survived = {
+    active: app.scan.active, n: app.scan.parts.length,
+    mode: app.traceEditor.mode,
+    outer: app.traceEditor.getTrace().outer.length,
+    panelShown: !$('scanPanel').hidden,
+  };
+
+  // Untick one, then accept: only the ticked ones land.
+  app.scan.parts[1].picked = false;
+  const placed = app.scan.accept();
+  await wait(200);
+  const after = {
+    placed: placed && placed.placed, step: app.state.step,
+    active: app.scan.active, items: app.state.layout.items.length,
+    panelShown: !$('scanPanel').hidden,
+    traceControlsHidden: $('traceControls').hidden,
+    title: $('panel2Title').textContent,
+    toolsDisabled: Array.from(document.querySelectorAll('.tool-btn')).some(b => b.disabled),
+    mode: app.traceEditor.mode,
+    container: { w: app.state.layout.container.w, h: app.state.layout.container.h },
+  };
+
+  // Hand the page back.
+  app.state.scan = before.scan || { on: false, active: false, parts: [] };
+  app.state.layout.container = before.container;
+  app.state.layout.items.length = 0;
+  for (const it of before.items) app.state.layout.items.push(it);
+  app.state.regions.length = 0;
+  for (const r of before.regions) app.state.regions.push(r);
+  app.state.selRegion = 0;
+  app.traceEditor.setSections(app.state.regions);
+  app.state.reference = before.reference;
+  app.state.paper = before.paper;
+  app.state.rect = before.rect;
+  app.state.image = before.image;
+  app.state.diffMap = before.diffMap;
+  app.state.rectDirty = false;
+  if (before.rect) app.traceEditor.setRectified(before.rect.canvas, before.rect.pxPerMm);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles || []);
+  app.traceEditor.setMode(before.mode || 'edit');
+  app.syncRefControls();
+  app.goStep(4);
+  app.goStep(before.step);
+  app.refreshLayoutEditor();
+  return {
+    inReview, afterOne, afterTwo, onLiner, survived, after,
+    restored: { step: app.state.step, active: app.scan.active },
+  };
+});
+
+check('entering Step 2 with a drawer loaded scans it and opens the review',
+  scanReview.inReview.entered && scanReview.inReview.active &&
+  scanReview.inReview.n === 5 && scanReview.inReview.mode === 'scan' &&
+  scanReview.inReview.panelShown && scanReview.inReview.traceControlsHidden &&
+  scanReview.inReview.rows === 5 && /Drawer scan/.test(scanReview.inReview.title),
+  `${scanReview.inReview.n} candidates, ${scanReview.inReview.rows} rows, editor in ` +
+  `“${scanReview.inReview.mode}” mode, panel “${scanReview.inReview.title}”`);
+
+check('the single-trace controls and tools are out of reach while reviewing, and Step 3 stays dead',
+  scanReview.inReview.toolsDisabled && scanReview.inReview.step3Dead &&
+  scanReview.inReview.outer === 0,
+  `tool buttons disabled ${scanReview.inReview.toolsDisabled}, Step 3 disabled ` +
+  `${scanReview.inReview.step3Dead}, trace editor holding ${scanReview.inReview.outer} points`);
+
+check('clicking a tool on the photo ticks and unticks it; clicking bare liner does neither',
+  scanReview.afterOne.picked === false && scanReview.afterTwo.picked === true &&
+  scanReview.onLiner.sel === -1 && scanReview.onLiner.stillTicked &&
+  /Place these 4 tools/.test(scanReview.afterOne.label),
+  `first click ${scanReview.afterOne.picked}, second ${scanReview.afterTwo.picked}; the ` +
+  `button read “${scanReview.afterOne.label}”; a click on liner left ` +
+  `${scanReview.onLiner.sel} selected`);
+
+check('a trip to Step 1 and back does not quietly retrace the drawer as one tool',
+  scanReview.survived.active && scanReview.survived.n === 5 &&
+  scanReview.survived.mode === 'scan' && scanReview.survived.outer === 0 &&
+  scanReview.survived.panelShown,
+  `after rectDirty and a round trip through Step 1: ${scanReview.survived.n} candidates ` +
+  `still there, editor still holding ${scanReview.survived.outer} points rather than a ` +
+  'single-tool segmentation of the whole drawer');
+
+check('accepting places only the ticked tools and hands Step 2 back as it found it',
+  scanReview.after.placed === 4 && scanReview.after.items === 4 &&
+  scanReview.after.step === 4 && !scanReview.after.active &&
+  !scanReview.after.panelShown && !scanReview.after.traceControlsHidden &&
+  !scanReview.after.toolsDisabled && scanReview.after.mode === 'edit' &&
+  scanReview.after.title === 'Trace & holes' &&
+  scanReview.after.container.w === 120 && scanReview.after.container.h === 100,
+  `${scanReview.after.placed} of 5 placed into a ${scanReview.after.container.w} × ` +
+  `${scanReview.after.container.h} mm drawer; Step 2 back to “${scanReview.after.title}” ` +
+  `in “${scanReview.after.mode}” mode`);
+
 // ---------- the nest that yields (nesting PRD, criterion 6) ----------
 // nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
 // packers to keep agreeing. The async one yields a macrotask between items, so

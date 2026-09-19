@@ -241,6 +241,21 @@
     <section id="panel2" class="panel" hidden>
       <h2 id="panel2Title">Trace &amp; holes</h2>
 
+      <!-- Reviewing a drawer scan. A mode on Step 2, not a modal: it reuses the
+           trace canvas and its pan and zoom rather than growing a second one. -->
+      <div id="scanPanel" class="underside-panel" hidden>
+        <h3 style="margin-top:0">⌗ Drawer scan</h3>
+        <p class="hint" id="scanReviewHint"></p>
+        <div class="btn-row">
+          <button id="scanAllBtn" class="btn small">Tick all</button>
+          <button id="scanNoneBtn" class="btn small">Tick none</button>
+          <button id="scanRedoBtn" class="btn small" title="Segment the drawer again at the current settings">↻ Find again</button>
+        </div>
+        <div id="scanList" style="max-height:260px; overflow:auto; margin:6px 0"></div>
+        <button id="scanPlaceBtn" class="btn primary big">Place these tools ▸</button>
+        <button id="scanCancelBtn" class="btn small">Cancel the scan</button>
+      </div>
+
       <div id="undersidePanel" class="underside-panel" hidden>
         <h3 style="margin-top:0">▽ Underside view</h3>
         <p class="hint">You're looking at the flipped object, aligned to your
@@ -267,6 +282,12 @@
         </div>
       </div>
 
+      <!-- Every control that edits ONE traced outline. Wrapped so the drawer
+           review can hide the lot: the panel has about forty top-level children
+           here and seven of the blocks carry no id at all, so hiding them one at
+           a time would miss some and leave "Re-trace from photo" offered against
+           an empty editor. -->
+      <div id="traceControls">
       <div class="field">
         <label>Detection threshold <span id="threshVal" class="val"></span></label>
         <div class="slider-row">
@@ -569,6 +590,7 @@
           <button id="releaseArcBtn" class="btn small" hidden title="Turn this live tangent fillet back into plain, independently-editable points">Release</button>
         </div>
         <p id="arcLiveNote" class="hint" hidden>Live fillet — stays tangent as you edit the adjacent edges.</p>
+      </div>
       </div>
 
       <p id="traceInfo" class="info"></p>

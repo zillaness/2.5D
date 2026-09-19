@@ -999,6 +999,16 @@ export class TraceEditor {
       return;
     }
 
+    // Reviewing a drawer scan. Without a branch of its own a left press would
+    // fall through to 'edit', which treats a press that hits nothing as the
+    // start of a pan and fires onSelect: the review would look like it worked
+    // and silently swallow every tick.
+    if (this.mode === 'scan') {
+      if (e.button === 0 && this.cb.onScanPick) this.cb.onScanPick(this._screenToMm(sp), e);
+      else this.panning = true;
+      return;
+    }
+
     if (this.mode === 'region' && e.button === 0) {
       // Click to add draft points; commit via double-click or Enter.
       const mm = this._screenToMm(sp);
@@ -2626,7 +2636,13 @@ export class TraceEditor {
       ctx.setLineDash([]);
     }
 
-    if (this.cb.onDraw) this.cb.onDraw();
+    // The context and the viewport go with it, so a caller can draw its own
+    // layer in the same pass rather than keeping a second canvas in register
+    // with this one. By here the world transform is restored, so `ctx` is
+    // screen space at device pixel ratio and vp.toScreen() is the way in.
+    // Re-runs on every pan, wheel, resize and fit, so an overlay drawn from
+    // here cannot fall out of register with the photo.
+    if (this.cb.onDraw) this.cb.onDraw(ctx, this.vp);
   }
 
   // ---- measurement / constraint rendering ----
