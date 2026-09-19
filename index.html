@@ -256,6 +256,17 @@
         <button id="scanCancelBtn" class="btn small">Cancel the scan</button>
       </div>
 
+      <!-- Editing ONE placed tool, sent back from the layout. The escape hatch
+           for a tool the scan traced badly. -->
+      <div id="itemEditPanel" class="underside-panel" hidden>
+        <h3 style="margin-top:0">✎ Editing a placed tool</h3>
+        <p class="hint" id="itemEditHint"></p>
+        <div class="btn-row">
+          <button id="itemApplyBtn" class="btn primary">✓ Apply to the drawer</button>
+          <button id="itemCancelBtn" class="btn small">Discard</button>
+        </div>
+      </div>
+
       <div id="undersidePanel" class="underside-panel" hidden>
         <h3 style="margin-top:0">▽ Underside view</h3>
         <p class="hint">You're looking at the flipped object, aligned to your
@@ -1064,6 +1075,7 @@
               <input type="text" inputmode="decimal" id="laySelNotchDia" value="25">
             </div>
           </div>
+          <button id="laySendStep2Btn" class="btn small" title="Open this tool's outline in Step 2 to edit it point by point, then bring it back.">✎ Edit in Step 2</button>
           <button id="layRemoveBtn" class="btn small">Remove tool</button>
         </div>
         <h3 style="margin:6px 0 0">Insert</h3>

@@ -4124,6 +4124,164 @@ function scanPlaceReviewed() {
   return res;
 }
 
+// ---------- editing one placed tool in Step 2 (drawer scan, plan step 6) ----------
+//
+// The escape hatch, and the thing that makes the exception this feature asks of
+// the batch ingest PRD's quality-bar rule worth granting: a tool the scan
+// traced badly is not stuck that way. It goes back to Step 2 as an ordinary
+// single outline, gets the full point-by-point editor, and comes back.
+//
+// Only outer, holes and circles come back from getTrace(), so everything else
+// the item carries has to be held here and put back: rot, name, thickness,
+// depth, the label and its hand-placed position, the pin, the rotation lock,
+// the finger notch, the provenance and the photo.
+let itemEdit = null;
+
+const bboxCentre = pts => {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+};
+
+function itemEditBegin(i) {
+  const it = state.layout.items[i];
+  if (!it || !it.outer || it.outer.length < 3) return false;
+  if (scanActive()) scanExitReview();
+  if (state.back.showing) exitUnderside();
+
+  // A scanned tool's outline is in drawer millimetres and the rectified drawer
+  // is still loaded, so it can be edited over its own photograph. Anything else
+  // gets the blank backdrop a bare library outline has always been given.
+  const scanned = !!(it.source && it.source.kind === 'scan');
+  const overPhoto = scanned && !!state.rect;
+  let ppm = state.rect ? state.rect.pxPerMm : 4;
+  if (!overPhoto) {
+    let maxX = 0, maxY = 0;
+    for (const p of it.outer) { maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+    ppm = 4;
+    const c = document.createElement('canvas');
+    c.width = Math.max(40, Math.ceil((maxX + 5) * ppm));
+    c.height = Math.max(40, Math.ceil((maxY + 5) * ppm));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#f4f2ec';
+    ctx.fillRect(0, 0, c.width, c.height);
+    state.rect = { canvas: c, pxPerMm: ppm };
+    state.rectDirty = false;
+    state.diffMap = computeDiffMap(c);
+    traceEditor.setRectified(c, ppm);
+  } else {
+    // setBackdrop rather than setRectified: the canvas has not changed, and
+    // setRectified refits the viewport, throwing away a zoom the user set.
+    traceEditor.setBackdrop(state.rect.canvas);
+  }
+
+  itemEdit = {
+    index: i,
+    centre: bboxCentre(it.outer),
+    rest: structuredClone({
+      rot: it.rot, name: it.name, thickness: it.thickness, depth: it.depth,
+      label: it.label, labelAt: it.labelAt, labelRot: it.labelRot,
+      pin: it.pin, rotLock: it.rotLock, notch: it.notch,
+      source: it.source, thumb: it.thumb, labelHeight: it.labelHeight,
+      x: it.x, y: it.y,
+    }),
+    hadRect: overPhoto ? state.rect : null,
+  };
+
+  // One base section that follows this outline, or the previous tool's
+  // sections draw over it and are draggable.
+  state.regions.length = 0;
+  state.regions.push({
+    name: 'Base', pts: null, thickness: it.thickness || 5, zBase: 0,
+    top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 },
+  });
+  state.selRegion = 0;
+  traceEditor.setMaskOverlay(null);
+  traceEditor.setTrace(
+    it.outer.map(p => ({ x: p.x, y: p.y })),
+    (it.holes || []).map(h => h.map(p => ({ x: p.x, y: p.y }))));
+  traceEditor.setCircles(structuredClone(it.circles || []));
+  traceEditor.measurements = [];
+  traceEditor.constraints = [];
+  traceEditor.arcs = [];
+  traceEditor.lines = [];
+  traceEditor._ensureArcIds();
+  traceEditor.setSections(state.regions);
+  traceEditor.setMode('edit');
+  $('itemEditPanel').hidden = false;
+  $('itemEditHint').textContent =
+    `“${it.name}”${overPhoto ? ', over the drawer photo it was scanned from' : ''}. ` +
+    'Edit it as you would any outline. Apply puts it back in the drawer at the same place; ' +
+    'Discard leaves the drawer alone.';
+  state.fileName = it.name || state.fileName;
+  refreshModelFields();
+  updateStepButtons();
+  updateTraceInfo();
+  traceEditor.draw();
+  goStep(2);
+  return true;
+}
+
+function itemEditFinish(apply) {
+  if (!itemEdit) return false;
+  const { index, centre, rest } = itemEdit;
+  const it = state.layout.items[index];
+  if (apply && it) {
+    const t = traceEditor.getTrace();
+    if (!t.outer || t.outer.length < 3) {
+      toast('That outline has fewer than three points, so it cannot go back.');
+      return false;
+    }
+    // getTrace hands back live references into the editor, so everything is
+    // cloned on the way out or a later edit would reach into the drawer.
+    const outer = t.outer.map(p => ({ x: p.x, y: p.y }));
+    const holes = (t.holes || []).map(h => h.map(p => ({ x: p.x, y: p.y })));
+    // x and y ARE the placed position of the outline's own bounding-box
+    // centre, so moving a vertex outward moves that centre and the tool would
+    // otherwise shift in the drawer. The position follows the centre by the
+    // same delta, which leaves every untouched vertex exactly where it was.
+    const c2 = bboxCentre(outer);
+    const dx = c2.x - centre.x, dy = c2.y - centre.y;
+    Object.assign(it, rest);
+    it.outer = outer;
+    it.holes = holes;
+    it.circles = structuredClone(t.circles || []);
+    it.x = rest.x + dx;
+    it.y = rest.y + dy;
+    // The thumbnail's origin lives in that same local frame and is drawn
+    // relative to the bbox centre, so it moves by the same delta or the photo
+    // slides off the tool.
+    if (it.thumb && it.thumb.origin) {
+      it.thumb = structuredClone(it.thumb);
+      it.thumb.origin = { x: it.thumb.origin.x + dx, y: it.thumb.origin.y + dy };
+    }
+  }
+  itemEdit = null;
+  $('itemEditPanel').hidden = true;
+  traceEditor.setTrace([], []);
+  traceEditor.setCircles([]);
+  updateStepButtons();
+  goStep(4);
+  refreshLayoutEditor();
+  syncLaySelPanel(layoutEditor.sel);
+  toast(apply ? `“${it ? it.name : 'That tool'}” updated in the drawer.`
+    : 'Left the drawer as it was.');
+  return true;
+}
+
+$('laySendStep2Btn').addEventListener('click', () => {
+  const i = layoutEditor.sel;
+  if (!(i >= 0) || !state.layout.items[i]) { toast('Pick a tool in the drawer first.'); return; }
+  itemEditBegin(i);
+});
+$('itemApplyBtn').addEventListener('click', () => { itemEditFinish(true); });
+$('itemCancelBtn').addEventListener('click', () => { itemEditFinish(false); });
+
 // ---------- landing a drawer scan in the layout (drawer scan, plan step 4) ----------
 //
 // Drawer millimetres to layout millimetres is +5 on both axes, and it is worth
@@ -6999,6 +7157,9 @@ window.__app = {
     exit: () => scanExitReview(),
     pick: mm => scanPickAt(mm),
     accept: () => scanPlaceReviewed(),
+    edit: i => itemEditBegin(i),
+    finish: apply => itemEditFinish(apply),
+    get editing() { return itemEdit ? itemEdit.index : -1; },
     get active() { return scanActive(); },
     get parts() { return (state.scan && state.scan.parts) || []; },
     get state() { return state.scan; },

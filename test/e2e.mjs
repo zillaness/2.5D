@@ -13033,6 +13033,161 @@ check('accepting places only the ticked tools and hands Step 2 back as it found 
   `${scanReview.after.container.h} mm drawer; Step 2 back to “${scanReview.after.title}” ` +
   `in “${scanReview.after.mode}” mode`);
 
+// ---------- drawer scan step 6: sending one tool back to Step 2 ----------
+// The escape hatch, and what makes the exception this feature asks of the batch
+// ingest PRD worth granting: a tool the scan traced badly is not stuck that
+// way. The hard part is the pose round trip, because x and y ARE the placed
+// position of the outline's own bounding-box centre, so moving a vertex moves
+// that centre and the tool would drift in the drawer unless the position
+// follows it.
+const scanEdit = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const { placeLoop } = await import('/js/holders.js');
+  const before = {
+    step: app.state.step, rect: app.state.rect, image: app.state.image,
+    trace: app.traceEditor.getTrace(), diffMap: app.state.diffMap,
+    container: structuredClone(app.state.layout.container),
+    items: structuredClone(app.state.layout.items),
+    regions: structuredClone(app.state.regions),
+    sel: app.layoutEditor.sel, scan: app.state.scan && { ...app.state.scan },
+    fileName: app.state.fileName,
+  };
+
+  // One scanned tool in a drawer, with everything an item can carry, so the
+  // round trip has something to lose.
+  const O = app.scan.origin;
+  const outer = [{ x: 20, y: 20 }, { x: 60, y: 20 }, { x: 60, y: 45 }, { x: 20, y: 45 }];
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'rect', w: 120, h: 100, r: 0,
+    name: null, outer: null, scale: { x: 1, y: 1 },
+  };
+  app.state.layout.items.length = 0;
+  app.state.layout.items.push({
+    name: 'Tool 1', outer, holes: [[{ x: 30, y: 28 }, { x: 38, y: 28 }, { x: 38, y: 36 }, { x: 30, y: 36 }]],
+    circles: [], thickness: 7, depth: 9, rot: 0,
+    x: 40 + O, y: 32.5 + O,
+    pin: true, rotLock: 'current', label: 'WRENCH',
+    labelAt: { dx: 3, dy: 4 }, labelRot: 15,
+    notch: { x: 40, y: 45, dia: 22 },
+    source: { kind: 'scan' },
+    thumb: { dataUrl: 'data:,x', mmPerPx: 0.25, origin: { x: 20, y: 20 } },
+  });
+  app.layoutEditor.sel = 0;
+  app.goStep(4);
+  app.refreshLayoutEditor();
+
+  const it0 = app.state.layout.items[0];
+  const worldBefore = placeLoop(it0.outer, it0).map(p => ({ x: p.x, y: p.y }));
+
+  const opened = app.scan.edit(0);
+  await wait(200);
+  const inEdit = {
+    opened, editing: app.scan.editing, step: app.state.step,
+    panel: !$('itemEditPanel').hidden,
+    outer: app.traceEditor.getTrace().outer.length,
+    holes: app.traceEditor.getTrace().holes.length,
+    // Over the drawer's own photo, not a synthesised blank, when one is loaded.
+    backdrop: app.state.rect ? app.state.rect.canvas.width : 0,
+    // Step 3 is legitimately alive here: one outline IS loaded and modelling it
+    // is a reasonable thing to want.
+    step3: !$('stepBtn3').disabled,
+  };
+
+  // Drag ONE vertex outward. Every other vertex must come back in exactly the
+  // same place in the drawer, which is the whole of the pose round trip.
+  app.traceEditor.outer[1].x += 10;
+  app.traceEditor.draw();
+  app.scan.finish(true);
+  await wait(200);
+
+  const it1 = app.state.layout.items[0];
+  const worldAfter = placeLoop(it1.outer, it1).map(p => ({ x: p.x, y: p.y }));
+  const drift = worldBefore.reduce((m, p, i) => {
+    if (i === 1) return m;                     // the vertex that was moved
+    return Math.max(m, Math.abs(p.x - worldAfter[i].x), Math.abs(p.y - worldAfter[i].y));
+  }, 0);
+  const grew = worldAfter[1].x - worldBefore[1].x;
+
+  const kept = {
+    rot: it1.rot, name: it1.name, thickness: it1.thickness, depth: it1.depth,
+    pin: it1.pin, rotLock: it1.rotLock, label: it1.label,
+    labelAt: it1.labelAt, labelRot: it1.labelRot,
+    notch: it1.notch && it1.notch.dia, source: it1.source && it1.source.kind,
+    holes: it1.holes.length,
+    thumbMoved: it1.thumb.origin.x - 20,
+    xMoved: Math.round((it1.x - (40 + O)) * 1000) / 1000,
+  };
+  const closed = { panel: !$('itemEditPanel').hidden, step: app.state.step, editing: app.scan.editing };
+
+  // Discard leaves the drawer exactly as it was.
+  const snapshot = JSON.stringify(app.state.layout.items[0]);
+  app.scan.edit(0);
+  await wait(150);
+  app.traceEditor.outer[0].x -= 25;
+  app.scan.finish(false);
+  await wait(150);
+  const discarded = JSON.stringify(app.state.layout.items[0]) === snapshot;
+
+  // Hand the page back.
+  app.state.layout.container = before.container;
+  app.state.layout.items.length = 0;
+  for (const i of before.items) app.state.layout.items.push(i);
+  app.state.regions.length = 0;
+  for (const r of before.regions) app.state.regions.push(r);
+  app.state.selRegion = 0;
+  app.traceEditor.setSections(app.state.regions);
+  app.state.rect = before.rect;
+  app.state.image = before.image;
+  app.state.diffMap = before.diffMap;
+  app.state.fileName = before.fileName;
+  app.state.scan = before.scan || { on: false, active: false, parts: [] };
+  if (before.rect) app.traceEditor.setRectified(before.rect.canvas, before.rect.pxPerMm);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles || []);
+  app.layoutEditor.sel = before.sel;
+  app.goStep(4);
+  app.goStep(before.step);
+  app.refreshLayoutEditor();
+  return {
+    inEdit, drift: Math.round(drift * 1e6) / 1e6, grew: Math.round(grew * 1000) / 1000,
+    kept, closed, discarded, restoredStep: app.state.step === before.step,
+  };
+});
+
+check('a placed tool opens in Step 2 over the drawer photo it was scanned from',
+  scanEdit.inEdit.opened && scanEdit.inEdit.editing === 0 &&
+  scanEdit.inEdit.step === 2 && scanEdit.inEdit.panel &&
+  scanEdit.inEdit.outer === 4 && scanEdit.inEdit.holes === 1 &&
+  scanEdit.inEdit.step3,
+  `${scanEdit.inEdit.outer} points and ${scanEdit.inEdit.holes} hole loaded, backdrop ` +
+  `${scanEdit.inEdit.backdrop} px wide, Step 3 live ${scanEdit.inEdit.step3}`);
+
+check('moving one vertex moves only that vertex: everything else stays put in the drawer',
+  scanEdit.drift < 1e-6 && Math.abs(scanEdit.grew - 10) < 1e-6 &&
+  Math.abs(scanEdit.kept.xMoved - 5) < 1e-6,
+  `the edited vertex moved ${scanEdit.grew} mm, every other vertex drifted ` +
+  `${scanEdit.drift} mm, and the tool's stored position followed its own bbox centre by ` +
+  `${scanEdit.kept.xMoved} mm to make that true`);
+
+check('everything the outline does not carry survives the round trip',
+  scanEdit.kept.rot === 0 && scanEdit.kept.name === 'Tool 1' &&
+  scanEdit.kept.thickness === 7 && scanEdit.kept.depth === 9 &&
+  scanEdit.kept.pin === true && scanEdit.kept.rotLock === 'current' &&
+  scanEdit.kept.label === 'WRENCH' && scanEdit.kept.labelRot === 15 &&
+  scanEdit.kept.labelAt.dx === 3 && scanEdit.kept.notch === 22 &&
+  scanEdit.kept.source === 'scan' && scanEdit.kept.holes === 1 &&
+  Math.abs(scanEdit.kept.thumbMoved - 5) < 1e-6,
+  `pin, rotation lock, label “${scanEdit.kept.label}” at ${scanEdit.kept.labelRot}°, the ` +
+  `notch, the provenance and the hole all came back; the thumbnail origin moved ` +
+  `${scanEdit.kept.thumbMoved} mm with the centre so the photo stays on the tool`);
+
+check('discarding leaves the drawer byte for byte as it was, and Step 4 comes back',
+  scanEdit.discarded && !scanEdit.closed.panel && scanEdit.closed.step === 4 &&
+  scanEdit.closed.editing === -1 && scanEdit.restoredStep,
+  `discarded cleanly ${scanEdit.discarded}, back on step ${scanEdit.closed.step}`);
+
 // ---------- the nest that yields (nesting PRD, criterion 6) ----------
 // nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
 // packers to keep agreeing. The async one yields a macrotask between items, so
