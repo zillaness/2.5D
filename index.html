@@ -926,6 +926,74 @@
             </select>
           </div>
         </div>
+        <!-- Auto-sort. nestLayout() has shipped as reachable geometry since
+             v1.25.0 with nothing calling it; this is the call. The profile is
+             a preset, not a mode: picking one seeds every value below and each
+             stays editable, and editing any of them makes the layout read
+             "Access (modified)" so it is never ambiguous which is in force. -->
+        <div class="field-row" id="layNestRow" style="align-items:end">
+          <div class="field" style="flex:1">
+            <label for="layNestProfile">Packing profile</label>
+            <select id="layNestProfile" title="A named bundle of the settings below. Dense packs a toolbox tight; Access leaves room for fingers and labels in a drawer."></select>
+          </div>
+          <button id="layNestBtn" class="btn small" title="Auto-sort every unpinned tool into the container. One undoable action.">&#9033; Nest</button>
+          <button id="layNestUndoBtn" class="btn small" hidden title="Put every tool back exactly where it was before the nest">&#8630; Undo nest</button>
+        </div>
+        <p class="hint" id="layNestInfo" style="margin:2px 0 0"></p>
+        <details id="layNestAdv" style="margin-top:4px">
+          <summary style="cursor:pointer; font-size:12px">Packing settings</summary>
+          <div class="field-row">
+            <div class="field">
+              <label for="layNestMinWeb">Least web (mm)</label>
+              <input type="text" inputmode="decimal" id="layNestMinWeb" value="4" title="The least foam permitted between two pockets, and between a pocket and the border inset.">
+            </div>
+            <div class="field">
+              <label for="layNestComfortWeb">Comfortable web (mm)</label>
+              <input type="text" inputmode="decimal" id="layNestComfortWeb" value="0" title="Spacing past which extra room stops earning anything. 0 turns the spread off entirely and packs as tight as it can.">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="layNestRotStep">Rotation step</label>
+              <select id="layNestRotStep" title="The candidate angles a free tool may take.">
+                <option value="15">15&deg;</option>
+                <option value="30">30&deg;</option>
+                <option value="45">45&deg;</option>
+                <option value="90">90&deg;</option>
+              </select>
+            </div>
+            <div class="field" style="display:flex; align-items:end">
+              <label title="Off restricts every tool to 0 or 180 degrees, so labels stay readable from the front of the drawer."><input type="checkbox" id="layNestRotFree" checked> Free rotation</label>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="layNestNotch">Finger notches</label>
+              <select id="layNestNotch" title="Whether a notch sealed by a later placement rejects that placement or is merely reported.">
+                <option value="warn">Warn if sealed</option>
+                <option value="require">Must stay reachable</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="layNestLabelSpace">Label space</label>
+              <select id="layNestLabelSpace" title="Reserve packs each tool's label as part of its footprint, so the gap it needs exists before anything is placed.">
+                <option value="none">Not reserved</option>
+                <option value="reserve">Reserved with the tool</option>
+              </select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label for="layNestRestarts">Restarts</label>
+              <input type="text" inputmode="decimal" id="layNestRestarts" value="20" title="Bounded seeded restarts. More can find a denser pack and always takes longer. The same input gives the same answer every time.">
+            </div>
+            <div class="field" style="display:flex; align-items:end; gap:4px">
+              <button id="layNestSaveProfile" class="btn small" title="Save these settings as a named profile in this browser">Save as&hellip;</button>
+              <button id="layNestDelProfile" class="btn small" hidden title="Delete this custom profile">Delete</button>
+            </div>
+          </div>
+          <p class="hint" id="layNestStoreWarn" style="margin:2px 0 0" hidden></p>
+        </details>
         <div id="laySelPanel" hidden>
           <p class="hint" id="laySelName" style="margin:0"></p>
           <div class="field">
@@ -944,6 +1012,14 @@
             <div class="field">
               <label for="laySelRot">Rotation (°)</label>
               <input type="text" inputmode="decimal" id="laySelRot" value="0">
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field" style="display:flex; align-items:end">
+              <label title="Keep this tool exactly where it is. Nest packs everything else around it as a fixed obstacle."><input type="checkbox" id="laySelPin"> Pin in place</label>
+            </div>
+            <div class="field" style="display:flex; align-items:end">
+              <label title="Nest may move this tool but not turn it, so it keeps the angle it has now."><input type="checkbox" id="laySelRotLock"> Keep this angle</label>
             </div>
           </div>
           <div class="field-row">

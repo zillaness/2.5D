@@ -23,6 +23,8 @@ import {
   buildFoamInsert, buildLayoutInsert, buildGridfinityBin, buildBaseplate,
   buildLayoutGridBin, gridContainerLoop, buildHolster, roundedRect, splitTiles,
   layoutPockets, layoutLabelGeometry, layoutLabelConflicts, labelMinHeight,
+  nestLayout, applyNest, PACK_PROFILES, PACK_KEYS, packNormalize,
+  packProfileValues, packProfileMatch,
 } from './holders.js';
 import { silhouetteOf, registerBack, renderRegistered } from './backphoto.js';
 import { LayoutEditor, bedLoop, withManualLabelRot } from './ui/layoutEditor.js';
@@ -118,6 +120,12 @@ const state = {
     // snapping existed. Snapping quantises the gesture and never a stored
     // value, so turning it on moves nothing.
     snap: { on: false, pitch: 5 },
+    // The packing settings in force, as RESOLVED VALUES plus the profile name
+    // as provenance only. Never a reference: if a project pointed at a profile
+    // by name, editing that profile would silently change the geometry of
+    // every insert that used it, and a drawer cut six months ago would come
+    // back with different webs.
+    pack: { profile: 'Dense', modified: false, values: packNormalize(PACK_PROFILES[0].values) },
     // Tool labels. Off by default: an unlabelled layout must export exactly
     // what it exports today. `process` drives the minimum legible cap height,
     // which is a property of the machine, not a style preference.
@@ -2680,6 +2688,196 @@ function layConstruction() {
   if (state.layout.container.type === 'grid') return 'pocket';
   return state.layout.construction || 'pocket';
 }
+// ---------- auto-sort: the Nest button and its profiles (nesting steps 7-8) ----------
+//
+// Custom profiles follow the outline library's storage pattern exactly: one
+// versioned key holding a JSON array, behind the same write probe and the same
+// try/catch, so a browser with storage blocked still works for the session and
+// simply cannot keep anything. Built-ins are neither editable nor deletable,
+// and a custom profile that shadows a built-in name is refused rather than
+// silently winning or silently losing.
+const PACK_KEY = '2p5d.packprofiles.v1';
+
+function packCustomLoad() {
+  try {
+    const list = JSON.parse(localStorage.getItem(PACK_KEY) || '[]');
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter(p => p && typeof p.name === 'string' && p.name.trim())
+      .map(p => ({ name: p.name.trim(), values: packNormalize(p.values) }));
+  } catch { return []; }
+}
+function packCustomSave(list) {
+  try { localStorage.setItem(PACK_KEY, JSON.stringify(list)); return true; }
+  catch { return false; }
+}
+function packIsBuiltIn(name) {
+  return PACK_PROFILES.some(p =>
+    p.name.toLowerCase() === String(name || '').trim().toLowerCase());
+}
+
+// Save the settings in force under a name. Returns why it was refused, or null
+// on success, so the caller does the talking and this stays testable.
+function packSaveAs(name) {
+  const n = String(name || '').trim();
+  if (!n) return 'A profile needs a name.';
+  if (packIsBuiltIn(n)) return `“${n}” is a built-in profile and cannot be replaced.`;
+  if (!libAvailable()) return 'This browser is not letting the page store anything, so the profile cannot be kept.';
+  const list = packCustomLoad().filter(p => p.name.toLowerCase() !== n.toLowerCase());
+  list.push({ name: n, values: packNormalize(state.layout.pack.values) });
+  if (!packCustomSave(list)) return 'The profile could not be written to this browser.';
+  state.layout.pack.profile = n;
+  state.layout.pack.modified = false;
+  syncNestPanel();
+  return null;
+}
+function packDelete(name) {
+  const n = String(name || '').trim();
+  if (packIsBuiltIn(n)) return `“${n}” is built in and cannot be deleted.`;
+  const list = packCustomLoad().filter(p => p.name.toLowerCase() !== n.toLowerCase());
+  if (!packCustomSave(list)) return 'The profile could not be removed from this browser.';
+  if (state.layout.pack.profile === n) state.layout.pack.modified = true;
+  syncNestPanel();
+  return null;
+}
+
+// The options the packer actually runs with: the resolved profile values, plus
+// the container's own clearance and border, plus the label metrics. Label
+// space is reserved only when labelling is ON: reserving a gap for a label the
+// build will never cut would open the drawer up for nothing.
+function layNestOpts() {
+  const L = state.layout;
+  const v = packNormalize(L.pack && L.pack.values);
+  const lab = L.labels || {};
+  return {
+    ...v,
+    clearance: L.clearance,
+    border: layBorderEff(),
+    labelSpace: lab.enabled ? v.labelSpace : 'none',
+    labelHeight: lab.height, labelMargin: lab.margin, labelFont: lab.font,
+  };
+}
+
+// Nesting is ONE undoable action: the positions before it, kept whole, so undo
+// is putting them back rather than re-deriving anything.
+let layNestUndoSnap = null;
+
+function syncNestPanel() {
+  const L = state.layout;
+  if (!L.pack) {
+    L.pack = { profile: 'Dense', modified: false, values: packNormalize(PACK_PROFILES[0].values) };
+  }
+  const v = packNormalize(L.pack.values);
+  L.pack.values = v;
+  const custom = packCustomLoad();
+  const match = packProfileMatch(v, custom, L.pack.profile);
+  L.pack.profile = match.name;
+  L.pack.modified = match.modified;
+
+  const sel = $('layNestProfile');
+  sel.textContent = '';
+  for (const p of PACK_PROFILES.concat(custom)) {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = p.builtIn === false || !packIsBuiltIn(p.name)
+      ? `${p.name} (yours)` : p.name;
+    if (p.note) opt.title = p.note;
+    sel.appendChild(opt);
+  }
+  if (match.modified || !match.name) {
+    const opt = document.createElement('option');
+    opt.value = '__modified__';
+    opt.textContent = match.name ? `${match.name} (modified)` : 'Custom (unsaved)';
+    sel.appendChild(opt);
+    sel.value = '__modified__';
+  } else {
+    sel.value = match.name;
+  }
+
+  $('layNestMinWeb').value = fmtDim(v.minWeb);
+  $('layNestComfortWeb').value = fmtDim(v.comfortWeb);
+  $('layNestRotStep').value = String(v.rotationStep);
+  $('layNestRotFree').checked = !!v.rotationFree;
+  $('layNestNotch').value = v.notchPolicy;
+  $('layNestLabelSpace').value = v.labelSpace;
+  $('layNestRestarts').value = String(v.restarts);
+  $('layNestDelProfile').hidden = !(match.name && !packIsBuiltIn(match.name));
+  $('layNestBtn').disabled = !L.items.length;
+  $('layNestUndoBtn').hidden = !layNestUndoSnap;
+  const warn = $('layNestStoreWarn');
+  warn.hidden = libAvailable();
+  warn.textContent = warn.hidden ? ''
+    : 'This browser is not letting the page store anything, so a saved profile would not survive a reload.';
+  // A reserved label with labelling switched off is a gap cut for nothing, so
+  // the panel says which of the two is actually in force.
+  const lab = L.labels || {};
+  if (v.labelSpace === 'reserve' && !lab.enabled) {
+    $('layNestInfo').textContent =
+      'Label space is reserved, but labelling is off, so nothing is being kept clear. Turn labels on to pack the room they need.';
+  }
+}
+
+// Read one packing field back off the panel. Every edit lands here, so the
+// "modified" comparison runs in exactly one place.
+function nestFieldChanged(key, value) {
+  const L = state.layout;
+  L.pack.values = packNormalize({ ...L.pack.values, [key]: value });
+  syncNestPanel();
+}
+
+function layNest() {
+  const L = state.layout;
+  if (!L.items.length) { toast('Nothing to nest — add some tools to the drawer first.'); return null; }
+  const before = L.items.map(it => ({ x: it.x, y: it.y, rot: it.rot }));
+  const res = nestLayout(layContainerLoop(), L.items, layNestOpts());
+  const moved = applyNest(L.items, res);
+  L.items.length = 0;
+  for (const it of moved) L.items.push(it);
+  layNestUndoSnap = before;
+  refreshLayoutEditor();
+  syncLaySelPanel(layoutEditor.sel);
+  syncNestPanel();
+
+  const st = res.stats || {};
+  const n = res.placements.length, miss = res.unplaced.length;
+  const pinned = (st.pinned || []).length;
+  const bits = [`Nested ${n} tool${n === 1 ? '' : 's'}`];
+  if (pinned) bits.push(`${pinned} left pinned`);
+  if (st.labelled) bits.push(`${st.labelled} packed with their labels`);
+  // Honest about failure: what did not fit, and which of the two reasons it is.
+  if (miss) {
+    const big = res.unplaced.filter(u => u.reason === 'tooLarge');
+    const room = res.unplaced.filter(u => u.reason === 'noRoom');
+    if (big.length) bits.push(`${big.length} too large for this container in any allowed turn`);
+    if (room.length) bits.push(`${room.length} with nowhere left to go`);
+    bits.push('left where they were');
+  }
+  if (st.budgetHit) bits.push('the work budget stopped the search early, so a denser pack may exist');
+  if ((st.notchWarnings || []).length) {
+    bits.push(`${st.notchWarnings.length} finger notch${st.notchWarnings.length === 1 ? '' : 'es'} may be sealed`);
+  }
+  $('layNestInfo').textContent = `${bits.join('; ')}.`;
+  toast(miss
+    ? `Nested ${n} of ${n + miss}. The rest are still where you left them.`
+    : `Nested all ${n} tools.`, 5000);
+  return { placed: n, unplaced: miss, stats: st };
+}
+
+function layNestUndoAction() {
+  const snap = layNestUndoSnap;
+  if (!snap) return false;
+  layNestUndoSnap = null;
+  state.layout.items.forEach((it, i) => {
+    if (!snap[i]) return;
+    it.x = snap[i].x; it.y = snap[i].y; it.rot = snap[i].rot;
+  });
+  refreshLayoutEditor();
+  syncLaySelPanel(layoutEditor.sel);
+  syncNestPanel();
+  $('layNestInfo').textContent = 'Nest undone: every tool is back where it was.';
+  return true;
+}
+
 function refreshLayoutEditor() {
   layoutEditor.setBed(layBedView());
   layoutEditor.setSnap(state.layout.snap);
@@ -2869,6 +3067,8 @@ function syncLaySelPanel(i) {
   $('laySelDepth').value = it.depth ? fmtDim(it.depth) : '';
   $('laySelDepth').placeholder = `auto (${fmtDim(it.thickness || state.regions[0].thickness)})`;
   $('laySelRot').value = (it.rot || 0).toFixed(0);
+  $('laySelPin').checked = !!it.pin;
+  $('laySelRotLock').checked = it.rotLock !== undefined;
   $('laySelNotch').checked = !!it.notch;
   $('laySelNotchDia').value = fmtDim(it.notch ? it.notch.dia : 25);
 }
@@ -2878,6 +3078,7 @@ function syncLaySelPanel(i) {
 function openLayoutPanel() {
   refreshLaySelects();
   syncLayoutFields();
+  syncNestPanel();
   syncBedFields();
   syncLabelFields();
   syncLaySelPanel(layoutEditor.sel);
@@ -3309,6 +3510,70 @@ $('laySnapPitch').addEventListener('change', e => {
   const mm = parseFloat(e.target.value);
   if (mm > 0) state.layout.snap.pitch = mm;
   syncSnapFields();
+});
+
+$('layNestBtn').addEventListener('click', () => { layNest(); });
+$('layNestUndoBtn').addEventListener('click', () => { layNestUndoAction(); });
+// Picking a profile SEEDS every value; it does not lock any of them. The
+// "(modified)" row is a readout of where the settings already are, so choosing
+// it is a no-op rather than a way to get back to some other state.
+$('layNestProfile').addEventListener('change', e => {
+  const name = e.target.value;
+  if (name === '__modified__') { syncNestPanel(); return; }
+  const v = packProfileValues(name, packCustomLoad());
+  if (!v) { toast(`No profile named “${name}”.`); syncNestPanel(); return; }
+  state.layout.pack.values = v;
+  state.layout.pack.profile = name;
+  syncNestPanel();
+});
+for (const [id, key] of [['layNestMinWeb', 'minWeb'], ['layNestComfortWeb', 'comfortWeb'],
+  ['layNestRestarts', 'restarts']]) {
+  $(id).addEventListener('change', e => {
+    const n = key === 'restarts' ? parseFloat(e.target.value) : parseDim(e.target.value);
+    nestFieldChanged(key, Number.isFinite(n) ? n : state.layout.pack.values[key]);
+  });
+}
+$('layNestRotStep').addEventListener('change', e =>
+  nestFieldChanged('rotationStep', parseFloat(e.target.value)));
+$('layNestRotFree').addEventListener('change', e =>
+  nestFieldChanged('rotationFree', !!e.target.checked));
+$('layNestNotch').addEventListener('change', e =>
+  nestFieldChanged('notchPolicy', e.target.value));
+$('layNestLabelSpace').addEventListener('change', e =>
+  nestFieldChanged('labelSpace', e.target.value));
+$('layNestSaveProfile').addEventListener('click', () => {
+  const suggested = state.layout.pack.profile && state.layout.pack.modified
+    ? `${state.layout.pack.profile} 2` : '';
+  const name = prompt('Save these packing settings as:', suggested);
+  if (name === null) return;
+  const why = packSaveAs(name);
+  toast(why || `Saved the profile “${String(name).trim()}”.`);
+});
+$('layNestDelProfile').addEventListener('click', () => {
+  const name = state.layout.pack.profile;
+  if (!name || packIsBuiltIn(name)) return;
+  const why = packDelete(name);
+  toast(why || `Deleted the profile “${name}”. The settings stay as they are.`);
+});
+
+// Per-item packing policy. Both are additive and optional on the item, which
+// is what nestLayout already expects, so a project saved before either existed
+// nests exactly as it would have.
+$('laySelPin').addEventListener('change', e => {
+  const it = state.layout.items[layoutEditor.sel];
+  if (!it) return;
+  if (e.target.checked) it.pin = true; else delete it.pin;
+  syncLaySelPanel(layoutEditor.sel);
+  refreshLayoutEditor();
+});
+$('laySelRotLock').addEventListener('change', e => {
+  const it = state.layout.items[layoutEditor.sel];
+  if (!it) return;
+  // 'current' rather than the number: the lock follows the tool if it is
+  // turned by hand afterward, which is what "keep this angle" means to
+  // someone who then turns it.
+  if (e.target.checked) it.rotLock = 'current'; else delete it.rotLock;
+  syncLaySelPanel(layoutEditor.sel);
 });
 for (const [id, key] of [['layBedW', 'w'], ['layBedH', 'h']]) {
   $(id).addEventListener('change', e => {
@@ -5165,6 +5430,17 @@ function loadProject(p, opts = {}) {
         shape: (p.layout.bed && p.layout.bed.shape) || null,
         offset: { x: 0, y: 0, ...((p.layout.bed && p.layout.bed.offset) || {}) },
       },
+      // Additive and optional: the resolved packing values, never the profile
+      // name resolved back into values. Reopening a project must reproduce the
+      // drawer that was cut, so the numbers in the file win over whatever a
+      // profile of that name happens to say today, and a profile that has
+      // since been edited or deleted changes nothing here.
+      pack: (() => {
+        const pk = p.layout.pack || {};
+        const values = packNormalize(pk.values);
+        const match = packProfileMatch(values, packCustomLoad(), pk.profile);
+        return { profile: match.name, modified: match.modified, values };
+      })(),
       // Additive and optional: a project saved before snapping existed has no
       // `snap` key, and must open with it off at the default pitch rather than
       // inheriting whatever grid the drawer before it was placed on, which
@@ -5757,6 +6033,15 @@ window.__app = {
     get traced() { return queueTraced; },
   },
   libFitThumbs,
+  // Auto-sort: the action, its undo, the profile store and the resolved
+  // options the packer is actually handed.
+  nest: {
+    run: () => layNest(), undo: () => layNestUndoAction(),
+    opts: () => layNestOpts(), sync: () => syncNestPanel(),
+    saveAs: name => packSaveAs(name), remove: name => packDelete(name),
+    custom: () => packCustomLoad(), key: PACK_KEY,
+    get pack() { return state.layout.pack; },
+  },
   folderBackend: {
     use: layUseHandle, sync: syncFolderButtons,
     get handle() { return layFolderHandle; },

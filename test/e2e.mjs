@@ -11495,6 +11495,227 @@ check('the snap grid rides in the project and an older project loads with it off
   `round trip ${JSON.stringify(snapGrid.roundTrip.inFile)}, older project ` +
   `${JSON.stringify(snapGrid.older)}, page handed back at step ${snapGrid.restored.step}`);
 
+// ---------- the Nest button, its profiles and what a project keeps (steps 7-8) ----------
+// nestLayout() shipped in v1.25.0 as reachable geometry with nothing calling
+// it. This is the call, plus the rule that decides what reopening a project
+// does: a project stores the resolved NUMBERS and the profile name as
+// provenance only, so editing a profile can never change the geometry of a
+// drawer that was already cut.
+const nestUI = await page.evaluate(async () => {
+  const app = window.__app, ed = app.layoutEditor;
+  const $ = id => document.getElementById(id);
+  const fire = (id, ev = 'change') =>
+    $(id).dispatchEvent(new Event(ev, { bubbles: true }));
+  const restorePoint = app.serializeProject(false);
+  const beforeStep = app.state.step;
+  const beforeStore = localStorage.getItem(app.nest.key);
+
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const tool = (name, w, h, extra = {}) => ({
+    name, outer: rect(w, h), holes: [], circles: [], thickness: 5,
+    depth: null, rot: 0, x: 10, y: 10, ...extra,
+  });
+  const setUp = items => {
+    app.state.layout.container = {
+      ...app.state.layout.container, type: 'rect', w: 200, h: 150, r: 6,
+      name: null, outer: null,
+    };
+    app.state.layout.bed = {
+      ...app.state.layout.bed, preset: 'none', shape: null, offset: { x: 0, y: 0 },
+    };
+    app.state.layout.labels = { ...app.state.layout.labels, enabled: false, extra: [] };
+    app.state.layout.items.length = 0;
+    for (const it of items) app.state.layout.items.push(it);
+    app.goStep(4);
+  };
+  const poses = () => app.state.layout.items.map(it =>
+    ({ x: +it.x.toFixed(4), y: +it.y.toFixed(4), rot: +(it.rot || 0).toFixed(4) }));
+  const conflicts = () => ed.conflicts.collisions.size + ed.conflicts.escaped.size;
+
+  localStorage.removeItem(app.nest.key);
+
+  // --- the button ---
+  // Four tools dropped on top of each other in one corner, which is what
+  // "Add all" leaves behind and what a human would then spend ten minutes
+  // dragging apart.
+  setUp([tool('a', 60, 30), tool('b', 50, 40), tool('c', 40, 40), tool('d', 70, 25)]);
+  app.state.layout.pack.values = app.nest.pack.values;
+  app.nest.sync();
+  const heaped = { poses: poses(), conflicts: conflicts() };
+  $('layNestBtn').click();
+  const nested = {
+    poses: poses(), conflicts: conflicts(),
+    info: $('layNestInfo').textContent,
+    undoShown: !$('layNestUndoBtn').hidden,
+  };
+  // Undo is one action: the positions before it, put back.
+  $('layNestUndoBtn').click();
+  const undone = {
+    poses: poses(), undoShown: !$('layNestUndoBtn').hidden,
+    info: $('layNestInfo').textContent,
+  };
+
+  // --- pinning and the rotation lock ---
+  setUp([
+    tool('pinned', 50, 30, { x: 150, y: 120, pin: true }),
+    tool('locked', 40, 20, { rot: 37, rotLock: 'current' }),
+    tool('free', 60, 30),
+  ]);
+  const pinnedBefore = { ...poses()[0] };
+  $('layNestBtn').click();
+  const withPins = {
+    poses: poses(), conflicts: conflicts(),
+    pinnedMoved: JSON.stringify(poses()[0]) !== JSON.stringify(pinnedBefore),
+    lockedRot: poses()[1].rot,
+  };
+
+  // The per-item controls round-trip through the panel rather than only
+  // through the item.
+  ed.sel = 0; app.syncLaySelPanel(0);
+  const pinBox = { checked: $('laySelPin').checked, lock: $('laySelRotLock').checked };
+  $('laySelPin').checked = false; fire('laySelPin');
+  const unpinned = app.state.layout.items[0].pin === undefined;
+
+  // --- profiles ---
+  setUp([tool('a', 60, 30), tool('b', 50, 40)]);
+  $('layNestProfile').value = 'Access'; fire('layNestProfile');
+  const onAccess = {
+    values: { ...app.nest.pack.values }, profile: app.nest.pack.profile,
+    modified: app.nest.pack.modified,
+    minWebField: $('layNestMinWeb').value, rotFree: $('layNestRotFree').checked,
+    sel: $('layNestProfile').value,
+  };
+  // Editing any value keeps the name and adds "(modified)": never ambiguous
+  // about whether Access is still in force.
+  $('layNestMinWeb').value = '9'; fire('layNestMinWeb');
+  const edited = {
+    minWeb: app.nest.pack.values.minWeb, profile: app.nest.pack.profile,
+    modified: app.nest.pack.modified,
+    sel: $('layNestProfile').value,
+    label: $('layNestProfile').selectedOptions[0].textContent,
+  };
+  // Saving names it; the built-in names are refused.
+  const refused = app.nest.saveAs('Dense');
+  const saved = app.nest.saveAs('Bench drawer');
+  const afterSave = {
+    profile: app.nest.pack.profile, modified: app.nest.pack.modified,
+    custom: app.nest.custom().map(p => p.name),
+    stored: JSON.parse(localStorage.getItem(app.nest.key) || '[]').length,
+    delShown: !$('layNestDelProfile').hidden,
+  };
+
+  // --- what the project keeps ---
+  // Resolved values, plus the name as provenance. Edit the profile afterward
+  // and reopening the project must reproduce the drawer that was cut, not the
+  // profile as it reads today.
+  const savedProject = app.serializeProject(false);
+  const geomBefore = poses();
+  app.nest.saveAs('Bench drawer');  // re-save with the same name, then move it
+  const bumped = app.nest.custom().map(p =>
+    (p.name === 'Bench drawer' ? { ...p, values: { ...p.values, minWeb: 25 } } : p));
+  localStorage.setItem(app.nest.key, JSON.stringify(bumped));
+  app.loadProject(JSON.parse(savedProject));
+  await new Promise(r => setTimeout(r, 400));
+  const reopened = {
+    minWeb: app.state.layout.pack.values.minWeb,
+    profile: app.state.layout.pack.profile,
+    modified: app.state.layout.pack.modified,
+    poses: poses(), sameGeometry: JSON.stringify(poses()) === JSON.stringify(geomBefore),
+  };
+
+  // A project written before any of this existed has no `pack` key and must
+  // open on the defaults rather than on whatever the last drawer used.
+  const old = JSON.parse(savedProject);
+  delete old.layout.pack;
+  app.state.layout.pack.values = { ...app.state.layout.pack.values, minWeb: 17 };
+  app.loadProject(old);
+  await new Promise(r => setTimeout(r, 400));
+  const legacy = {
+    minWeb: app.state.layout.pack.values.minWeb,
+    profile: app.state.layout.pack.profile,
+  };
+
+  // Deleting a custom profile leaves the settings where they are.
+  const delWhy = app.nest.remove('Bench drawer');
+  const afterDel = { custom: app.nest.custom().map(p => p.name) };
+
+  // Hand the page back.
+  if (beforeStore === null) localStorage.removeItem(app.nest.key);
+  else localStorage.setItem(app.nest.key, beforeStore);
+  app.loadProject(JSON.parse(restorePoint));
+  await new Promise(r => setTimeout(r, 400));
+  app.goStep(beforeStep);
+  const restored = { step: app.state.step, items: app.state.layout.items.length };
+
+  return {
+    heaped, nested, undone, withPins, pinBox, unpinned,
+    onAccess, edited, refused, saved, afterSave, reopened, legacy,
+    delWhy, afterDel, restored,
+  };
+});
+
+check('the Nest button sorts a heap of tools into a conflict-free drawer',
+  nestUI.heaped.conflicts > 0 && nestUI.nested.conflicts === 0 &&
+  JSON.stringify(nestUI.nested.poses) !== JSON.stringify(nestUI.heaped.poses) &&
+  /Nested 4 tools/.test(nestUI.nested.info),
+  `${nestUI.heaped.conflicts} conflicting before, ${nestUI.nested.conflicts} after — ` +
+  `${nestUI.nested.info}`);
+
+check('nesting is one undoable action and undo puts every tool back exactly',
+  nestUI.nested.undoShown && !nestUI.undone.undoShown &&
+  JSON.stringify(nestUI.undone.poses) === JSON.stringify(nestUI.heaped.poses),
+  `undo offered ${nestUI.nested.undoShown}, back to the heap ` +
+  `${JSON.stringify(nestUI.undone.poses) === JSON.stringify(nestUI.heaped.poses)}`);
+
+check('a pinned tool keeps its exact place and a locked one keeps its angle',
+  !nestUI.withPins.pinnedMoved && nestUI.withPins.lockedRot === 37 &&
+  nestUI.withPins.conflicts === 0,
+  `pinned moved ${nestUI.withPins.pinnedMoved}, locked tool still at ` +
+  `${nestUI.withPins.lockedRot}°, conflicts ${nestUI.withPins.conflicts}`);
+
+check('the per-item pin and angle lock read and write through the panel',
+  nestUI.pinBox.checked === true && nestUI.pinBox.lock === false && nestUI.unpinned,
+  `panel showed pinned ${nestUI.pinBox.checked}, unticking removed it ${nestUI.unpinned}`);
+
+check('picking a profile seeds every value, and editing one says so without losing the name',
+  nestUI.onAccess.profile === 'Access' && nestUI.onAccess.modified === false &&
+  nestUI.onAccess.values.minWeb === 8 && nestUI.onAccess.values.comfortWeb === 12 &&
+  nestUI.onAccess.rotFree === false && nestUI.onAccess.sel === 'Access' &&
+  nestUI.edited.minWeb === 9 && nestUI.edited.profile === 'Access' &&
+  nestUI.edited.modified === true && nestUI.edited.sel === '__modified__' &&
+  nestUI.edited.label === 'Access (modified)',
+  `Access seeded minWeb ${nestUI.onAccess.values.minWeb}; after an edit the picker reads ` +
+  `“${nestUI.edited.label}”`);
+
+check('a custom profile saves to its own key, and a built-in name is refused',
+  /built-in/.test(nestUI.refused || '') && nestUI.saved === null &&
+  nestUI.afterSave.profile === 'Bench drawer' && nestUI.afterSave.modified === false &&
+  JSON.stringify(nestUI.afterSave.custom) === JSON.stringify(['Bench drawer']) &&
+  nestUI.afterSave.stored === 1 && nestUI.afterSave.delShown,
+  `refused “Dense”: ${nestUI.refused}; stored ${JSON.stringify(nestUI.afterSave.custom)}`);
+
+// And the provenance stays honest in both directions. The numbers are the
+// drawer's, so they do not move; but they no longer agree with the profile of
+// that name, so the panel says "Bench drawer (modified)" rather than claiming
+// a profile is in force that would now cut a different drawer.
+check('a project keeps the resolved numbers, so editing a profile never moves a cut drawer',
+  nestUI.reopened.minWeb === 9 && nestUI.reopened.profile === 'Bench drawer' &&
+  nestUI.reopened.modified === true && nestUI.reopened.sameGeometry,
+  `the profile was moved to minWeb 25 after saving; the project reopened on ` +
+  `${nestUI.reopened.minWeb} and its geometry is unchanged ` +
+  `(${nestUI.reopened.sameGeometry}), reading as “${nestUI.reopened.profile}` +
+  `${nestUI.reopened.modified ? ' (modified)' : ''}”`);
+
+check('a project written before packing settings existed opens on the defaults',
+  nestUI.legacy.minWeb === 4 && nestUI.legacy.profile === 'Dense',
+  `minWeb ${nestUI.legacy.minWeb}, profile ${nestUI.legacy.profile}`);
+
+check('deleting a custom profile leaves the settings alone and hands the page back',
+  nestUI.delWhy === null &&
+  JSON.stringify(nestUI.afterDel.custom) === JSON.stringify([]) &&
+  nestUI.restored.step === 3,
+  `custom now ${JSON.stringify(nestUI.afterDel.custom)}, step ${nestUI.restored.step}`);
+
 // ---------- bed tiling for the cut template ----------
 
 const tiling = await page.evaluate(async () => {
