@@ -332,6 +332,13 @@ function ensureViewer() {
 }
 
 function goStep(n) {
+  // An in-flight "Edit in Step 2" belongs to Step 2. Leaving by a step tab
+  // rather than by Apply or Discard abandons it and puts the session back,
+  // instead of leaving it live to be applied later against a drawer that may
+  // have moved on. A scan review is Step 2's too, but Step 4 is where Place
+  // sends you, so only a move anywhere else ends it.
+  if (n !== 2 && itemEdit) itemEditFinish(false, true);
+  if (n !== 2 && n !== 4 && scanActive()) scanExitReview();
   // Step 4 organises a drawer from the library or a folder, so it is the one
   // step past the first that needs no photo and no trace.
   if (n >= 2 && n !== 4 && !state.image && !state.rect) return; // rect alone = restored project
@@ -3020,6 +3027,15 @@ async function layNest() {
   if (layNestRun) { toast('A nest is already running.'); return null; }
   if (!L.items.length) { toast('Nothing to nest — add some tools to the drawer first.'); return null; }
   const before = L.items.map(it => ({ x: it.x, y: it.y, rot: it.rot }));
+  // The placements come back as INDICES into the list as it was when the pack
+  // started. A pack used to be uninterruptible, so the list could not change
+  // under it; now that it yields, removing or adding a tool mid-run would
+  // apply every placement to the wrong tool, and the undo snapshot above would
+  // put them back wrong too. Identity, not just length: a remove-then-add
+  // leaves the count alone.
+  const roster = L.items.slice();
+  const sameRoster = () =>
+    L.items.length === roster.length && L.items.every((it, i) => it === roster[i]);
   const loop = layContainerLoop();
   const opts = layNestOpts();
   const corridors = layCorridors();
@@ -3035,9 +3051,12 @@ async function layNest() {
     // preference. If keeping them clear costs a tool its place, they go and the
     // pack runs again without them, and the panel says a seam will cross a
     // pocket.
-    if (res && corridors.length && res.unplaced.length) {
+    if (res && corridors.length && res.unplaced.length && !ctl.signal.aborted) {
       const plain = await run(opts);
-      if (plain && plain.placements.length > res.placements.length) {
+      // A cancel during the fallback pack means cancel, not "keep the first
+      // answer": the user asked for nothing to happen.
+      if (ctl.signal.aborted) res = null;
+      else if (plain && plain.placements.length > res.placements.length) {
         res = plain;
         dropped = true;
       }
@@ -3049,6 +3068,13 @@ async function layNest() {
   if (!res) {
     $('layNestInfo').textContent = 'Nest cancelled. Every tool is where it was.';
     toast('Nest cancelled.');
+    return null;
+  }
+  if (!sameRoster()) {
+    $('layNestInfo').textContent =
+      'The drawer changed while the pack was running, so the result was thrown away. ' +
+      'Nothing moved. Press Nest again.';
+    toast('The drawer changed while nesting, so nothing was moved. Press Nest again.', 7000);
     return null;
   }
   const moved = applyNest(L.items, res);
@@ -4130,6 +4156,10 @@ function scanPlaceReviewed() {
   if (!picked.length) { toast('Tick at least one tool first.'); return null; }
   const { w, h } = currentPaper();
   const res = scanPlaceParts(picked, { w, h });
+  if (res.cancelled) {
+    toast('Kept the drawer you had. The scan is still on screen.');
+    return null;
+  }
   scanExitReview();
   goStep(4);
   const bits = [`Placed ${res.placed} tool${res.placed === 1 ? '' : 's'} in a ` +
@@ -4173,6 +4203,19 @@ function itemEditBegin(i) {
   if (scanActive()) scanExitReview();
   if (state.back.showing) exitUnderside();
 
+  // The Step 2 session this is about to borrow, snapshotted BEFORE anything is
+  // swapped. Taken afterwards it would be a snapshot of the replacement, and
+  // putting it back would restore the blank backdrop over the real photo.
+  const session = {
+    rect: state.rect, diffMap: state.diffMap, rectDirty: state.rectDirty,
+    fileName: state.fileName, mode: traceEditor.mode,
+    trace: traceEditor.getTrace(),
+    measurements: traceEditor.measurements,
+    constraints: traceEditor.constraints,
+    arcs: traceEditor.arcs, lines: traceEditor.lines,
+    regions: structuredClone(state.regions), selRegion: state.selRegion,
+  };
+
   // A scanned tool's outline is in drawer millimetres and the rectified drawer
   // is still loaded, so it can be edited over its own photograph. Anything else
   // gets the blank backdrop a bare library outline has always been given.
@@ -4200,8 +4243,16 @@ function itemEditBegin(i) {
   }
 
   itemEdit = {
-    index: i,
+    // The ITEM, not its index. Items can be removed, nested or replaced while
+    // this is open, and an index would then write the edit into whichever tool
+    // had slid into that slot.
+    item: it,
     centre: bboxCentre(it.outer),
+    // Put back on the way out. Without it, editing one tool silently destroys
+    // whatever was being traced, and for a tool that needed a synthesised
+    // backdrop it leaves the drawer's own rectified photo replaced by a blank
+    // canvas, so the next Edit in Step 2 has nothing to draw over.
+    session,
     rest: structuredClone({
       rot: it.rot, name: it.name, thickness: it.thickness, depth: it.depth,
       label: it.label, labelAt: it.labelAt, labelRot: it.labelRot,
@@ -4246,10 +4297,15 @@ function itemEditBegin(i) {
   return true;
 }
 
-function itemEditFinish(apply) {
+function itemEditFinish(apply, quiet) {
   if (!itemEdit) return false;
-  const { index, centre, rest } = itemEdit;
-  const it = state.layout.items[index];
+  const { item, centre, rest, session } = itemEdit;
+  // The tool may have been removed from the drawer while this was open.
+  const index = state.layout.items.indexOf(item);
+  const it = index >= 0 ? item : null;
+  if (apply && !it) {
+    toast('That tool is no longer in the drawer, so there is nothing to put the edit back into.', 7000);
+  }
   if (apply && it) {
     const t = traceEditor.getTrace();
     if (!t.outer || t.outer.length < 3) {
@@ -4282,14 +4338,36 @@ function itemEditFinish(apply) {
   }
   itemEdit = null;
   $('itemEditPanel').hidden = true;
-  traceEditor.setTrace([], []);
-  traceEditor.setCircles([]);
+  // Put Step 2 back as it was found, including the rectified photo, which a
+  // non-scan tool replaces with a synthesised blank one.
+  state.rect = session.rect;
+  state.diffMap = session.diffMap;
+  state.rectDirty = session.rectDirty;
+  state.fileName = session.fileName;
+  state.regions.length = 0;
+  for (const r of session.regions) state.regions.push(r);
+  state.selRegion = session.selRegion;
+  traceEditor.setSections(state.regions);
+  if (session.rect) traceEditor.setRectified(session.rect.canvas, session.rect.pxPerMm);
+  traceEditor.setTrace(session.trace.outer, session.trace.holes);
+  traceEditor.setCircles(session.trace.circles || []);
+  traceEditor.measurements = session.measurements;
+  traceEditor.constraints = session.constraints;
+  traceEditor.arcs = session.arcs;
+  traceEditor.lines = session.lines;
+  traceEditor._ensureArcIds();
+  traceEditor.setMode(session.mode || 'edit');
+  refreshModelFields();
   updateStepButtons();
-  goStep(4);
+  // `quiet` is the abandon-on-leaving path: it must not drag the user to Step 4
+  // when they asked for Step 1, and it is not a decision they announced.
+  if (!quiet) goStep(4);
   refreshLayoutEditor();
   syncLaySelPanel(layoutEditor.sel);
-  toast(apply ? `“${it ? it.name : 'That tool'}” updated in the drawer.`
-    : 'Left the drawer as it was.');
+  toast(quiet
+    ? 'Left that tool as it was: an edit in Step 2 is finished with Apply or Discard.'
+    : (apply ? `“${it ? it.name : 'That tool'}” updated in the drawer.`
+      : 'Left the drawer as it was.'), quiet ? 6000 : 3000);
   return true;
 }
 
@@ -4350,6 +4428,17 @@ function scanPlaceParts(parts, dims) {
   const list = Array.isArray(parts) ? parts : [];
   if (!list.length) return { placed: 0, nearWall: 0 };
   if (dims && dims.w > 10 && dims.h > 10) scanSetContainer(dims.w, dims.h);
+  // The scan IS the drawer, so it replaces what is in it. Silently throwing
+  // away a drawer someone laid out by hand is not a trade to make for them.
+  if (state.layout.items.length) {
+    const n = state.layout.items.length;
+    if (!confirm(
+      `This drawer already holds ${n} tool${n === 1 ? '' : 's'}.\n\n` +
+      'A scan replaces the whole drawer, so those would be removed.\n' +
+      'OK replaces them. Cancel keeps the drawer you have.')) {
+      return { placed: 0, nearWall: 0, cancelled: true };
+    }
+  }
   state.layout.items.length = 0;
   for (const part of list) {
     // Cloned per candidate. layPlaceTool aliases outer, holes and circles
@@ -6163,20 +6252,31 @@ function autosaveTouch() {
   // Nothing to save until there is a trace worth coming back to.
   const t = traceEditor.outer;
   if (!t || t.length < 3) return;
+  // Not while a drawer review or a single-tool edit is in flight: the editor is
+  // then holding a borrowed session, and a snapshot of it is a snapshot of
+  // something that is about to be put back.
+  if (scanActive() || itemEdit) return;
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosavePending = true;
   autosaveTimer = setTimeout(() => { autosaveTimer = null; autosaveFlush(); }, AUTOSAVE_DEBOUNCE);
 }
 
-// serializeProject(true) on purpose: the photo is what makes the restored trace
-// editable, and this slot exists precisely for the case where no sibling photo
-// is on disk to supply it.
+// serializeProject(FALSE), which is the whole of what this needs and a fraction
+// of the cost. `rectified` is written by both forms whenever one exists, and
+// one always does once anything is traced, so the small form restores an
+// editable trace exactly as the large one would. The large one additionally
+// re-encodes the full-resolution original on every write, which on a drawer
+// scan is a multi-megapixel toDataURL on a two second timer behind every settled
+// edit: a visible freeze, for a frame this slot does not need. What is given up
+// is re-marking the corners of a recovered trace, which is not what recovery is
+// for.
 async function autosaveFlush() {
   autosavePending = false;
   const t = traceEditor.outer;
   if (!t || t.length < 3) return false;
+  if (scanActive() || itemEdit) return false;
   return writeAutosave({
-    text: serializeProject(true),
+    text: serializeProject(false),
     name: state.fileName || 'your trace',
     at: autosaveClock(),
   });
@@ -6302,6 +6402,12 @@ function loadProject(p, opts = {}) {
   // Additive and optional: a project written before the drawer scan existed has
   // no `scan` key and must open with it off, not with whatever the last photo
   // used, because the flag changes the rectification resolution.
+  // Any review or single-tool edit belongs to the session being replaced. Left
+  // running, the review's mode and hidden controls would survive into the new
+  // project with no candidates behind them, and Step 2 would sit there
+  // permanently uneditable.
+  if (itemEdit) { itemEdit = null; $('itemEditPanel').hidden = true; }
+  if (scanActive()) scanExitReview();
   state.scan = {
     on: !!(p.scan && p.scan.on), active: false, parts: [],
   };
@@ -7221,7 +7327,9 @@ window.__app = {
     edit: i => itemEditBegin(i),
     autoNamed: () => layAutoNamed().map(it => it.name),
     finish: apply => itemEditFinish(apply),
-    get editing() { return itemEdit ? itemEdit.index : -1; },
+    get editing() {
+      return itemEdit ? state.layout.items.indexOf(itemEdit.item) : -1;
+    },
     get active() { return scanActive(); },
     get parts() { return (state.scan && state.scan.parts) || []; },
     get state() { return state.scan; },

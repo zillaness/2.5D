@@ -13306,6 +13306,216 @@ check('the export warns about the names and exports anyway',
   /Exporting anyway/.test(scanNames.warned),
   scanNames.warned.slice(0, 160));
 
+// ---------- the drawer scan's edges: what happens when you do it wrong ----------
+// A review and a single-tool edit both BORROW Step 2 and both hold a reference
+// into the drawer. Every way of walking away from one, and every way the drawer
+// can change underneath, is a chance to strand the app or write an edit into
+// the wrong tool. These are those ways.
+const scanGuards = await page.evaluate(async () => {
+  const app = window.__app;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const rect = (x, y, w, h) => [
+    { x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h },
+  ];
+  const before = {
+    step: app.state.step, rect: app.state.rect, image: app.state.image,
+    diffMap: app.state.diffMap, trace: app.traceEditor.getTrace(),
+    container: structuredClone(app.state.layout.container),
+    items: structuredClone(app.state.layout.items),
+    regions: structuredClone(app.state.regions),
+    scan: app.state.scan && { ...app.state.scan },
+    confirm: window.confirm, fileName: app.state.fileName,
+  };
+
+  // A Step 2 session someone is in the middle of: a real rectified photo and a
+  // traced outline on it.
+  const mk = (w, h, fill) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.fillStyle = fill; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#2c2c2c'; g.fillRect(w * 0.2, h * 0.2, w * 0.5, h * 0.4);
+    return c;
+  };
+  const sessionCanvas = mk(480, 400, '#b0b0b0');
+  app.state.rect = { canvas: sessionCanvas, pxPerMm: 4 };
+  app.state.rectDirty = false;
+  app.state.diffMap = null;
+  app.state.fileName = 'the session';
+  app.traceEditor.setRectified(sessionCanvas, 4);
+  app.traceEditor.setTrace(rect(5, 5, 40, 30), []);
+
+  // A drawer holding one tool that did NOT come from a scan, so editing it
+  // needs a synthesised backdrop and therefore replaces state.rect.
+  app.state.layout.container = {
+    ...app.state.layout.container, type: 'rect', w: 200, h: 150, r: 0,
+    name: null, outer: null, scale: { x: 1, y: 1 },
+  };
+  app.state.layout.items.length = 0;
+  app.state.layout.items.push({
+    name: 'library tool', outer: rect(0, 0, 40, 25), holes: [], circles: [],
+    thickness: 6, depth: null, rot: 0, x: 60, y: 60,
+  }, {
+    name: 'second tool', outer: rect(0, 0, 30, 20), holes: [], circles: [],
+    thickness: 6, depth: null, rot: 0, x: 140, y: 60,
+  });
+  app.layoutEditor.sel = 0;
+  app.goStep(4);
+
+  // --- editing a non-scanned tool must give Step 2 back afterwards ---
+  app.scan.edit(0);
+  await wait(150);
+  const borrowed = {
+    rectSwapped: app.state.rect.canvas !== sessionCanvas,
+    editorOuter: app.traceEditor.getTrace().outer.length,
+  };
+  app.scan.finish(false);
+  await wait(150);
+  const givenBack = {
+    rect: app.state.rect.canvas === sessionCanvas,
+    ppm: app.state.rect.pxPerMm,
+    outer: app.traceEditor.getTrace().outer.length,
+    fileName: app.state.fileName,
+  };
+
+  // --- an edit does not outlive the step it happens on ---
+  app.scan.edit(0);
+  await wait(150);
+  const open1 = app.scan.editing;
+  app.goStep(1);               // walk away by the step tabs
+  await wait(150);
+  const abandoned = {
+    editing: app.scan.editing, panel: !$('itemEditPanel').hidden,
+    step: app.state.step, rect: app.state.rect.canvas === sessionCanvas,
+  };
+
+  // --- the tool being edited is removed from the drawer underneath ---
+  app.goStep(4);
+  app.scan.edit(1);
+  await wait(150);
+  app.traceEditor.outer[0].x -= 4;
+  app.state.layout.items.splice(1, 1);        // the tool goes away
+  const orphan = app.scan.finish(true);
+  await wait(150);
+  const afterOrphan = {
+    finished: orphan, items: app.state.layout.items.length,
+    firstName: app.state.layout.items[0].name,
+    // The survivor must be untouched: the edit had nowhere to go.
+    firstX: app.state.layout.items[0].outer[0].x,
+  };
+
+  // --- a project load ends a review rather than leaving Step 2 dead ---
+  const drawer = mk(480, 400, '#b0b0b0');
+  app.state.rect = { canvas: drawer, pxPerMm: 4 };
+  app.state.diffMap = null;
+  app.state.reference = 'rect';
+  app.state.paper = { ...app.state.paper, size: 'custom', customW: 120, customH: 100 };
+  app.state.scan = { on: true, active: false, parts: [] };
+  app.traceEditor.setRectified(drawer, 4);
+  app.scan.maybeReview();
+  await wait(150);
+  const reviewing = { active: app.scan.active, controls: $('traceControls').hidden };
+  const proj = JSON.parse(app.serializeProject(false));
+  delete proj.scan;
+  app.loadProject(proj);
+  await wait(400);
+  const afterLoad = {
+    active: app.scan.active, panel: !$('scanPanel').hidden,
+    controls: $('traceControls').hidden,
+    mode: app.traceEditor.mode,
+    toolsDisabled: Array.from(document.querySelectorAll('.tool-btn')).some(b => b.disabled),
+  };
+
+  // --- placing a scan over a drawer someone already built asks first ---
+  app.state.layout.items.length = 0;
+  app.state.layout.items.push({
+    name: 'hand placed', outer: rect(0, 0, 30, 20), holes: [], circles: [],
+    thickness: 6, depth: null, rot: 0, x: 60, y: 60,
+  });
+  const parts = [{
+    name: 'Tool 1', outer: rect(10, 10, 20, 15), holes: [], area: 300,
+    bbox: { minX: 10, minY: 10, maxX: 30, maxY: 25, w: 20, h: 15 },
+  }];
+  let asked = null;
+  window.confirm = m => { asked = m; return false; };
+  const declined = app.scan.place(parts, { w: 120, h: 100 });
+  const keptDrawer = {
+    cancelled: !!declined.cancelled, items: app.state.layout.items.length,
+    name: app.state.layout.items[0].name, asked,
+  };
+  window.confirm = () => true;
+  const accepted = app.scan.place(parts, { w: 120, h: 100 });
+  const replaced = { placed: accepted.placed, items: app.state.layout.items.length };
+
+  // Hand the page back.
+  window.confirm = before.confirm;
+  app.state.scan = before.scan || { on: false, active: false, parts: [] };
+  app.state.layout.container = before.container;
+  app.state.layout.items.length = 0;
+  for (const it of before.items) app.state.layout.items.push(it);
+  app.state.regions.length = 0;
+  for (const r of before.regions) app.state.regions.push(r);
+  app.state.selRegion = 0;
+  app.traceEditor.setSections(app.state.regions);
+  app.state.rect = before.rect;
+  app.state.image = before.image;
+  app.state.diffMap = before.diffMap;
+  app.state.fileName = before.fileName;
+  if (before.rect) app.traceEditor.setRectified(before.rect.canvas, before.rect.pxPerMm);
+  app.traceEditor.setTrace(before.trace.outer, before.trace.holes);
+  app.traceEditor.setCircles(before.trace.circles || []);
+  app.syncRefControls();
+  app.goStep(4);
+  app.goStep(before.step);
+  app.refreshLayoutEditor();
+  return {
+    open1, borrowed, givenBack, abandoned, afterOrphan, reviewing, afterLoad,
+    keptDrawer, replaced, restored: app.state.step === before.step,
+  };
+});
+
+check('editing a tool borrows Step 2 and gives it back, photo, trace and all',
+  scanGuards.borrowed.rectSwapped && scanGuards.borrowed.editorOuter === 4 &&
+  scanGuards.givenBack.rect && scanGuards.givenBack.ppm === 4 &&
+  scanGuards.givenBack.outer === 4 && scanGuards.givenBack.fileName === 'the session',
+  `a tool with no photo of its own swapped the rectified image in ` +
+  `(${scanGuards.borrowed.rectSwapped}); afterwards the session's own image, trace and name ` +
+  `are back (${scanGuards.givenBack.rect}, ${scanGuards.givenBack.outer} points, ` +
+  `“${scanGuards.givenBack.fileName}”)`);
+
+check('an edit does not outlive the step it happens on',
+  scanGuards.open1 === 0 && scanGuards.abandoned.editing === -1 &&
+  !scanGuards.abandoned.panel && scanGuards.abandoned.step === 1 &&
+  scanGuards.abandoned.rect,
+  `walking to Step ${scanGuards.abandoned.step} by the tabs ended the edit ` +
+  `(${scanGuards.abandoned.editing}) and put the session back (${scanGuards.abandoned.rect})`);
+
+check('an edit whose tool has left the drawer is refused, not written into another one',
+  scanGuards.afterOrphan.items === 1 &&
+  scanGuards.afterOrphan.firstName === 'library tool' &&
+  scanGuards.afterOrphan.firstX === 0,
+  `the tool was removed mid-edit; the survivor is still “${scanGuards.afterOrphan.firstName}” ` +
+  `with its first vertex at ${scanGuards.afterOrphan.firstX}, untouched`);
+
+check('loading a project ends a review rather than leaving Step 2 permanently dead',
+  scanGuards.reviewing.active && scanGuards.reviewing.controls &&
+  !scanGuards.afterLoad.active && !scanGuards.afterLoad.panel &&
+  !scanGuards.afterLoad.controls && scanGuards.afterLoad.mode === 'edit' &&
+  !scanGuards.afterLoad.toolsDisabled,
+  `review was live (${scanGuards.reviewing.active}); after the load the panel is gone, the ` +
+  `trace controls are back (${!scanGuards.afterLoad.controls}), the editor is in ` +
+  `“${scanGuards.afterLoad.mode}” and the tool buttons work again`);
+
+check('a scan asks before replacing a drawer someone already laid out',
+  scanGuards.keptDrawer.cancelled && scanGuards.keptDrawer.items === 1 &&
+  scanGuards.keptDrawer.name === 'hand placed' &&
+  /already holds 1 tool/.test(scanGuards.keptDrawer.asked || '') &&
+  scanGuards.replaced.placed === 1 && scanGuards.replaced.items === 1 &&
+  scanGuards.restored,
+  `declining kept “${scanGuards.keptDrawer.name}”; accepting replaced it with ` +
+  `${scanGuards.replaced.placed} scanned tool`);
+
 // ---------- the nest that yields (nesting PRD, criterion 6) ----------
 // nestLayout and nestLayoutAsync drive the SAME generator, so there are not two
 // packers to keep agreeing. The async one yields a macrotask between items, so
@@ -13501,7 +13711,17 @@ const autosave = await page.evaluate(async () => {
 
   return {
     empty, idleTouch, wrote,
-    slot: slot && { name: slot.name, at: slot.at, hasPhoto: /"photo":"data:/.test(slot.text) },
+    slot: slot && {
+      name: slot.name, at: slot.at,
+      // What the slot has to carry is the CORRECTED image, which is what makes
+      // a restored trace editable. The full-resolution original is what it
+      // deliberately does not carry: re-encoding one on a two second timer
+      // behind every settled edit is a visible freeze, for a frame recovery
+      // does not need.
+      hasRectified: /"rectified":"data:/.test(slot.text),
+      hasPhoto: /"photo":"data:/.test(slot.text),
+      kb: Math.round(slot.text.length / 1024),
+    },
     fresh, declined, asked, stillThere, busy, asked2, restored, back, cleared,
     bad, goneAfterBad, restoredStep: app.state.step === startStep,
   };
@@ -13510,9 +13730,11 @@ const autosave = await page.evaluate(async () => {
 check('the autosave slot starts empty, and an empty trace never fills it',
   autosave.empty === null && autosave.idleTouch === false && autosave.wrote === true &&
   autosave.slot && autosave.slot.name === 'awl' && autosave.slot.at === 1000000 &&
-  autosave.slot.hasPhoto,
+  autosave.slot.hasRectified && !autosave.slot.hasPhoto,
   `idle touch pending ${autosave.idleTouch}; slot “${autosave.slot && autosave.slot.name}” ` +
-  `at ${autosave.slot && autosave.slot.at} carrying its photo ${autosave.slot && autosave.slot.hasPhoto}`);
+  `at ${autosave.slot && autosave.slot.at}, ${autosave.slot && autosave.slot.kb} KB, carrying the ` +
+  `corrected image ${autosave.slot && autosave.slot.hasRectified} and not the original ` +
+  `${autosave.slot && autosave.slot.hasPhoto}`);
 
 check('a slot younger than the session is this tab’s own work and is never offered back',
   autosave.fresh === 'fresh',
@@ -13528,11 +13750,12 @@ check('it never offers over the top of work already on screen',
   autosave.busy === 'busy' && autosave.asked2 === 'NOT ASKED',
   `offer returned ${autosave.busy} without asking (${autosave.asked2})`);
 
-check('accepting brings the trace back with its photo, and saving properly clears the slot',
+check('accepting brings the trace back editable, and saving properly clears the slot',
   autosave.restored === 'restored' && autosave.back.outer === 4 &&
-  autosave.back.image && autosave.back.rect && autosave.cleared === null,
-  `${autosave.back.outer} points back with photo ${autosave.back.image}; slot after a ` +
-  `proper save: ${autosave.cleared}`);
+  autosave.back.rect && autosave.cleared === null,
+  `${autosave.back.outer} points back over the corrected image ` +
+  `(${autosave.back.rect}), which is what makes them editable; slot after a proper save: ` +
+  `${autosave.cleared}`);
 
 check('a slot this build cannot read is discarded rather than thrown, and says so',
   autosave.bad === 'failed' && autosave.goneAfterBad === null && autosave.restoredStep,
