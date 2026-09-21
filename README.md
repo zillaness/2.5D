@@ -1,6 +1,6 @@
 ---
 file: README.md
-version: 1.4
+version: 1.5
 author: Sam Cao
 created: 2026-07-20
 last_updated: 2026-09-21
@@ -1003,24 +1003,31 @@ drag-to-place, and **drawer scanning**: one photo of a laid-out drawer traces
 every tool in it in a single pass, with a review mode on Step 2 and a
 point-by-point escape hatch for the ones it gets wrong.
 
+**Getting back in** (the whole `docs/resume_editing_prd_v1.1.md` arc, v1.25.1
+through v1.26.3): a traced queue item reopens editable on a click, Undo after
+Next returns the trace rather than a bare photo, a library entry reopens
+against the photo it was traced from and asks which copy to trust when the two
+disagree, the save dialog says what each option costs in capability, a project
+that cannot reach Step 2 says why, and an autosave slot in IndexedDB survives a
+tab that dies mid-trace.
+
 *(PDF drawing import — "picture of a CAD drawing → CAD out" — moved to the
 separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- **Resume editing a traced tool** — getting back into a photo you have already
-  traced. Step 1 shipped in v1.25.1: a queue item reopens for re-edit, and Undo
-  works after Next. Still open and ready to build are step 2, reopening from the
-  library, with a prompt at load time when the sibling project and the library
-  entry disagree, and step 5, autosave. See `docs/resume_editing_prd_v1.1.md`;
-  its steps 3 and 4 are held, because the PRD was wrong about the difference
-  they were scoped against.
 - **Drawer scan step 7** — the reference-object cross-check and its one-click
-  rescale. Everything else in `docs/drawer_scan_prd_v1.0.md` shipped in v1.27.0.
-  A mistyped drawer width currently scales every tool in the photo wrong and
-  nothing catches it; step 7 is the independent measurement that would. Two
-  smaller pieces sit beside it: merging two scan candidates that were touching,
-  and thumbnails in the review list.
+  rescale, the last unbuilt step of `docs/drawer_scan_prd_v1.0.md`. A mistyped
+  drawer width currently scales every tool in the photo wrong and nothing
+  catches it; step 7 is the independent measurement that would. It waits on the
+  PRD's open question 6, which decides whether a reference object that
+  disagrees with the typed size may take the scale over.
+- **Two smaller pieces of the scan**, both unbuilt: merging two candidates that
+  the segmenter split because the tools were touching (the PRD's open question
+  7 scopes this out of v1), and thumbnails in the review list.
+- **Making the nest fast enough to match its own criterion.** See Known gaps;
+  the work is a caching or cheap-reject pass inside `validAt`, and it needs no
+  decision from anyone.
 
 ### Horizon
 

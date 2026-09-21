@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.16
+version: 1.17
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-21
@@ -124,9 +124,18 @@ dying at the wall. The dollars are notional API-list pricing, not a bill;
     already tolerates it.
 - ✅ **docs/nesting_prd_v1.1.md is complete**, steps 1-9, bar the progress
   reporting step 7 listed.
-- ▶ NEXT: resume-editing step 2 (library re-edit, now with the load-time
+- ~~▶ NEXT: resume-editing step 2 (library re-edit, now with the load-time
   prompt Sam chose for open question 3), then autosave, step 5 and independent
-  of everything. Steps 3 and 4 need Sam's call first, see below.
+  of everything. Steps 3 and 4 need Sam's call first, see below.~~
+  **STALE, corrected 2026-09-21.** Steps 2 to 6 all shipped later the same day,
+  across v1.25.1 to v1.26.3, and steps 3 and 4 were rebuilt against the
+  corrected fact rather than waiting on a call. This NEXT line was never
+  updated, and it was the only place the resume-editing arc was tracked, so the
+  ledger went on reporting shipped work as pending. Verified in code on
+  2026-09-21: `js/main.js:6949` is the library re-edit, `js/main.js:6252` and
+  `js/import/folderAccess.js:166` are the autosave slot, `js/main.js:6697` is
+  the honest save wording, and `js/main.js:408` is the reason on a disabled
+  Step 2. The PRD's own status line had it right all along.
 
 ## 2026-09-19, later: the drawer scan
 Sam put task 4 in the work queue, which granted the exception the PRD asks of
@@ -186,6 +195,16 @@ commit. No code changed.
   entries for v1.8 through v1.15 were never written and cannot be reconstructed
   from the file, so they are recorded as a gap rather than invented. The bumps
   were real; the notes for them are gone.
+
+- ⚠ **The ledger was reporting shipped work as pending**, and had been since
+  2026-09-19. Both the resume-editing NEXT line and the steps 3 and 4 entry
+  described a state the code had already left. The cause is structural rather
+  than careless: a `▶ NEXT` line is written when the work is queued and is only
+  correct until someone does the work, and nothing in the loop rewrites it at
+  the other end. The PRD status lines stayed accurate throughout, because a
+  status line is edited by the person shipping the step. Treat the PRD status
+  lines as authoritative over this file's NEXT lines, and verify either against
+  the code before planning off it.
 
 ## The adversarial review, 2026-09-19
 An 87-agent review of this session's work: six lenses over the diff, then three
@@ -284,12 +303,13 @@ as a full-width pocket hard against the wall that the build then refused.
   is performance, not permission: see the nest-speed gap above.
 
 ## Needs Sam's call, still open
-- **`docs/resume_editing_prd_v1.1.md` steps 3 and 4.** Signed off 2026-09-19
-  and step 1 is shipped, but the correction above knocked the ground out from
-  under steps 3 and 4. Step 3's proposed wording was false; what is true is
-  narrower (the small save keeps the trace editable and loses the corners) and
-  may not earn a UI change at all. Step 4's case turns out to be rare and the
-  queue path already covers the part of it that came up.
+One item, after the 2026-09-21 sweep.
+
+- ~~**`docs/resume_editing_prd_v1.1.md` steps 3 and 4.**~~ **CLOSED 2026-09-21.**
+  Both were built, small, against the corrected fact rather than the false one,
+  and shipped by v1.26.3. Nothing is owed here. The narrow true statement is
+  what went into the UI: the small save keeps the trace editable and costs the
+  corners.
 - **`docs/drawer_scan_prd_v1.0.md` open questions 3, 6 and 9.** The two
   decisions this entry used to lead with are settled: Sam granted the exception
   to the batch PRD's quality-bar rule and signed off the `layout.items` landing
@@ -393,4 +413,5 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.17 (2026-09-21): Corrects v1.16, which took this file's stale NEXT line at face value and reported the resume-editing arc as pending. Steps 2 to 6 shipped on 2026-09-19; verified in code.
 - v1.16 (2026-09-21): Doc reconciliation. README Roadmap and Known gaps brought to what shipped; the stale Blocked, still-open and sign-off entries in this file struck with their real outcomes.
