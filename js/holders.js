@@ -609,6 +609,10 @@ const NEST_EPS = 1e-6;
 const NEST_TOL = 0.05; // mm^2 — layoutConflicts' own tolerance, deliberately
 
 const shiftLoop = (loop, dx, dy) => loop.map(p => ({ x: p.x + dx, y: p.y + dy }));
+// A disc is a circle, so its bounding box is exact rather than a hull.
+const nestBB = (cx, cy, r) => ({
+  minX: cx - r, minY: cy - r, maxX: cx + r, maxY: cy + r, w: 2 * r, h: 2 * r,
+});
 const bbShift = (b, dx, dy) => ({
   minX: b.minX + dx, minY: b.minY + dy, maxX: b.maxX + dx, maxY: b.maxY + dy,
   w: b.w, h: b.h,
@@ -840,12 +844,51 @@ function* nestCore(containerOuter, items, opts = {}) {
       stats: { ...statsBase },
     };
   }
+  // Declared here rather than beside validAt, because the inscribed rectangle
+  // below is only worth computing when the notch tests will use it.
+  const wantNotch = o.notchPolicy === 'require' && Number(o.notchClear) > 0;
   const limitBB = bboxOf(limit);
   // An axis-aligned rectangle IS its bbox, so the cheap reject is then also
   // the exact containment test and Clipper never has to run for it.
   const limitIsRect = limit.length === 4 && limit.every(p =>
     (Math.abs(p.x - limitBB.minX) < NEST_EPS || Math.abs(p.x - limitBB.maxX) < NEST_EPS) &&
     (Math.abs(p.y - limitBB.minY) < NEST_EPS || Math.abs(p.y - limitBB.maxY) < NEST_EPS));
+
+  // A non-rectangular container costs one Clipper call per candidate for the
+  // containment test, and under notchPolicy 'require' a second one for the
+  // finger disc against `inner`. On the 30-tool bench in test/nest-bench.mjs
+  // those two are worth about 1.7x on the Access profile, and nothing at all
+  // on a rectangular drawer with neither labels nor notches, which is the
+  // control. Most candidates sit well away from the wall, so precompute an
+  // axis-aligned rectangle that Clipper has CONFIRMED
+  // lies wholly inside the loop: a bbox inside that rectangle is inside the
+  // loop, and the call can be skipped outright. The rectangle is verified
+  // rather than estimated, which is what makes the skip exact. Every candidate
+  // that passed before still passes and every one that failed still fails, so
+  // the pack is byte-identical and `tests` does not move.
+  //
+  // Centred and binary-searched, at a cost of about nine Clipper calls once.
+  // A shape with no useful centred interior rectangle, an L or a ring, returns
+  // null and the loop below simply keeps paying per candidate as it did.
+  const inscribedRect = loop => {
+    if (!loop || loop.length < 3) return null;
+    const b = bboxOf(loop);
+    const cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+    const fits = f => {
+      const hw = b.w * f / 2, hh = b.h * f / 2;
+      return clipArea([{ x: cx - hw, y: cy - hh }, { x: cx + hw, y: cy - hh },
+        { x: cx + hw, y: cy + hh }, { x: cx - hw, y: cy + hh }],
+      loop, CT.ctDifference) <= NEST_TOL;
+    };
+    if (!fits(0.5)) return null;
+    let lo = 0.5, hi = 1;
+    for (let k = 0; k < 7; k++) { const m = (lo + hi) / 2; if (fits(m)) lo = m; else hi = m; }
+    const hw = b.w * lo / 2, hh = b.h * lo / 2;
+    return { minX: cx - hw, minY: cy - hh, maxX: cx + hw, maxY: cy + hh,
+      w: 2 * hw, h: 2 * hh };
+  };
+  const limitIn = limitIsRect ? null : inscribedRect(limit);
+  const innerIn = wantNotch ? inscribedRect(inner) : null;
 
   // pack_poly seeds its candidate anchors with the sheet's top-left corner,
   // which is sound for a rectangular sheet and wrong for a container LOOP.
@@ -907,7 +950,6 @@ function* nestCore(containerOuter, items, opts = {}) {
   };
 
   let tests = 0;
-  const wantNotch = o.notchPolicy === 'require' && Number(o.notchClear) > 0;
 
   // Every loop a variant occupies at (X, Y): the inflated pocket, and the
   // reserved label box when the profile asks for one. A tool and its name are
@@ -950,7 +992,7 @@ function* nestCore(containerOuter, items, opts = {}) {
     const bb = bbShift(v.bb, X, Y);
     if (!bbIn(bb, limitBB)) return false;
     let loops = null;
-    if (!limitIsRect) {
+    if (!limitIsRect && !(limitIn && bbIn(bb, limitIn))) {
       loops = loopsAt(v, X, Y);
       for (const L of loops) {
         if (clipArea(L, limit, CT.ctDifference) > NEST_TOL) return false;
@@ -965,22 +1007,49 @@ function* nestCore(containerOuter, items, opts = {}) {
         }
       }
     }
-    if (wantNotch) {
-      const pk = shiftLoop(v.pocket, X, Y);
-      if (v.notch) {
-        const disc = nestDisc({ x: v.notch.x + X, y: v.notch.y + Y }, o.notchClear);
-        if (clipArea(disc, inner, CT.ctDifference) > NEST_TOL) return false;
-        for (const p of placed) {
-          if (clipArea(disc, p.pocket, CT.ctIntersection) > NEST_TOL) return false;
-        }
-      }
-      // The adversarial case: this placement must not seal an EARLIER notch.
+    if (wantNotch && notchBlocked(v, X, Y, placed)) return false;
+    return true;
+  }
+
+  // The finger-notch half of validAt, deliberately its own function.
+  //
+  // Inlined into validAt it cost 2.2 s of a 2.7 s pack on the 30-tool bench,
+  // with the Clipper call count unchanged: 17027 calls either way, and direct
+  // timers around every call and every disc it builds accounted for 1.5 ms of
+  // it. Disabling EITHER half of the block on its own brought the run back to
+  // ~550 ms, which no algorithmic story explains and which is the signature of
+  // validAt falling out of optimised code once the body grew. Extracted, the
+  // same work costs what the timers always said it did. So this split is a
+  // real fix rather than tidying, and inlining it back would undo it.
+  //
+  // The cheap rejects below are exact, not approximate. A box miss proves an
+  // empty intersection, and innerIn is a rectangle Clipper has confirmed lies
+  // inside `inner`, so accepting on it cannot admit a disc that pokes out. The
+  // pack is identical placement for placement, and `tests` does not move.
+  function notchBlocked(v, X, Y, placed) {
+    if (v.notch) {
+      const cx = v.notch.x + X, cy = v.notch.y + Y;
+      const r = Number(o.notchClear);
+      const dbb = nestBB(cx, cy, r);
+      const disc = nestDisc({ x: cx, y: cy }, r);
+      if (!(innerIn && bbIn(dbb, innerIn)) &&
+        clipArea(disc, inner, CT.ctDifference) > NEST_TOL) return true;
       for (const p of placed) {
-        if (!p.disc) continue;
-        if (clipArea(pk, p.disc, CT.ctIntersection) > NEST_TOL) return false;
+        if (!bbHit(dbb, p.pbb)) continue;
+        if (clipArea(disc, p.pocket, CT.ctIntersection) > NEST_TOL) return true;
       }
     }
-    return true;
+    // The adversarial case: this placement must not seal an EARLIER notch. The
+    // shifted pocket is built on the first box hit rather than up front,
+    // because a pack of any size is mostly misses and shiftLoop copies it all.
+    let pk = null;
+    const pkBB = bbShift(v.pbb, X, Y);
+    for (const p of placed) {
+      if (!p.disc || !bbHit(pkBB, p.dbb)) continue;
+      if (pk === null) pk = shiftLoop(v.pocket, X, Y);
+      if (clipArea(pk, p.disc, CT.ctIntersection) > NEST_TOL) return true;
+    }
+    return false;
   }
 
   // Binary-search slide toward the top-left, one axis at a time.
@@ -1018,6 +1087,10 @@ function* nestCore(containerOuter, items, opts = {}) {
     pocket: shiftLoop(v.pocket, X, Y),
     disc: v.notch && Number(o.notchClear) > 0
       ? nestDisc({ x: v.notch.x + X, y: v.notch.y + Y }, o.notchClear) : null,
+    // The disc's bounding box, so the seal test in validAt can reject on boxes
+    // before it reaches Clipper. A disc is a circle, so this is exact.
+    dbb: v.notch && Number(o.notchClear) > 0
+      ? nestBB(v.notch.x + X, v.notch.y + Y, Number(o.notchClear)) : null,
   });
 
   // A fixed obstacle: a loop the pack routes around that is not an item and
@@ -1028,7 +1101,8 @@ function* nestCore(containerOuter, items, opts = {}) {
     const bb = bboxOf(loop);
     return {
       i: -1, obstacle: true, pinned: true, v: { angle: 0 }, X: 0, Y: 0,
-      bb, pbb: bb, infl: loop, loops: [loop], label: null, pocket: loop, disc: null,
+      bb, pbb: bb, infl: loop, loops: [loop], label: null, pocket: loop,
+      disc: null, dbb: null,
     };
   };
   const obsBase = (Array.isArray(o.obstacles) ? o.obstacles : [])

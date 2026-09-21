@@ -1,6 +1,6 @@
 ---
 file: README.md
-version: 1.5
+version: 1.6
 author: Sam Cao
 created: 2026-07-20
 last_updated: 2026-09-21
@@ -1057,12 +1057,18 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
   only; it has not been checked against real photographs of real graph paper.
 - Puzzle-tab kerf compensation (the `fit` field) is verified in tests but has
   not been cut on a real laser.
-- Nesting is slower than the PRD's criterion 6 claims. Measured on a 30-item
-  fixture in the shipped profiles: 3.5 s under Dense and 12.8 s under Access,
-  against the 1.3 to 1.5 s recorded in `docs/nesting_prd_v1.1.md`. The nest
+- Nesting is slower than criterion 6 of `docs/nesting_prd_v1.1.md` claims. It
   yields to the event loop and reports progress, so it is watchable and
-  cancellable, but it is not fast. The cost is in `validAt`, which runs a
-  Clipper test per candidate position.
+  cancellable, but a full drawer is seconds rather than the 1.3 to 1.5 s the
+  PRD records. `test/nest-bench.mjs` measures it; run it before believing any
+  figure here, including this one, because two things make nest timings easy to
+  get wrong. The first pack on a fresh page pays for JIT compilation of the
+  whole geometry path and can read five times slow, so a cold number is not the
+  steady-state one. And the profiles differ in how many positions they try, not
+  in what a position costs: on a 30-tool bench the two come out at the same
+  0.06 ms per test, and Dense is the slower profile overall only because
+  `rotationStep: 15` with free rotation gives it six times as many candidates
+  to test as Access's 90 degrees.
 - The overfull drawer has no bound. The time budget disarms itself while any
   tool is still unplaced, which is the case a user most wants to escape.
 - Re-editing a saved project re-encodes its rectified photo at quality 0.85, so

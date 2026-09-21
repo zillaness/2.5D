@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.18
+version: 1.19
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-21
@@ -194,10 +194,19 @@ commit. No code changed.
 - ✅ Step 4 palette name truncation fixed, the first of the "noticed in passing"
   items to be cleared. 694 checks, all passing, no console errors, dist rebuilt
   and smoke-tested — v1.27.4.
-- ▶ NEXT: the nest's `validAt`, where the two notch loops call Clipper once per
-  placed item with no bounding-box reject while the overlap loop beside them has
-  had one all along. That is the measured cost behind Access being ~13x slower
-  per candidate than Dense.
+- ✅ Nest cheap-reject in `validAt`, plus `test/nest-bench.mjs` — v1.27.5. An
+  axis-aligned rectangle that Clipper confirms lies inside the container, so a
+  candidate whose bbox is inside it skips the containment call outright; the
+  same for the finger disc against `inner`. Exact rather than approximate, so
+  `tests` does not move and the pack is identical. About 1.7x on Access-like
+  configs and nothing at all on the rectangular no-label no-notch control,
+  which is the right shape for a change that only skips work it can prove is
+  unnecessary. 694 checks, all passing.
+  - ⚠ Three wrong attributions were made and discarded on the way here, all
+    from timing an unwarmed page. See the corrected gap note above; the lesson
+    is in the bench's own comments so the next person does not repeat it.
+- ▶ NEXT: Dense's candidate count, which is now the only nest cost worth
+  attacking, and drawer scan step 7 once open question 6 has Sam's call.
 - ⚠ The frontmatter said version 1.15 while the CHANGELOG stopped at v1.7. The
   entries for v1.8 through v1.15 were never written and cannot be reconstructed
   from the file, so they are recorded as a gap rather than invented. The bumps
@@ -281,16 +290,35 @@ as a full-width pocket hard against the wall that the build then refused.
     glyphs, a hand-written item projection whose omissions fail silently) and,
     decisively, the suite never loads `dist/` at all, so the worker branch
     users ran could never be the branch CI exercised.
-- **The nest is slower than criterion 6 claims, by a lot.** Measured on the
-  30-item twin fixture in the shipped profiles: **3.5 s under Dense and 12.8 s
-  under Access**, not the 1.3-1.5 s the nesting PRD records. Criterion 6's
-  first branch (30 items under 2 s) is not met and is not met by this change
-  either; what shipped is its second branch, yielding to the event loop. The
-  cost driver is `validAt`: Access is ~13x slower per candidate test because
-  `labelSpace: 'reserve'` adds a second loop to every Clipper call,
-  `notchPolicy: 'require'` adds disc booleans, and a rounded-rect container
-  makes `limitIsRect` false so every containment test runs Clipper. A caching
-  or cheap-reject pass inside `validAt` is the real win and is still owed.
+- **The nest is slower than criterion 6 claims** — still true, but **the
+  diagnosis under it was wrong and is corrected here, 2026-09-21.** A
+  repeatable bench now exists at `test/nest-bench.mjs`, and a cheap-reject pass
+  went into `validAt` in v1.27.5 worth about 1.7x on Access. Criterion 6's
+  first branch (30 items under 2 s) is still not met by Dense.
+
+  What the old note got wrong, and why it is worth reading before measuring
+  anything in here again:
+  - **"Access is ~13x slower per candidate"**: it is not. Warm, the two
+    profiles cost the **same** 0.06 ms per validAt test on a 30-tool bench.
+    Dense is the slower profile overall, at 2.6 s against Access's 0.4 s, and
+    entirely because `rotationStep: 15` with free rotation hands it 42280
+    candidates to test where Access's 90 degrees hands it 6949. The gap is
+    candidate count, not candidate cost.
+  - **"notchPolicy 'require' adds disc booleans"** that cost real time: it does
+    not. Turning the policy off moves the number by less than the noise, and
+    direct timers around every disc built and every disc boolean run accounted
+    for 1.5 ms of a 2.7 s pack.
+  - **The old figures were almost certainly cold.** The first pack through a
+    fresh page pays for JIT compilation of the geometry path and can read five
+    times slow. Timed cold and in sequence, one unchanged config read 2.7 s in
+    the second row of the bench and 0.5 s in the seventh, which is how the
+    original attribution went wrong and how this session's first three
+    attributions went wrong in turn before the warm-up was added. Every number
+    above is the minimum of five warm runs.
+
+  What is left: Dense's candidate count. `rotationFree` with a 15 degree step
+  is the whole of it, so the win is in generating fewer candidates or rejecting
+  them earlier, not in making a test cheaper.
 - **The overfull drawer is still unbounded.** The budget gate disarms itself
   while anything is unplaced, which is exactly the case a user most wants to
   escape. It is now watchable and cancellable; it is not shorter.
@@ -428,6 +456,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.19 (2026-09-21): Nest cheap-reject shipped in v1.27.5 with a bench; the recorded nest-speed diagnosis corrected after measurement disproved it.
 - v1.18 (2026-09-21): Step 4 palette truncation fixed in v1.27.4 and struck from the noticed-in-passing list.
 - v1.17 (2026-09-21): Corrects v1.16, which took this file's stale NEXT line at face value and reported the resume-editing arc as pending. Steps 2 to 6 shipped on 2026-09-19; verified in code.
 - v1.16 (2026-09-21): Doc reconciliation. README Roadmap and Known gaps brought to what shipped; the stale Blocked, still-open and sign-off entries in this file struck with their real outcomes.
