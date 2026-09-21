@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.17
+version: 1.18
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-09-21
@@ -191,6 +191,13 @@ commit. No code changed.
   granted when a section further up records it being granted, and the lower
   sign-off list was a version behind on both nesting and batch ingest. All
   struck with what actually happened.
+- ✅ Step 4 palette name truncation fixed, the first of the "noticed in passing"
+  items to be cleared. 694 checks, all passing, no console errors, dist rebuilt
+  and smoke-tested — v1.27.4.
+- ▶ NEXT: the nest's `validAt`, where the two notch loops call Clipper once per
+  placed item with no bounding-box reject while the overlap loop beside them has
+  had one all along. That is the measured cost behind Access being ~13x slower
+  per candidate than Dense.
 - ⚠ The frontmatter said version 1.15 while the CHANGELOG stopped at v1.7. The
   entries for v1.8 through v1.15 were never written and cannot be reconstructed
   from the file, so they are recorded as a gap rather than invented. The bumps
@@ -238,7 +245,15 @@ arrived as "Tool 1", ticked, renumbering every real tool beneath it, and placed
 as a full-width pocket hard against the wall that the build then refused.
 
 ## Noticed in passing, not fixed
-- **The Step 4 folder palette truncates tool names to two or three characters.**
+- ~~**The Step 4 folder palette truncates tool names to two or three characters.**~~
+  **FIXED 2026-09-21 in v1.27.4.** The cause was flex-shrink: both spans took the
+  default of 1, and flex distributes overflow in proportion to content width, so
+  the longer path kept more of its own width for exactly the reason that made it
+  the less useful of the two. The path now shrinks a thousand times faster and
+  collapses to its ellipsis before the name loses a pixel. The Library group
+  passes an empty hint, so it had nothing competing with the name and needed no
+  change, which answers the "check whether it needs the same change" below.
+  Original note kept for the record:
   A folder of "claw hammer", "combination pliers", "screwdriver PH2" renders as
   `cl...`, `com...`, `scr...` while the folder path beside it gets comparable
   width. The name is the primary key and the path only disambiguates the
@@ -413,5 +428,6 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.18 (2026-09-21): Step 4 palette truncation fixed in v1.27.4 and struck from the noticed-in-passing list.
 - v1.17 (2026-09-21): Corrects v1.16, which took this file's stale NEXT line at face value and reported the resume-editing arc as pending. Steps 2 to 6 shipped on 2026-09-19; verified in code.
 - v1.16 (2026-09-21): Doc reconciliation. README Roadmap and Known gaps brought to what shipped; the stale Blocked, still-open and sign-off entries in this file struck with their real outcomes.

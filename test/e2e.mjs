@@ -7047,6 +7047,49 @@ check('a folder row carries its relative path, so two traces of one name stay ap
   palette.folderHints.join(',') === 'bench/chisel.json,bench/mallet.json,bench/sub/rasp.json',
   palette.folderHints.join(','));
 
+// The name is the primary key; the path only tells two same-named traces apart.
+// Both spans once took the default flex-shrink, so a narrow palette clipped the
+// name to two or three characters while the path beside it kept comparable
+// width. Measured in a deliberately narrow list, where the two cannot both fit.
+const palSqueeze = await page.evaluate(() => {
+  const row = document.getElementById('layPalFolderList').querySelector('.pal-row');
+  const nm = row.querySelector('.pal-name');
+  const hint = row.querySelector('.hint');
+  const label = nm.parentElement;
+  // Squeeze the label itself rather than the list. Narrowing the list makes the
+  // row's checkbox and buttons shrink too and can take the label to zero, which
+  // measures nothing. Fixing the label at just over the name's natural width
+  // isolates the one thing this checks: which of the two spans gives way first.
+  const natural = nm.scrollWidth;
+  const prevFlex = label.style.flex, prevW = label.style.width;
+  label.style.flex = '0 0 auto';
+  label.style.width = (natural + 16) + 'px';
+  void row.offsetHeight;
+  const out = {
+    natural,
+    nameW: nm.getBoundingClientRect().width,
+    hintW: hint.getBoundingClientRect().width,
+    nameClipped: nm.scrollWidth > nm.clientWidth + 1,
+    hintClipped: hint.scrollWidth > hint.clientWidth + 1,
+    nameTitle: nm.title,
+    rowTitle: row.title,
+  };
+  label.style.flex = prevFlex;
+  label.style.width = prevW;
+  return out;
+});
+
+check('a squeezed palette row spends its width on the name, not on the path',
+  !palSqueeze.nameClipped && palSqueeze.hintClipped &&
+  palSqueeze.nameW > palSqueeze.hintW,
+  `name ${Math.round(palSqueeze.nameW)}px of ${palSqueeze.natural}px natural, ` +
+  `clipped ${palSqueeze.nameClipped}; path ${Math.round(palSqueeze.hintW)}px ` +
+  `clipped ${palSqueeze.hintClipped}`);
+
+check('the name carries its own tooltip, leaving the row tooltip the path',
+  palSqueeze.nameTitle === 'chisel' && palSqueeze.rowTitle === 'bench/chisel.json',
+  `name title ${palSqueeze.nameTitle} / row title ${palSqueeze.rowTitle}`);
+
 check('the skipped count is shown, with the reasons in its tooltip',
   palette.skipShown && palette.skipText === '1 file skipped' &&
   palette.skipTitle === 'bench/readme.txt: not a .json file',

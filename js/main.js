@@ -4552,15 +4552,26 @@ function layPaletteRow(name, hint, buttons, pick) {
   }
   const label = document.createElement('span');
   label.style.cssText = 'flex:1; min-width:0; display:flex; gap:6px; align-items:baseline';
+  // The name is the primary key and the path only tells two same-named traces
+  // apart, so the name shrinks last. Both spans used to take the default
+  // flex-shrink of 1, which distributes the overflow in proportion to content
+  // width: a 200 px path against an 80 px name in 60 px of room left the name
+  // 17 px, which is the two or three characters of "cl...", "com...", "scr...".
+  // Giving the path a shrink factor three orders of magnitude larger makes it
+  // absorb effectively all of the overflow first, down to its own ellipsis,
+  // before the name gives up a pixel.
   const nm = document.createElement('span');
   nm.className = 'pal-name';
-  nm.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap';
+  nm.style.cssText = 'flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap';
   nm.textContent = name;
+  // The row title is the path and the suite asserts it, so the name goes on the
+  // name span, where a hover over a truncated name lands anyway.
+  nm.title = name;
   label.appendChild(nm);
   if (hint) {
     const h = document.createElement('span');
     h.className = 'hint';
-    h.style.cssText = 'margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.7';
+    h.style.cssText = 'margin:0; flex:0 1000 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:.7';
     h.textContent = hint;
     label.appendChild(h);
     row.title = hint;
