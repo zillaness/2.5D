@@ -1,9 +1,9 @@
 ---
 file: BURNDOWN.md
-version: 1.15
+version: 1.16
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-19
+last_updated: 2026-09-21
 description: Ledger for the 2026-09-04 token burndown on the 2.5D holders branch.
 ai_update: Update last_updated and version. Filename is fixed (the burndown skill expects BURNDOWN.md), so do not rename. Append a ledger line after every committed unit and keep the NEXT line current.
 ---
@@ -160,6 +160,33 @@ landing position. Steps 1 to 6 and 8 shipped as v1.27.0; step 7 did not.
   mis-measured drawer. Also outstanding and named in the README: merging two
   candidates that were touching, and thumbnails in the review list.
 
+## 2026-09-21: doc reconciliation
+Three places where the record had drifted from what shipped, all fixed in one
+commit. No code changed.
+
+- ✅ README Roadmap: nesting and tool labels were still listed under **Next up,
+  Awaiting sign-off**. Both shipped, nesting across v1.25.0 and v1.26.0 and
+  labelling steps 1-7 in v1.25.0. The README *body* documented both correctly
+  (the auto-sort section and the labels section), so this was the Roadmap block
+  alone, which is the same failure mode as the Snap to grid miss on 2026-09-19:
+  a lane updates the prose and nobody updates the map. Moved into Shipped as a
+  third paragraph covering the v1.24 to v1.27 arc, and Next up rewritten to the
+  two things that are actually next, resume-editing steps 2 and 5 and drawer
+  scan step 7.
+- ✅ README Known gaps: the three measured defects from the v1.26 and v1.27 work
+  were recorded here and nowhere a user would look. Added the nest timings as
+  measured (3.5 s Dense, 12.8 s Access on 30 items), the unbounded overfull
+  drawer, and the re-encode-per-re-edit JPEG loss.
+- ✅ This ledger: the Blocked list still said nesting needed sign-off, the still
+  open list still asked whether the drawer-scan quality-bar exception was
+  granted when a section further up records it being granted, and the lower
+  sign-off list was a version behind on both nesting and batch ingest. All
+  struck with what actually happened.
+- ⚠ The frontmatter said version 1.15 while the CHANGELOG stopped at v1.7. The
+  entries for v1.8 through v1.15 were never written and cannot be reconstructed
+  from the file, so they are recorded as a gap rather than invented. The bumps
+  were real; the notes for them are gone.
+
 ## The adversarial review, 2026-09-19
 An 87-agent review of this session's work: six lenses over the diff, then three
 independent skeptics per finding, each prompted to refute. 27 candidates, 9
@@ -243,7 +270,8 @@ as a full-width pocket hard against the wall that the build then refused.
 2. ~~Doc sweep for v1.23.0~~ done. Scope was smaller than the handoff implied:
    the README *body* already documented puzzle tabs and bed tiling. Only the
    Roadmap block was stale (it never absorbed the holders arc at all).
-3. ~~`docs/nesting_prd_v1.0.md`~~ drafted, awaiting sign-off. Not implemented.
+3. ~~`docs/nesting_prd_v1.0.md`~~ drafted, signed off, and implemented in full
+   as v1.1 steps 1-9 across v1.25.0 and v1.26.0.
 4. ~~STL tiling of printed inserts~~ design note written, awaiting a decision on
    the registration scheme before a PRD is worth writing.
 
@@ -251,7 +279,9 @@ as a full-width pocket hard against the wall that the build then refused.
 - Logo PNG swap — needs an asset from Sam.
 - Real-photo validation of the mat/grid auto-count — needs real photographs.
 - 3MF export — deferred, no decision.
-- Nesting implementation — needs sign-off on the PRD in item 3.
+- ~~Nesting implementation — needs sign-off on the PRD in item 3.~~ **CLOSED 2026-09-21.**
+  Signed off, and steps 1-9 shipped across v1.25.0 and v1.26.0. What is left
+  is performance, not permission: see the nest-speed gap above.
 
 ## Needs Sam's call, still open
 - **`docs/resume_editing_prd_v1.1.md` steps 3 and 4.** Signed off 2026-09-19
@@ -260,10 +290,12 @@ as a full-width pocket hard against the wall that the build then refused.
   narrower (the small save keeps the trace editable and loses the corners) and
   may not earn a UI change at all. Step 4's case turns out to be rare and the
   queue path already covers the part of it that came up.
-- **`docs/drawer_scan_prd_v1.0.md`.** Two decisions, in order: whether the
-  exception to the batch PRD's quality-bar rule is granted at all, and only
-  then scope, plan, and the `layout.items` landing position. Its open questions
-  3, 6 and 9 change what gets built.
+- **`docs/drawer_scan_prd_v1.0.md` open questions 3, 6 and 9.** The two
+  decisions this entry used to lead with are settled: Sam granted the exception
+  to the batch PRD's quality-bar rule and signed off the `layout.items` landing
+  position when he put the drawer scan in the work queue on 2026-09-19, and
+  steps 1-6 and 8 shipped as v1.27.0. Question 6 is the live one, because step 7
+  is the only unbuilt step and question 6 is what it turns on.
 
 ## Sam's calls, closed
 - **Em dashes in repo docs.** CLOSED 2026-09-19 after three flags: new docs are
@@ -293,7 +325,7 @@ as a full-width pocket hard against the wall that the build then refused.
   questions 1 (single-line fonts for routers, deferring is a real cost) and 4
   (a third `engrave` SVG layer, which changes the exported layer set). Those
   two change the shape of the work rather than a default.
-- ~~Sign-off on `docs/nesting_prd_v1.1.md`~~ **signed off; steps 1-4 shipped in v1.25.0 as unreachable geometry, steps 5-9 open.** Original ask: Steps 1-4 of its plan are the
+- ~~Sign-off on `docs/nesting_prd_v1.1.md`~~ **signed off; steps 1-9 all shipped. Steps 1-4 landed in v1.25.0 as unreachable geometry, steps 5-9 in v1.26.0, and progress reporting closed 2026-09-19.** Original ask: Steps 1-4 of its plan are the
   feature; nothing was built. Open questions carry recommendations: rotation
   step per profile, explicit button rather than auto-run, default webs (8 mm
   Access / 4 mm Dense, both unvalidated against a real cut), localStorage-only
@@ -307,9 +339,10 @@ as a full-width pocket hard against the wall that the build then refused.
   top of the repo's front page. Conflict flagged, not resolved: no frontmatter
   was added to README.md or docs/holders-prd.md.
 
-- **Sign-off on `docs/batch_ingest_prd_v1.0.md`** (drafted 2026-09-12 from user
-  feedback): batch ingest queue, snap to grid, nesting as a lane, labelling
-  step 6. Second build session, after the Step 4 PRD merges.
+- ~~Sign-off on `docs/batch_ingest_prd_v1.0.md`~~ **signed off 2026-09-13 and
+  shipped in v1.25.0** (batch ingest queue, snap to grid, nesting as a lane,
+  labelling step 6). Original ask kept for the record: drafted 2026-09-12 from
+  user feedback, to be built in a second session after the Step 4 PRD merges.
 - ~~Sign-off on `docs/selection_and_organize_prd_v1.2.md`~~ **signed off
   2026-09-10, build in progress in its own session.** (drafted 2026-09-10
   from the 2026-09-09 chat; Part A selection modes, Part B a new Step 4
@@ -359,3 +392,5 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.5 (2026-09-13): S5 shipped. Parts A, B and D built in parallel lanes, reviewed, merged and deployed as v1.24.0.
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
+- v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.16 (2026-09-21): Doc reconciliation. README Roadmap and Known gaps brought to what shipped; the stale Blocked, still-open and sign-off entries in this file struck with their real outcomes.

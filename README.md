@@ -1,9 +1,9 @@
 ---
 file: README.md
-version: 1.3
+version: 1.4
 author: Sam Cao
 created: 2026-07-20
-last_updated: 2026-09-19
+last_updated: 2026-09-21
 description: User-facing guide to 2.5D, covering the four-step pipeline from photo to traced outline to printable solid to drawer layout.
 ai_update: Update last_updated and bump version. The filename is fixed, so do not rename this file. Record what shipped under Roadmap, Shipped, which is this document's changelog; do not add a second one.
 ---
@@ -992,29 +992,35 @@ template SVG** export, **bed tiling** with pocket-avoiding seams, and
 **puzzle-tab interlocks** so two bed-sized foam tiles lock into one drawer
 insert.
 
+**Layout, nesting and labels** (v1.24.0 through v1.27.x): trace-editor
+selection modes (lasso, radius brush, directional box), a new **Step 4
+Organize** with a folder-of-traces palette, laser constructions, **batch
+ingest** with a photo queue and **snap to grid**, **nesting / auto-sort**
+driven by named packing profiles with per-item pin and angle lock and
+pocket-avoiding seam corridors, **tool labels** engraved into cut templates and
+carved into printed inserts with process-aware minimum cap heights and
+drag-to-place, and **drawer scanning**: one photo of a laid-out drawer traces
+every tool in it in a single pass, with a review mode on Step 2 and a
+point-by-point escape hatch for the ones it gets wrong.
+
 *(PDF drawing import — "picture of a CAD drawing → CAD out" — moved to the
 separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- **Nesting / auto-sort for drawer layouts** — pack tool outlines into a
-  drawer automatically instead of dragging each one. Would work on the true
-  offset outlines rather than bounding boxes, since interleaving a plier and
-  a screwdriver is the entire value of a foam insert, and would score against
-  the existing `layoutPockets` / `layoutConflicts` predicates so a nested
-  result is conflict-free by construction. Packing is driven by named
-  **profiles** (a dense one for a travelling toolbox, an access-oriented one
-  for a shop drawer), with every value exposed and custom profiles saveable,
-  and it reserves room for tool labels so text size widens the foam web
-  instead of being clipped. **Awaiting sign-off** — see
-  `docs/nesting_prd_v1.1.md`.
-- **Tool labels on inserts** — engrave or emboss each tool's name into the
-  insert, seeded from the trace name and editable per placement, so an empty
-  pocket says *which* wrench is missing. The text-to-glyph and label-carving
-  machinery already exists from the emboss/deboss feature; what is missing is
-  wiring it into the layout path, plus process-aware minimum text sizing
-  (a router bit cannot render letters a laser can). **Awaiting sign-off** —
-  see `docs/labelling_prd_v1.0.md`.
+- **Resume editing a traced tool** — getting back into a photo you have already
+  traced. Step 1 shipped in v1.25.1: a queue item reopens for re-edit, and Undo
+  works after Next. Still open and ready to build are step 2, reopening from the
+  library, with a prompt at load time when the sibling project and the library
+  entry disagree, and step 5, autosave. See `docs/resume_editing_prd_v1.1.md`;
+  its steps 3 and 4 are held, because the PRD was wrong about the difference
+  they were scoped against.
+- **Drawer scan step 7** — the reference-object cross-check and its one-click
+  rescale. Everything else in `docs/drawer_scan_prd_v1.0.md` shipped in v1.27.0.
+  A mistyped drawer width currently scales every tool in the photo wrong and
+  nothing catches it; step 7 is the independent measurement that would. Two
+  smaller pieces sit beside it: merging two scan candidates that were touching,
+  and thumbnails in the review list.
 
 ### Horizon
 
@@ -1044,3 +1050,13 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
   only; it has not been checked against real photographs of real graph paper.
 - Puzzle-tab kerf compensation (the `fit` field) is verified in tests but has
   not been cut on a real laser.
+- Nesting is slower than the PRD's criterion 6 claims. Measured on a 30-item
+  fixture in the shipped profiles: 3.5 s under Dense and 12.8 s under Access,
+  against the 1.3 to 1.5 s recorded in `docs/nesting_prd_v1.1.md`. The nest
+  yields to the event loop and reports progress, so it is watchable and
+  cancellable, but it is not fast. The cost is in `validAt`, which runs a
+  Clipper test per candidate position.
+- The overfull drawer has no bound. The time budget disarms itself while any
+  tool is still unplaced, which is the case a user most wants to escape.
+- Re-editing a saved project re-encodes its rectified photo at quality 0.85, so
+  each round trip through the re-edit path costs one generation of JPEG loss.
