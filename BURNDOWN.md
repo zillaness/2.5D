@@ -1,9 +1,9 @@
 ---
 file: BURNDOWN.md
-version: 1.19
+version: 1.20
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-21
+last_updated: 2026-09-27
 description: Ledger for the 2026-09-04 token burndown on the 2.5D holders branch.
 ai_update: Update last_updated and version. Filename is fixed (the burndown skill expects BURNDOWN.md), so do not rename. Append a ledger line after every committed unit and keep the NEXT line current.
 ---
@@ -207,6 +207,25 @@ commit. No code changed.
     is in the bench's own comments so the next person does not repeat it.
 - ▶ NEXT: Dense's candidate count, which is now the only nest cost worth
   attacking, and drawer scan step 7 once open question 6 has Sam's call.
+
+## 2026-09-27: the calibration sheet
+- ✅ docs/calibration_sheet_prd_v1.0.md drafted (DRAFT, not implemented), from
+  Sam's question about a printable fiducial that works whether or not the print
+  scale can be trusted. One sheet: a printed frame gives the shape, the paper's
+  physical edges give the absolute scale, and the ratio between the two is the
+  print scale, measured rather than assumed. Current workflow mapped in code
+  first, per Sam's rule.
+  - ⚠ The first sketch in chat put a chessboard across the middle of the sheet.
+    Wrong: `computeDiffMap` marks everything that is not paper-coloured as
+    object, so ink under the object is traced as part of it. The PRD is a
+    frame, not a fill, and a frame turned out to need no coded markers at all,
+    which removed the decoder question.
+  - ⚠ Found while mapping: nothing checks the selected paper size against the
+    photo. Letter selected, A4 photographed, and every trace is 2.8 percent wide
+    and 5.9 percent short with no warning. The sheet fixes it; plan step 1 of the
+    PRD does not, on plain paper.
+- ▶ NEXT: Sam's sign-off on the calibration sheet PRD. Its questions 1, 2 and 3
+  change what gets built.
 - ⚠ The frontmatter said version 1.15 while the CHANGELOG stopped at v1.7. The
   entries for v1.8 through v1.15 were never written and cannot be reconstructed
   from the file, so they are recorded as a gap rather than invented. The bumps
@@ -254,6 +273,14 @@ arrived as "Tool 1", ticked, renumbering every real tool beneath it, and placed
 as a full-width pocket hard against the wall that the build then refused.
 
 ## Noticed in passing, not fixed
+- **No parallax correction, and for thick objects it is the largest error in
+  the app.** Found while scoping the calibration sheet, 2026-09-27. The
+  homography is exact for the paper's plane; an object of thickness t shot from
+  height D shows its top outline magnified by D / (D - t) about the point below
+  the camera. A 10 mm tool from 400 mm reads 2.6 percent large, 2.6 mm on
+  100 mm, roughly eight times the paper-tolerance floor. `js/` has no parallax,
+  focal-length or EXIF handling. The calibration sheet does not fix it and says
+  so; EXIF focal length is the likely route for its own PRD.
 - ~~**The Step 4 folder palette truncates tool names to two or three characters.**~~
   **FIXED 2026-09-21 in v1.27.4.** The cause was flex-shrink: both spans took the
   default of 1, and flex distributes overflow in proportion to content width, so
@@ -346,7 +373,14 @@ as a full-width pocket hard against the wall that the build then refused.
   is performance, not permission: see the nest-speed gap above.
 
 ## Needs Sam's call, still open
-One item, after the 2026-09-21 sweep.
+Two items as of 2026-09-27.
+
+- **Sign-off on `docs/calibration_sheet_prd_v1.0.md`.** Questions 1 (frame only,
+  no coded markers), 2 (a window about a quarter smaller than a plain sheet)
+  and 3 (print page, committed PDF, or both) change what gets built; 6 changes
+  what persists. Plan steps 1 and 4 each end in a checkpoint that needs real
+  photos from Sam, because a rendered paper edge is perfect and cannot show the
+  frame beating it.
 
 - ~~**`docs/resume_editing_prd_v1.1.md` steps 3 and 4.**~~ **CLOSED 2026-09-21.**
   Both were built, small, against the corrected fact rather than the false one,
@@ -456,6 +490,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.20 (2026-09-27): Calibration sheet PRD drafted; the unchecked paper size and the missing parallax correction recorded.
 - v1.19 (2026-09-21): Nest cheap-reject shipped in v1.27.5 with a bench; the recorded nest-speed diagnosis corrected after measurement disproved it.
 - v1.18 (2026-09-21): Step 4 palette truncation fixed in v1.27.4 and struck from the noticed-in-passing list.
 - v1.17 (2026-09-21): Corrects v1.16, which took this file's stale NEXT line at face value and reported the resume-editing arc as pending. Steps 2 to 6 shipped on 2026-09-19; verified in code.
