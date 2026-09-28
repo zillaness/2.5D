@@ -1,9 +1,9 @@
 ---
 file: BURNDOWN.md
-version: 1.20
+version: 1.21
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-27
+last_updated: 2026-09-28
 description: Ledger for the 2026-09-04 token burndown on the 2.5D holders branch.
 ai_update: Update last_updated and version. Filename is fixed (the burndown skill expects BURNDOWN.md), so do not rename. Append a ledger line after every committed unit and keep the NEXT line current.
 ---
@@ -224,8 +224,22 @@ commit. No code changed.
     photo. Letter selected, A4 photographed, and every trace is 2.8 percent wide
     and 5.9 percent short with no warning. The sheet fixes it; plan step 1 of the
     PRD does not, on plain paper.
-- ▶ NEXT: Sam's sign-off on the calibration sheet PRD. Its questions 1, 2 and 3
-  change what gets built.
+- ✅ PRD revised to docs/calibration_sheet_prd_v1.1.md from Sam's notes on v1.0:
+  an encoded frame (layout version, paper size, sheet number, position,
+  checksum), the paper edge double check as a verdict table, printing from the
+  app as its own step, phase 2 for several sheets fitted on one plane around a
+  large part, and phase 3 for parallax from EXIF focal length or a raised sheet.
+  - ⚠ Recorded in the PRD because it will be asked again: no flat pattern can
+    measure the camera's height from a straight-down photo. A near camera with a
+    wide lens and a far one with a narrow lens take the same picture of a plane,
+    so parallax needs one fact from off the plane, a focal length or a surface
+    of known height.
+  - ⚠ Also recorded: centring the part under the camera, which the README
+    advises, does not reduce the size error from parallax, only the sideways
+    shift. The README line should gain that when phase 3 lands.
+- ▶ NEXT: Sam's sign-off on the v1.1 PRD. Its questions 1, 8 and 10 change what
+  gets built, and question 12, the payload fields, freezes with the first
+  printed sheet.
 - ⚠ The frontmatter said version 1.15 while the CHANGELOG stopped at v1.7. The
   entries for v1.8 through v1.15 were never written and cannot be reconstructed
   from the file, so they are recorded as a gap rather than invented. The bumps
@@ -375,10 +389,11 @@ as a full-width pocket hard against the wall that the build then refused.
 ## Needs Sam's call, still open
 Two items as of 2026-09-27.
 
-- **Sign-off on `docs/calibration_sheet_prd_v1.0.md`.** Questions 1 (frame only,
-  no coded markers), 2 (a window about a quarter smaller than a plain sheet)
-  and 3 (print page, committed PDF, or both) change what gets built; 6 changes
-  what persists. Plan steps 1 and 4 each end in a checkpoint that needs real
+- **Sign-off on `docs/calibration_sheet_prd_v1.1.md`.** Questions 1 (a window
+  about 30 percent smaller than a plain sheet), 8 (sheets around a large part
+  only, not tiled under it) and 10 (parallax as phase 3 of this PRD) change what
+  gets built. Question 12, the payload fields, cannot change once a sheet is
+  printed. Plan steps 1 and 4 each end in a checkpoint that needs real
   photos from Sam, because a rendered paper edge is perfect and cannot show the
   frame beating it.
 
@@ -490,6 +505,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.21 (2026-09-28): Calibration sheet PRD revised to v1.1 with encoding, multi-sheet and parallax phases.
 - v1.20 (2026-09-27): Calibration sheet PRD drafted; the unchecked paper size and the missing parallax correction recorded.
 - v1.19 (2026-09-21): Nest cheap-reject shipped in v1.27.5 with a bench; the recorded nest-speed diagnosis corrected after measurement disproved it.
 - v1.18 (2026-09-21): Step 4 palette truncation fixed in v1.27.4 and struck from the noticed-in-passing list.
