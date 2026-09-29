@@ -1,9 +1,9 @@
 ---
 file: BURNDOWN.md
-version: 1.21
+version: 1.22
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-28
+last_updated: 2026-09-29
 description: Ledger for the 2026-09-04 token burndown on the 2.5D holders branch.
 ai_update: Update last_updated and version. Filename is fixed (the burndown skill expects BURNDOWN.md), so do not rename. Append a ledger line after every committed unit and keep the NEXT line current.
 ---
@@ -237,9 +237,23 @@ commit. No code changed.
   - ⚠ Also recorded: centring the part under the camera, which the README
     advises, does not reduce the size error from parallax, only the sideways
     shift. The README line should gain that when phase 3 lands.
-- ▶ NEXT: Sam's sign-off on the v1.1 PRD. Its questions 1, 8 and 10 change what
-  gets built, and question 12, the payload fields, freezes with the first
-  printed sheet.
+- ✅ Sam approved all twelve suggestions against v1.1, 2026-09-29, and asked for
+  one PRD covering the sheets and the outstanding work. Written as
+  docs/calibration_and_backlog_prd_v1.2.md (renamed from the calibration sheet
+  PRD to fit the wider scope): Part A is the sheets with the twelve folded in,
+  including a print-job ID in the payload; Part B is the backlog, drawer scale
+  first.
+  - ⚠ Found writing it: the README's Next up had drawer scan merge backwards,
+    as joining tools "the segmenter split because the tools were touching".
+    Touching tools arrive as one candidate and would need splitting, which the
+    drawer scan PRD keeps out on purpose; merge is for one tool split in two.
+    Written by this session on 2026-09-21, corrected in the same commit.
+  - ⚠ Also stale in the README: the nest bullet still called the work a
+    cheap-reject pass in `validAt`, which shipped in v1.27.5.
+  - ⚠ Found reading `nestAngles`: the Rotation step control stays live when Free
+    rotation is off, where it does nothing unless a tool is set free. Part B.4.
+- ▶ NEXT: Sam's sign-off on Part A phase 1 (a last look at the payload), and on
+  any of Part B's items, each of which stands alone.
 - ⚠ The frontmatter said version 1.15 while the CHANGELOG stopped at v1.7. The
   entries for v1.8 through v1.15 were never written and cannot be reconstructed
   from the file, so they are recorded as a gap rather than invented. The bumps
@@ -389,11 +403,11 @@ as a full-width pocket hard against the wall that the build then refused.
 ## Needs Sam's call, still open
 Two items as of 2026-09-27.
 
-- **Sign-off on `docs/calibration_sheet_prd_v1.1.md`.** Questions 1 (a window
-  about 30 percent smaller than a plain sheet), 8 (sheets around a large part
-  only, not tiled under it) and 10 (parallax as phase 3 of this PRD) change what
-  gets built. Question 12, the payload fields, cannot change once a sheet is
-  printed. Plan steps 1 and 4 each end in a checkpoint that needs real
+- **Sign-off on `docs/calibration_and_backlog_prd_v1.2.md`.** Part A phase 1
+  now, with a last look at the payload fields, which cannot change once a
+  sheet is printed. Part B items one at a time: B.1 the coin drawer check
+  (question 11), B.2 merge and thumbnails, B.3 nest speed (question 14), B.4
+  small fixes. Phases 2 and 3 after phase 1's real-photo checkpoint. Plan steps 1 and 4 each end in a checkpoint that needs real
   photos from Sam, because a rendered paper edge is perfect and cannot show the
   frame beating it.
 
@@ -505,6 +519,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.22 (2026-09-29): Calibration PRD widened to docs/calibration_and_backlog_prd_v1.2.md with the twelve approved suggestions and the backlog; README Next up corrected.
 - v1.21 (2026-09-28): Calibration sheet PRD revised to v1.1 with encoding, multi-sheet and parallax phases.
 - v1.20 (2026-09-27): Calibration sheet PRD drafted; the unchecked paper size and the missing parallax correction recorded.
 - v1.19 (2026-09-21): Nest cheap-reject shipped in v1.27.5 with a bench; the recorded nest-speed diagnosis corrected after measurement disproved it.

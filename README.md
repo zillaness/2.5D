@@ -1,9 +1,9 @@
 ---
 file: README.md
-version: 1.6
+version: 1.7
 author: Sam Cao
 created: 2026-07-20
-last_updated: 2026-09-21
+last_updated: 2026-09-29
 description: User-facing guide to 2.5D, covering the four-step pipeline from photo to traced outline to printable solid to drawer layout.
 ai_update: Update last_updated and bump version. The filename is fixed, so do not rename this file. Record what shipped under Roadmap, Shipped, which is this document's changelog; do not add a second one.
 ---
@@ -1016,18 +1016,27 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 ### Next up
 
-- **Drawer scan step 7** — the reference-object cross-check and its one-click
-  rescale, the last unbuilt step of `docs/drawer_scan_prd_v1.0.md`. A mistyped
-  drawer width currently scales every tool in the photo wrong and nothing
-  catches it; step 7 is the independent measurement that would. It waits on the
-  PRD's open question 6, which decides whether a reference object that
-  disagrees with the typed size may take the scale over.
-- **Two smaller pieces of the scan**, both unbuilt: merging two candidates that
-  the segmenter split because the tools were touching (the PRD's open question
-  7 scopes this out of v1), and thumbnails in the review list.
-- **Making the nest fast enough to match its own criterion.** See Known gaps;
-  the work is a caching or cheap-reject pass inside `validAt`, and it needs no
-  decision from anyone.
+All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
+
+- **Calibration sheets** — a printable sheet, printed from the app, whose frame
+  carries a code naming its paper size, layout version, sheet number and print
+  job. The app measures the print scale against the real paper edge instead of
+  trusting it, catches the wrong paper, and survives the sheet being partly
+  covered. Later phases fit several sheets around a large part, and correct
+  parallax for thick parts. Plain paper gets more precise corners and a
+  wrong-size warning first, with no printing needed. **Awaiting sign-off**
+  (phase 1).
+- **Drawer scale** — the drawer scan's reference cross-check. Corners marked at
+  a drawer's rim make every tool read several percent small, and nothing
+  catches it today. A coin on the drawer floor can catch it now, and a
+  calibration sheet will later, each with a one-click rescale.
+- **Drawer scan review** — thumbnails in the review list, and merging two
+  candidates that are really one tool, for example a two-colour handle the
+  segmenter split. Tools that touch still arrive as one shape and are not
+  separated; move them apart.
+- **Nest speed** — the cheap-reject pass shipped in v1.27.5. What is left is
+  Dense trying 24 rotations per tool against Access's two, and an overfull
+  drawer the time budget never stops. See Known gaps.
 
 ### Horizon
 

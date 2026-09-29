@@ -1,16 +1,19 @@
 ---
 file: drawer_scan_prd_v1.0.md
-version: 1.1
+version: 1.2
 author: Sam Cao
 created: 2026-09-19
-last_updated: 2026-09-19
+last_updated: 2026-09-29
 description: PRD for scanning a whole drawer from one photo of its four corners, tracing every tool in it at once, and landing the silhouettes straight into the Step 4 layout as placed items.
 ai_update: Update last_updated and version. Rename file to match. Append changelog at bottom.
 ---
 
 # PRD: Scanning a drawer in one photo
 
-Status: **Steps 1 to 6 and 8 SHIPPED in v1.27.0, 2026-09-19. Step 7 not built.**
+Status: **Steps 1 to 6 and 8 SHIPPED in v1.27.0, 2026-09-19. Step 7 not built;
+since 2026-09-29 it is planned in `docs/calibration_and_backlog_prd_v1.2.md`
+(Part B.1 with a coin, Part A phase 2 with a calibration sheet), along with the
+unbuilt merge and thumbnails from step 5 (Part B.2).**
 · 2026-09-19 · target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 Sam put this in the work queue on 2026-09-19, which granted the exception asked
@@ -513,5 +516,6 @@ Step 2 as the escape hatch. Open questions 3, 6 and 9 change what gets built;
 the rest are defaults.
 
 ## CHANGELOG
+- v1.2 (2026-09-29): Status line points at `docs/calibration_and_backlog_prd_v1.2.md`, which now carries step 7 and the unbuilt merge and thumbnails. Filename kept at _v1.0 because `js/main.js` and `js/scan.js` cite it by name.
 - v1.1 (2026-09-19): Steps 1 to 6 and 8 shipped in v1.27.0. Records the three corrections building it forced (the paperDims transposition, the goStep(2) retrace that would have destroyed a scan, and the two TraceEditor edits the "no new capability" framing hid), the three paper-tuned constants the scan does not inherit, and what remains: step 7's cross-check, merge, and thumbnails.
 - v1.0 (2026-09-19): Initial draft, from Sam's 2026-09-19 note on photographing a laid-out drawer and tracing every tool in one pass. Records the three settled decisions (one photo of all four corners, typed drawer width and depth with an optional reference-object cross-check), takes the position that scanned silhouettes land directly in `state.layout.items` with a per-item Send to Step 2 escape hatch rather than refactoring the `TraceEditor` singleton, states the tension with `batch_ingest_prd_v1.0.md`'s shipped quality-bar rule and what exception is being asked for, and proposes a resolution for the README heading collision at line 771.
