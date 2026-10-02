@@ -477,8 +477,50 @@ real-photo checkpoint. Building in the PRD's suggested order.
     with a 1.2 mm hump). The guidance in step 9 should say "flatten the
     sheet" before "the lens is wrong" when the figure is high and the frame
     lines disagree with each other.
-- ▶ NEXT: Part A step 8, the double check, the verdict, the print check and
-  the Step 1 integration; then 9 to 13; B.3 at any point.
+- ✅ Part A step 8, the sheet in Step 1. `js/calibVerdict.js`: the paper
+  edges through the fit into design millimetres, a five-parameter rectangle
+  (scale across and down, rotation, two offsets) whose aspect names the stock
+  whatever the scale, and the verdict table as the PRD wrote it. `js/main.js`
+  gains `sheetRecognise` after every corner placement, by the detector or a
+  drag (debounced, re-fit and snap, open question 4), with a checkbox that
+  lets a person's corners rule; the corners become the paper's own edges
+  through the fit, or the design taken as true when they cannot be seen; the
+  lens term is applied with the slider as override (open question 3); the
+  picker is overridden by the edges with a message; the panel names the
+  sheet, the verdict and the fit figure; the corner editor draws the fitted
+  frame and the measured paper. The print check records itself whenever a
+  sheet is read with its edges visible, keyed by job and sheet, and a white
+  desk photo of the same sheet uses it and says so. Through the app's own
+  load path: 100.00, 96.00 and 94.00 percent prints read to 0.01 percent per
+  axis with corners within 0.1 px, the 0.5 degree feed skew is read, a Letter
+  layout on A4 is named as such and measured against A4, a wrong picker is
+  overridden, the white desk uses the record and lands within 0.1 px, no
+  record gives "unverified", the switch holds, and an 80 x 50 object traces
+  to 79.98 x 49.94 on the 96 percent sheet, identical to the 1:1 sheet.
+  788 checks, all passing, no console errors; dist rebuilt and
+  smoke-tested — v1.30.5.
+  - ⚠ **The detector finds the frame, not the paper.** The frame line is the
+    strongest boundary in a sheet photo, so `detectPaperCorners` takes the
+    window for the sheet and the edge fit snaps to the frame's inner edge.
+    Recognition's profiles started 8 mm outside that edge, on paper, and
+    took the frame's own inner edge for the paper edge. A paper edge now
+    needs 3 mm of desk before it, and the reach outward is 40 mm, which also
+    covers the far side of a 94 percent corner-anchored print.
+  - ⚠ On a white desk the 80 mm profile is paper but for 5 mm of ink, so a
+    fifth-percentile "ink level" was paper and every profile failed its
+    contrast test. The darkest percent now.
+  - ⚠ The renderer treated the sheet's outer half pixel as desk and shaved
+    0.06 mm off every edge: scales read 100.07 and corners sat 0.6 px off
+    until it was found. Fixed in `test/sheetPhoto.js`; the earlier figures
+    in this ledger for steps 5 to 7 were measured with the shave in place
+    and are slightly pessimistic.
+  - ⚠ Criterion 4 is bounded by rectify's 1600 px cap, 5.7 px/mm on Letter,
+    not by the sheet: before the renderer fix the object read 80.11 on both
+    sheets, after it 79.98 on both. The sheet owes equality with 1:1, which
+    it delivers exactly; absolute accuracy under 0.1 mm needs the cap raised,
+    which the drawer scan already does for its own path.
+- ▶ NEXT: Part A step 9, photo-quality guidance; then 10 to 13; B.3 at any
+  point.
 
 ### Handoff to a fresh session, 2026-10-02
 

@@ -172,9 +172,10 @@ export async function renderSheetPhoto(opts = {}) {
   const sub = [];
   for (let i = 0; i < ss; i++) for (let j = 0; j < ss; j++) sub.push([(i + 0.5) / ss, (j + 0.5) / ss]);
   const sample = (mx, my, acc) => {
-    // mm on the paper -> flat pixel (pixel j covers [j, j+1) mm*R).
-    const fx = mx * R - 0.5, fy = my * R - 0.5;
-    if (fx < 0 || fy < 0 || fx > fw - 1 || fy > fh - 1) return false;
+    // mm on the paper -> flat pixel (pixel j covers [j, j+1) mm*R). Clamped,
+    // not refused: the outer half pixel of the sheet is still paper, and
+    // treating it as desk shaved 0.06 mm off every edge.
+    const fx = Math.max(0, Math.min(fw - 1, mx * R - 0.5)), fy = Math.max(0, Math.min(fh - 1, my * R - 0.5));
     const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(x0 + 1, fw - 1), y1 = Math.min(y0 + 1, fh - 1);
     const ax = fx - x0, ay = fy - y0;
     for (let c = 0; c < 3; c++) {

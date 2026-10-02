@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.9
+version: 1.2.10
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -818,7 +818,11 @@ checkpoint that needs a person.
 8. **The double check, the verdict, the print check.** The five-parameter
    rectangle, stock identification, the verdict table, the print check and its
    record, the four-corner output, the Step 1 overlay and panel. Tests:
-   criteria 3, 4, 5 and 10.
+   criteria 3, 4, 5 and 10. *Shipped v1.30.5, 2026-10-02: `js/calibVerdict.js`
+   and the `sheet` block in `js/main.js`. The print check records itself
+   whenever a sheet is read with its edges visible, keyed by job and sheet
+   under `2p5d.calibchecks.v1`, rather than as a separate ceremony; a later
+   photo that disagrees replaces the record and says so.*
 9. **Photo-quality guidance.** Criterion 11.
 10. **Segmentation and integration.** The frame-relative mask, the window-edge
     warning, recognition on every load including the queue, the checkbox, an
@@ -1131,6 +1135,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.10 (2026-10-02): Part A step 8 shipped in v1.30.5.
 - v1.2.9 (2026-10-02): Part A step 7 shipped in v1.30.4.
 - v1.2.8 (2026-10-02): Part A steps 5 and 6 shipped in v1.30.2 and v1.30.3.
 - v1.2.7 (2026-10-02): Part A step 4 shipped in v1.30.1.

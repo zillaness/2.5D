@@ -10,6 +10,7 @@ export class CornerEditor {
   constructor(canvas, onChange) {
     this.canvas = canvas;
     this.onChange = onChange;
+    this.overlay = null;    // (ctx, vp) => void, drawn over the quad: the sheet fit's frame and paper
     this.vp = new Viewport(canvas);
     this.image = null;      // HTMLImageElement
     this.corners = null;    // [{x,y} x4] in image px, TL TR BR BL
@@ -255,6 +256,10 @@ export class CornerEditor {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(LABELS[i], p.x, p.y);
+    }
+
+    if (this.overlay) {
+      try { this.overlay(ctx, this.vp); } catch { /* an overlay never takes the handles down */ }
     }
 
     // Loupe while dragging

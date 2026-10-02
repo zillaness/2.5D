@@ -15579,6 +15579,162 @@ const fitTest = await page.evaluate(async () => {
     r.noisy.ok && r.noisy.err.rms < 0.1, `${r.noisy.err.rms.toFixed(4)} mm RMS; k1 ${r.noisy.k1}; ${f(r.noisy)}`);
 }
 
+// ---------- Calibration sheet: the double check, the verdict, the print check (Part A step 8 of calibration_and_backlog_prd_v1.2) ----------
+//
+// The sheet in Step 1, through the app's own load path: autoDetect places
+// the corners, recognition and the fit run, the paper's edges name the
+// stock and the print scale, and the corners, the lens and the panel follow.
+// Criteria 3, 4, 5 and 10.
+
+console.log('\nCalibration sheet: the verdict in Step 1');
+
+const verdictTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderSheetPhoto, stockDims } = await import('./test/sheetPhoto.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens } };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  app.syncRefControls();
+  const sel = $('paperSize');
+  const pick = key => { sel.value = key; sel.dispatchEvent(new Event('change')); };
+  const load = async (r, png = true) => {
+    const url = r.canvas.toDataURL(png ? 'image/png' : 'image/jpeg', 0.95);
+    await new Promise(res => app.loadImageFromURL(url, res));
+    await wait(50);
+  };
+  const cornerErr = truth => Math.max(...st.corners.map((c, i) => Math.hypot(c.x - truth.corners[i].x, c.y - truth.corners[i].y)));
+  const summary = () => {
+    const s = st.sheet;
+    return s ? { id: s.identity, source: s.verdict.source, stock: s.verdict.stock, scale: s.verdict.scale, oneToOne: s.verdict.oneToOne,
+      message: s.verdict.message, rms: s.fit.rmsMm, k1: s.fit.k1, words: s.words, rotation: s.rotation,
+      panel: $('sheetPanel').textContent, panelShown: !$('sheetPanel').hidden, paper: st.paper.size, orient: st.paper.orientation,
+      lensSlider: $('lensSlider').value, lensState: st.lens.k1 } : null;
+  };
+  const base = { paper: 'letter', sheet: 2, count: 4, job: 0x7f, W: 2400, H: 1800, pose: { height: 330, tilt: 6, axis: 20, spin: 3 } };
+  const out = {};
+
+  // Criterion 3: three prints.
+  pick('letter');
+  const p100 = await renderSheetPhoto(base);
+  await load(p100);
+  out.p100 = { ...summary(), cornerErr: cornerErr(p100.truth) };
+  const p96 = await renderSheetPhoto({ ...base, scale: 0.96 });
+  await load(p96);
+  out.p96 = { ...summary(), cornerErr: cornerErr(p96.truth) };
+  const p94 = await renderSheetPhoto({ ...base, scale: 0.94, anchor: 'topleft', offset: { x: 1, y: 1 }, skewDeg: 0.5 });
+  await load(p94);
+  out.p94 = { ...summary(), cornerErr: cornerErr(p94.truth), rect: st.sheet && st.sheet.rect && { rotDeg: st.sheet.rect.rotDeg, x0: st.sheet.rect.x0, y0: st.sheet.rect.y0 } };
+
+  // Criterion 5: a Letter layout printed on A4; the picker wrong.
+  const onA4 = await renderSheetPhoto({ ...base, stock: 'A4', scale: 0.96 });
+  await load(onA4);
+  out.onA4 = { ...summary(), cornerErr: cornerErr(onA4.truth) };
+  pick('A4');
+  await load(p100);
+  out.wrongPicker = { ...summary(), cornerErr: cornerErr(p100.truth) };
+
+  // Criterion 10: the print check on record from a dark-desk photo of the
+  // 96 percent set, then the same set on a white desk, where the edges
+  // cannot be seen: rough corners by hand, the recorded scale used and named.
+  pick('letter');
+  await load(p96);
+  const recorded = app.sheet.check(0x7f, 2);
+  const white = await renderSheetPhoto({ ...base, scale: 0.96, desk: '#f6f4ee' });
+  await load(white);
+  const detected = { source: st.sheet ? st.sheet.verdict.source : null, had: !!st.sheet };
+  // A rough drag: the truth corners pushed 4 mm about.
+  const { applyHomography } = await import('./js/homography.js');
+  const paper = stockDims('letter');
+  const dirs = [[1, 1], [-1, 1], [-1, -1], [1, -1]];
+  st.corners = white.truth.corners.map((c, i) => {
+    const mm = [[0, 0], [paper.w, 0], [paper.w, paper.h], [0, paper.h]][i];
+    const q = applyHomography(white.truth.Hp, mm[0] + dirs[i][0] * 4, mm[1] + dirs[i][1] * 4);
+    return { x: q.x - 0.5, y: q.y - 0.5 };
+  });
+  app.cornerEditor.setCorners(st.corners);
+  app.sheet.recognise();
+  out.white = { ...summary(), cornerErr: cornerErr(white.truth), recorded: recorded && { stock: recorded.stock, scale: recorded.scale, sheet: recorded.sheet, job: recorded.job }, detected };
+  // No record: unverified.
+  app.sheet.clearChecks();
+  app.sheet.recognise();
+  out.whiteNoRecord = { ...summary(), cornerErr: cornerErr(white.truth) };
+
+  // The switch: off, a person's corners rule and nothing snaps.
+  app.sheet.fitOn = false;
+  const own = st.corners.map(c => ({ x: c.x + 7, y: c.y - 5 }));
+  st.corners = own.map(c => ({ ...c }));
+  app.cornerEditor.setCorners(st.corners);
+  app.sheet.recognise();
+  out.off = { sheet: !!st.sheet, moved: Math.max(...st.corners.map((c, i) => Math.hypot(c.x - own[i].x, c.y - own[i].y))), panel: $('sheetPanel').textContent, shown: !$('sheetPanel').hidden };
+  app.sheet.fitOn = true;
+
+  // Criterion 4: an 80 x 50 rounded object on a 96 percent sheet, traced in
+  // Step 2 through the sheet's corners, at high resolution.
+  pick('letter');
+  const obj = { x: 105 - 40, y: 140 - 25, w: 80, h: 50, r: 8, color: '#23364a' };
+  const traceOn = async scale => {
+    const hi = await renderSheetPhoto({ ...base, W: 3200, H: 2400, pose: { height: 300, tilt: 5, axis: 20, spin: 2 }, scale, objects: [obj], supersample: 1 });
+    await load(hi);
+    const s = summary();
+    app.goStep(2);
+    await wait(100);
+    const { outer } = app.traceEditor.getTrace();
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const p of outer) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+    const t = { w: maxX - minX, h: maxY - minY, n: outer.length, sheet: s, pxPerMm: hi.truth.pxPerMm, cornerErr: cornerErr(hi.truth), rectPxPerMm: st.rect && st.rect.pxPerMm };
+    app.goStep(1);
+    return t;
+  };
+  out.traced = await traceOn(0.96);
+  out.traced100 = await traceOn(1);
+
+  app.sheet.clearChecks();
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens;
+  app.syncRefControls();
+  return out;
+});
+{
+  const r = verdictTest;
+  const sc = x => x && x.scale ? `${(x.scale.x * 100).toFixed(2)} / ${(x.scale.y * 100).toFixed(2)} percent` : 'none';
+  const within = (x, t, tol) => x && x.scale && Math.abs(x.scale.x - t) <= tol && Math.abs(x.scale.y - t) <= tol;
+  check('a 1:1 print is recognised on load, reads "1:1", and the corners snap to the paper within a pixel',
+    r.p100 && r.p100.source === 'edges' && r.p100.oneToOne && /1:1/.test(r.p100.message) && within(r.p100, 1, 0.002) && r.p100.cornerErr < 0.8 &&
+    r.p100.panelShown && /sheet 2 of set 7F/.test(r.p100.panel) && Math.abs(r.p100.k1) < 0.01 && r.p100.lensState === r.p100.k1,
+    r.p100 ? `${sc(r.p100)}, corners ${r.p100.cornerErr.toFixed(2)} px, rotation ${r.p100.rotation}, "${r.p100.message}"` : 'no sheet');
+  check('a 96 percent print about the centre reports its scale within 0.2 percent per axis and names the percentage (criterion 3)',
+    r.p96 && r.p96.source === 'edges' && !r.p96.oneToOne && within(r.p96, 0.96, 0.002) && /96\.\d percent/.test(r.p96.message) && r.p96.cornerErr < 0.8,
+    r.p96 ? `${sc(r.p96)}, corners ${r.p96.cornerErr.toFixed(2)} px` : 'no sheet');
+  check('a 94 percent print from the top-left corner with a 1 mm offset and 0.5 degrees of skew reports its scale within 0.2 percent, and the skew',
+    r.p94 && within(r.p94, 0.94, 0.002) && r.p94.rect && Math.abs(r.p94.rect.rotDeg) > 0.3 && Math.abs(r.p94.rect.rotDeg) < 0.7 && r.p94.cornerErr < 0.8,
+    r.p94 ? `${sc(r.p94)}, source ${r.p94.source}, skew ${r.p94.rect && r.p94.rect.rotDeg != null ? r.p94.rect.rotDeg.toFixed(2) : '?'} degrees, corners ${r.p94.cornerErr.toFixed(2)} px` : 'no sheet');
+  check('a Letter layout printed on A4 is reported as exactly that, with the scale measured against A4 (criterion 5)',
+    r.onA4 && r.onA4.stock === 'A4' && /printed on A4/.test(r.onA4.message) && r.onA4.paper === 'A4' && r.onA4.cornerErr < 0.6,
+    r.onA4 ? `stock ${r.onA4.stock}, ${sc(r.onA4)}, picker now ${r.onA4.paper}; "${r.onA4.message}"` : 'no sheet');
+  check('a paper picker set to the wrong size is overridden by the sheet, with a message (criterion 5)',
+    r.wrongPicker && r.wrongPicker.paper === 'letter' && /picker said A4/.test(r.wrongPicker.message) && r.wrongPicker.cornerErr < 0.8,
+    r.wrongPicker ? `picker ${r.wrongPicker.paper}; "${r.wrongPicker.message}"` : 'no sheet');
+  check('on a white desk the recorded print check is used and named, and the corners still land within 2 px (criterion 10)',
+    r.white && r.white.recorded && r.white.recorded.sheet === 2 && r.white.source === 'record' && /print check of set 7F, sheet 2/.test(r.white.message) &&
+    within(r.white, 0.96, 0.003) && r.white.cornerErr < 2,
+    r.white ? `recorded ${r.white.recorded ? sc({ scale: r.white.recorded.scale }) : 'nothing'}; used ${r.white.source}, ${sc(r.white)}, corners ${r.white.cornerErr.toFixed(2)} px, rotation ${r.white.rotation}, words ${r.white.words}, detected first ${JSON.stringify(r.white.detected)}; "${r.white.message}"` : 'no sheet');
+  check('with no record, edges that cannot be seen give "unverified" and name where the scale came from (criterion 5)',
+    r.whiteNoRecord && r.whiteNoRecord.source === 'design' && /unverified/.test(r.whiteNoRecord.message) && /1:1 print is assumed/.test(r.whiteNoRecord.message),
+    r.whiteNoRecord ? `"${r.whiteNoRecord.message}"` : 'no sheet');
+  check('with the sheet fit switched off, a person\'s corners stay where they were put',
+    r.off && !r.off.sheet && r.off.moved === 0 && r.off.shown && /your corners rule/.test(r.off.panel), r.off ? `moved ${r.off.moved}; "${r.off.panel}"` : '?');
+  // The trace at rectify's 1600 px cap is 5.7 px/mm on Letter, so its own
+  // quantisation is a fair share of criterion 4's 0.1 mm; the sheet owes
+  // that the 96 percent print traces the same as the 1:1 one.
+  check('an 80 x 50 object traced on the 96 percent sheet measures within 0.1 mm of true, the same as on the 1:1 sheet (criterion 4)',
+    r.traced && r.traced100 && Math.abs(r.traced.w - 80) < 0.1 && Math.abs(r.traced.h - 50) < 0.1 &&
+    Math.abs(r.traced.w - r.traced100.w) < 0.05 && Math.abs(r.traced.h - r.traced100.h) < 0.05,
+    r.traced ? `96 percent: ${r.traced.w.toFixed(3)} × ${r.traced.h.toFixed(3)} mm; 1:1: ${r.traced100 ? `${r.traced100.w.toFixed(3)} × ${r.traced100.h.toFixed(3)}` : '?'} mm; rectified at ${r.traced.rectPxPerMm && r.traced.rectPxPerMm.toFixed(2)} px/mm from a ${r.traced.pxPerMm.toFixed(1)} px/mm photo; corners ${r.traced.cornerErr.toFixed(2)} px` : 'no trace');
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

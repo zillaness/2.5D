@@ -12,6 +12,9 @@ import { readFocalLength, focalPixels } from './exif.js';
 import { computeDiffMap, otsuThreshold, segmentObject, segmentObjects } from './segment.js';
 import { scanParts, SCAN_DEFAULTS, fitCircle, findCoinCandidate, coinScaleCheck, rescaleParts, mergeParts } from './scan.js';
 import { sheetSetSVG, printPageHTML, drawJob, jobHex, paperLabel as calibPaperLabel, LAYOUT_VERSION as CALIB_LAYOUT } from './calibSheet.js';
+import { recogniseSheet } from './calibDetect.js';
+import { fitSheet } from './calibFit.js';
+import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel } from './calibVerdict.js';
 import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
@@ -84,6 +87,10 @@ const state = {
   labels: [],     // emboss/deboss text on a face
   coin: { size: DEFAULT_COIN, customD: 24.26 },
   lens: { k1: 0, k2: 0 }, // radial lens-distortion correction (rectangle path)
+  // A recognised calibration sheet for the photo on screen (never saved: it
+  // is re-derived from the photo, and a project's corners rule on reload).
+  sheet: null,
+  sheetFit: true,         // the sheet fit snaps the corners; off, a person's own corners rule
   rect: null,             // { canvas, pxPerMm }
   rectDirty: true,
   diffMap: null,
@@ -182,7 +189,7 @@ const parseDim = str => parseLength(str, state.units);
 
 // ---------- widgets ----------
 
-const cornerEditor = new CornerEditor($('cornerCanvas'), () => { state.rectDirty = true; updatePaperCheck(); });
+const cornerEditor = new CornerEditor($('cornerCanvas'), () => { state.rectDirty = true; updatePaperCheck(); sheetScheduleRefit(); });
 const traceEditor = new TraceEditor($('traceCanvas'), {
   onChange: (throttled) => {
     updateTraceInfo();
@@ -546,6 +553,161 @@ function autoDetect(announce = true) {
   state.rectDirty = true;
   cornerEditor.setCorners(state.corners);
   updatePaperCheck();
+  sheetRecognise();
+}
+
+// ---------- the calibration sheet in Step 1 (calibration_and_backlog_prd_v1.2, Part A step 8) ----------
+//
+// After the corners are placed, by the detector or by hand, the photo is
+// searched for a calibration sheet. Found, the sheet gives the corners (the
+// paper's own edges through the fit, or the design taken as true when they
+// cannot be seen), the lens term, and a verdict on the print scale against
+// the paper's real edges. Nothing changes for a photo without a sheet, and a
+// project's saved corners are never re-fitted. The fit can be switched off,
+// after which a person's corners rule.
+
+const CALIB_CHECKS_KEY = '2p5d.calibchecks.v1';
+function calibChecks() {
+  try { return JSON.parse(localStorage.getItem(CALIB_CHECKS_KEY) || '{}') || {}; } catch { return {}; }
+}
+function calibCheckRecord(job, sheet) {
+  return calibChecks()[`${job}:${sheet}`] || null;
+}
+function calibCheckRemember(rec) {
+  const all = calibChecks();
+  all[`${rec.job}:${rec.sheet}`] = { ...rec, at: calibClock() };
+  try { localStorage.setItem(CALIB_CHECKS_KEY, JSON.stringify(all)); } catch { /* storage blocked */ }
+}
+
+let sheetRefitTimer = null;
+function sheetScheduleRefit() {
+  if (sheetRefitTimer) clearTimeout(sheetRefitTimer);
+  sheetRefitTimer = setTimeout(() => { sheetRefitTimer = null; sheetRecognise(); }, 150);
+}
+
+function sheetRecognise() {
+  state.sheet = null;
+  cornerEditor.overlay = null;
+  const applicable = state.image && state.corners && state.reference === 'rect' && !scanOn();
+  if (!applicable || !state.sheetFit) { sheetSyncPanel(); cornerEditor.draw(); return null; }
+  const iw = state.image.naturalWidth || state.image.width;
+  const ih = state.image.naturalHeight || state.image.height;
+  let rec = null, fit = null;
+  try {
+    rec = recogniseSheet(state.image, state.corners, currentPaper(), { k1: 0 });
+    if (rec && rec.ok) fit = fitSheet(rec, iw, ih);
+  } catch (err) {
+    console.error('sheet recognition failed', err);
+    rec = null;
+  }
+  if (!rec || !rec.ok || !fit || !fit.ok) { sheetSyncPanel(); cornerEditor.draw(); return null; }
+
+  // The paper's edges in design millimetres, and the verdict.
+  const edges = {};
+  for (const e of rec.edges || []) edges[e.side] = (e.raw || []).map(p => fit.photoToDesign(p));
+  let rect = null;
+  try { rect = fitPaperRect(edges); } catch { rect = null; }
+  const record = calibCheckRecord(rec.identity.job, rec.identity.sheet);
+  const verdict = sheetVerdict({ identity: rec.identity, rect, picker: state.paper.size, record });
+  let note = '';
+  if (verdict.record) {
+    if (record && recordDisagrees(record, verdict)) note = ' The print check on record disagreed and has been replaced by this photo.';
+    calibCheckRemember(verdict.record);
+  }
+
+  // The corners: the verdict's paper rectangle through the fit, back into
+  // the order the rough corners had in the photo. Rough side i is design
+  // side (i + rotation), so rough corner i is design corner (i + rotation).
+  const r = rec.rotation || 0;
+  const designCorners = verdict.rect.corners;
+  const photoCorners = designCorners.map(p => fit.designToPhoto(p));
+  const corners = [0, 1, 2, 3].map(i => photoCorners[(i + r) % 4]);
+  if (!corners.every(c => Number.isFinite(c.x) && Number.isFinite(c.y))) { sheetSyncPanel(); return null; }
+
+  state.sheet = {
+    identity: rec.identity, rotation: r, verdict, rect, note,
+    fit: { ...fit.fit, k1: fit.k1 }, words: rec.words.length, wordsRead: rec.wordsRead,
+    designToPhoto: fit.designToPhoto, photoToDesign: fit.photoToDesign, geom: fit.geom,
+    corners,
+  };
+  if (verdict.overridePicker && verdict.overridePicker !== state.paper.size) {
+    state.paper.size = verdict.overridePicker;
+    sizeSel.value = state.paper.size;
+    $('customSizeRow').hidden = true;
+  }
+  state.paper.orientation = r % 2 ? 'landscape' : 'portrait';
+  $('paperOrient').value = state.paper.orientation;
+  state.corners = corners;
+  cornerEditor.setCorners(corners);
+  // The lens term, from the printed lines (open question 3): applied, with
+  // the slider as the override.
+  state.lens.k1 = fit.k1;
+  $('lensSlider').value = Math.round(fit.k1 * 1000);
+  $('lensVal').textContent = fit.k1.toFixed(3);
+  state.rectDirty = true;
+  cornerEditor.overlay = (ctx, vp) => sheetDrawOverlay(ctx, vp);
+  sheetSyncPanel();
+  updatePaperCheck();
+  cornerEditor.draw();
+  return state.sheet;
+}
+
+function sheetSyncPanel() {
+  const el = $('sheetPanel');
+  if (!el) return;
+  el.textContent = '';
+  const s = state.sheet;
+  if (!s && state.sheetFit) { el.hidden = true; return; }
+  const text = document.createElement('span');
+  if (s) {
+    const id = s.identity;
+    text.textContent = `Calibration sheet: ${stockLabel(id.paper)} layout v${id.version}, sheet ${id.sheet} of set ${jobHex(id.job)}. ` +
+      `${s.verdict.message}${s.note} Fit ${s.fit.rmsMm.toFixed(3)} mm from ${s.fit.points} cells and ${s.fit.lines} frame points` +
+      `${s.fit.k1 ? `, lens ${s.fit.k1.toFixed(3)}` : ''}. `;
+  } else {
+    text.textContent = 'Sheet fit off: your corners rule. ';
+  }
+  const lab = document.createElement('label');
+  lab.className = 'check';
+  lab.style.display = 'inline-flex';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.id = 'sheetFitOn';
+  box.checked = !!state.sheetFit;
+  box.title = 'On, the sheet fit places the corners and the lens; a dragged corner re-fits and snaps. Off, your corners stay where you put them.';
+  box.addEventListener('change', () => {
+    state.sheetFit = box.checked;
+    if (state.sheetFit) sheetRecognise(); else { state.sheet = null; cornerEditor.overlay = null; sheetSyncPanel(); cornerEditor.draw(); }
+  });
+  lab.append(box, document.createTextNode(' Use the sheet fit'));
+  el.append(text, lab);
+  el.hidden = false;
+}
+
+// Over the photo in Step 1: the frame the fit found (gold, dashed) and the
+// paper outline it measured (green), so a person can see the double check.
+function sheetDrawOverlay(ctx, vp) {
+  const s = state.sheet;
+  if (!s) return;
+  const poly = (pts, colour, dash) => {
+    ctx.beginPath();
+    pts.forEach((p, i) => { const q = vp.toScreen(p); if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); });
+    ctx.closePath();
+    ctx.setLineDash(dash || []);
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  const fc = s.geom.frame.centre;
+  const frame = [];
+  const along = (x0, y0, x1, y1) => { for (let i = 0; i < 12; i++) { const t = i / 12; frame.push(s.designToPhoto({ x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t })); } };
+  along(fc.x, fc.y, fc.x + fc.w, fc.y); along(fc.x + fc.w, fc.y, fc.x + fc.w, fc.y + fc.h);
+  along(fc.x + fc.w, fc.y + fc.h, fc.x, fc.y + fc.h); along(fc.x, fc.y + fc.h, fc.x, fc.y);
+  poly(frame, '#ffd257', [6, 4]);
+  if (s.verdict.source === 'edges' && s.rect && s.rect.corners) {
+    poly(s.rect.corners.map(p => s.designToPhoto(p)), '#37d67a');
+  }
 }
 
 // Do the sheet's proportions match the size picked? (Part A step 1 of
@@ -5733,6 +5895,7 @@ $('refType').addEventListener('change', e => {
   // scan. Nothing else guards it, and a scan flag left set under the coin
   // reference would raise the resolution ceiling on a path that never wanted it.
   if (state.reference !== 'rect' && state.scan) state.scan.on = false;
+  if (state.reference !== 'rect') { state.sheet = null; cornerEditor.overlay = null; sheetSyncPanel(); }
   syncRefControls();
   $('gridCheck').textContent = '';
   if (state.image) {
@@ -8000,6 +8163,17 @@ window.__app = {
     get coin() { return state.scan && state.scan.coin; },
     get coinCheck() { return state.scan && state.scan.coinCheck; },
     get rescale() { return state.scan && state.scan.rescale; },
+  },
+  // The sheet in Step 1: recognise now, read what was found, the print
+  // checks on record, and the switch.
+  sheet: {
+    recognise: () => sheetRecognise(),
+    get state() { return state.sheet; },
+    get fitOn() { return state.sheetFit; },
+    set fitOn(v) { state.sheetFit = !!v; },
+    checks: () => calibChecks(),
+    clearChecks: () => { try { localStorage.removeItem(CALIB_CHECKS_KEY); } catch { /* blocked */ } },
+    check: (job, sheet) => calibCheckRecord(job, sheet),
   },
   // Calibration sheets: the panel, the print and the download with their
   // record, and the clock the job is drawn from.

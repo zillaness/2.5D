@@ -23,7 +23,14 @@ import { computeHomography, applyHomography } from './homography.js';
 import { lensParams, undistortPixel } from './lens.js';
 
 export const DETECT_DEFAULTS = {
-  outsideMm: 8,          // profiles start this far outside the rough paper edge
+  // Profiles start this far outside the rough edge. The rough corners are
+  // often the FRAME's inner edge rather than the paper's: the frame is the
+  // strongest boundary in the photo, so detectPaperCorners takes the window
+  // for the sheet and the edge fit snaps to the frame. The paper edge is then
+  // 11.5 mm out, up to 28 mm for the far side of a 94 percent print anchored
+  // at a corner, and the reach has to cover it or there is no double check.
+  outsideMm: 40,
+  minDeskMm: 3,          // a paper edge needs this much dark desk before it; the frame's inner edge has 2 mm
   insideMm: 40,          // and run this far inside it
   profileStepMm: 1,      // frame profiles along a side, in rough millimetres
   alongStepMm: 0.25,     // track samples along a side, between the profiles
@@ -91,18 +98,28 @@ function analyseProfile(L, d0, step, pxPerMm, o) {
   const vals = [];
   for (let i = 0; i < n; i++) if (!Number.isNaN(L[i])) vals.push(L[i]);
   if (vals.length < n * 0.6) return null;
-  const hi = percentile(vals, 0.9), lo = percentile(vals, 0.05);
+  // The ink level from the darkest percent: on a white desk the profile is
+  // 80 mm of paper with 5 mm of ink, and a fifth percentile lands on paper.
+  const hi = percentile(vals, 0.9), lo = percentile(vals, 0.01);
   if (hi - lo < o.minContrast) return null;
   const thr = (hi + lo) / 2;
-  // The paper edge: the first upward crossing of thr that holds for 1 mm.
+  // The paper edge: the first upward crossing of thr that holds for 1 mm
+  // and follows at least minDeskMm of dark. The frame's own inner edge is
+  // an upward crossing too, but only 2 mm of ink precede it; the desk runs
+  // from the profile's start.
   const holdN = Math.max(2, Math.round(pxPerMm / step));
-  let edgeI = -1;
+  const deskN = Math.max(2, Math.round(o.minDeskMm * pxPerMm / step));
+  let edgeI = -1, dark = 0;
   for (let i = 0; i < n - holdN - 1; i++) {
-    if (Number.isNaN(L[i]) || Number.isNaN(L[i + 1])) continue;
+    if (Number.isNaN(L[i]) || Number.isNaN(L[i + 1])) { dark = 0; continue; }
+    if (L[i] < thr) dark++;
     if (L[i] < thr && L[i + 1] >= thr) {
-      let holds = true;
-      for (let j = i + 1; j <= i + holdN; j++) if (!(L[j] >= thr)) { holds = false; break; }
+      let holds = dark >= deskN;
+      for (let j = i + 1; holds && j <= i + holdN; j++) if (!(L[j] >= thr)) holds = false;
       if (holds) { edgeI = i; break; }
+      dark = 0;
+    } else if (!(L[i] < thr)) {
+      dark = 0;
     }
   }
   // Had there been no desk (a white desk), the profile starts on paper: the
@@ -125,8 +142,29 @@ function analyseProfile(L, d0, step, pxPerMm, o) {
       let mn = Infinity;
       for (let k = i; k <= j; k++) mn = Math.min(mn, L[k]);
       if (hi - mn >= o.minContrast) {
+        // The paper edge at the gradient peak, refined by a parabola through
+        // its neighbours: under symmetric blur that is the 50 percent crossing
+        // of the desk-to-paper step, where the threshold crossing is biased
+        // toward whichever of desk and ink is darker.
+        let edge = null;
+        if (edgeI >= 0) {
+          // The crossing halfway between the desk just before the edge and
+          // the paper just after it, each a median over 1 to 3 mm, so the
+          // edge is the 50 percent point of its own step whatever the desk's
+          // shade, and not of the paper-to-ink threshold.
+          const mm = Math.max(1, Math.round(pxPerMm / step));
+          const desk = [], paper = [];
+          for (let j = edgeI - 3 * mm; j <= edgeI - mm; j++) if (j >= 0 && !Number.isNaN(L[j])) desk.push(L[j]);
+          for (let j = edgeI + 1 + mm; j <= edgeI + 1 + 3 * mm; j++) if (j < n && !Number.isNaN(L[j])) paper.push(L[j]);
+          const half = desk.length && paper.length ? (median(desk) + median(paper)) / 2 : thr;
+          let at = edgeI;
+          for (let j = Math.max(0, edgeI - mm); j < Math.min(n - 1, edgeI + mm); j++) {
+            if (L[j] < half && L[j + 1] >= half) { at = j; break; }
+          }
+          edge = d0 + crossAt(L, at, half) * step;
+        }
         return {
-          edge: edgeI >= 0 ? d0 + crossAt(L, edgeI, thr) * step : null,
+          edge,
           dip: d0 + ((a + b) / 2) * step, width: widthPx, thr, paper: hi, ink: mn,
         };
       }
