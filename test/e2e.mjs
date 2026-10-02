@@ -17,6 +17,8 @@ import {
 import { exifSegment, spliceExif } from './mark-photo.js';
 import { readFocalLength } from '../js/exif.js';
 import { APP_VERSION } from '../js/version.js';
+import { encodeWord, decodeWord, sheetCells } from '../js/calibSheet.js';
+import { FIXTURE, FROZEN_MESSAGE, referenceLayout } from './freeze-layout.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
@@ -15038,6 +15040,130 @@ check('a re-edit that touches only the trace leaves the project\'s rectified JPE
   `kept on load ${jpegTrip.loaded.kept}, identical after edit ${jpegTrip.editIdentical}, outer[0].x ${jpegTrip.editOuterX}`);
 check('a rectification that changed, a 90 degree turn, is encoded fresh',
   jpegTrip.rotateDiffers, `differs ${jpegTrip.rotateDiffers}`);
+
+// ---------- Calibration sheet: layout v1 and its code (Part A step 3 of calibration_and_backlog_prd_v1.2) ----------
+//
+// The layout is frozen the day it ships, because printed sheets outlive the
+// code. The code word carries layout version, paper, sheet, print job and
+// position with a CRC-8, and a word with one bad cell is dropped, never
+// misread. Pure module work in Node first, then the SVG in the page.
+
+console.log('\nCalibration sheet: layout v1 and its code');
+
+{
+  const ref = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
+  const now = referenceLayout();
+  const same = JSON.stringify(ref) === JSON.stringify(now);
+  let where = '';
+  if (!same) {
+    for (const paper of Object.keys(ref.stocks)) {
+      const a = ref.stocks[paper], b = now.stocks[paper];
+      if (!b) { where = `${paper} missing`; break; }
+      for (const key of Object.keys(a)) {
+        if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) { where = `${paper}.${key}`; break; }
+      }
+      if (where) break;
+    }
+  }
+  check('regenerating layout v1 reproduces the frozen reference geometry for Letter and A4 exactly',
+    same, same ? `${ref.stocks.letter.cells + ref.stocks.A4.cells} cells, digests match` : `${FROZEN_MESSAGE} (first difference: ${where})`);
+  check('the frozen layout is the one the PRD specifies: Letter 28 words (6, 8, 6, 8), A4 30 (6, 9, 6, 9), windows 178.9 x 226.4 and 173 x 244',
+    ref.stocks.letter.words === 28 && ref.stocks.letter.sides.map(s => s.words).join(',') === '6,8,6,8' &&
+    ref.stocks.A4.words === 30 && ref.stocks.A4.sides.map(s => s.words).join(',') === '6,9,6,9' &&
+    near(ref.stocks.letter.window.w, 178.9, 1e-6) && near(ref.stocks.letter.window.h, 226.4, 1e-6) &&
+    near(ref.stocks.A4.window.w, 173, 1e-6) && near(ref.stocks.A4.window.h, 244, 1e-6) &&
+    near(ref.stocks.letter.frame.centre.w, 193.9, 1e-6) && near(ref.stocks.letter.frame.centre.h, 257.4, 1e-6) &&
+    near(ref.stocks.A4.frame.centre.w, 188, 1e-6) && near(ref.stocks.A4.frame.centre.h, 275, 1e-6),
+    `Letter ${ref.stocks.letter.words} words, A4 ${ref.stocks.A4.words}`);
+  // The clock pattern: three white cells in a row at every word boundary and
+  // nowhere else, eight black cells per word.
+  const clocks = ref.stocks.letter.sides.flatMap(s => s.list.map(w => w.clock));
+  const ring = clocks.join('');
+  const triples = (ring + ring.slice(0, 2)).match(/WWW/g) || [];
+  check('the clock row has eight black cells per word and three whites only at word boundaries',
+    clocks.every(c => c === 'WWBWBWBWBWBWBWBWBW') && triples.length === clocks.length,
+    `${clocks.length} words, ${triples.length} triple whites`);
+
+  // The code: every field round-trips, and every single-cell corruption of
+  // every word tried is rejected.
+  let trips = 0, bad = 0, flipsCaught = 0, flipsTried = 0;
+  for (const paper of [1, 2, 3, 4, 5, 6]) {
+    for (let sheet = 1; sheet <= 15; sheet++) {
+      for (let position = 0; position < 64; position += 3) {
+        for (let job = 0; job < 256; job += 17) {
+          const fields = { version: 1, paper, sheet, job, position };
+          const bits = encodeWord(fields);
+          const back = decodeWord(bits);
+          trips++;
+          if (!back || Object.keys(fields).some(k => back[k] !== fields[k])) bad++;
+          if (position % 21 === 0 && job % 51 === 0) {
+            for (let i = 0; i < bits.length; i++) {
+              const f = bits.slice(); f[i] ^= 1;
+              flipsTried++;
+              if (decodeWord(f) === null) flipsCaught++;
+            }
+          }
+        }
+      }
+    }
+  }
+  check('every field of the code word round-trips through the encoder and decoder',
+    bad === 0 && trips > 30000, `${trips} words, ${bad} wrong`);
+  check('a word corrupted in any single cell is rejected, never misread',
+    flipsTried > 10000 && flipsCaught === flipsTried, `${flipsCaught} of ${flipsTried} single-cell flips caught`);
+  const v2 = encodeWord({ version: 2, paper: 1, sheet: 1, job: 1, position: 1 });
+  const p0 = encodeWord({ version: 1, paper: 0, sheet: 1, job: 1, position: 1 });
+  check('a word from a layout this reader does not know, or with an unassigned paper code, is refused',
+    decodeWord(v2) === null && decodeWord(p0) === null && decodeWord([1, 0, 1]) === null, 'v2 null, paper 0 null, short null');
+
+  // The sheet's cells carry the words: reading the black cells back decodes
+  // every word's fields, and the clock cells are 8 per word.
+  const sc = sheetCells('A4', 3, 0xa5);
+  const perWord = new Map();
+  for (const c of sc.black) {
+    if (!perWord.has(c.position)) perWord.set(c.position, { clock: 0, bits: new Array(34).fill(0) });
+    const w = perWord.get(c.position);
+    if (c.kind === 'clock') w.clock++; else w.bits[c.bit] = 1;
+  }
+  let decodedOk = 0;
+  for (const [position, w] of perWord) {
+    const d = decodeWord(w.bits);
+    if (d && w.clock === 8 && d.paper === 2 && d.sheet === 3 && d.job === 0xa5 && d.position === position && d.version === 1) decodedOk++;
+  }
+  check('an A4 sheet\'s black cells read back as 30 words naming layout 1, A4, sheet 3, job A5 and their positions',
+    perWord.size === 30 && decodedOk === 30 && sc.words.length === 30, `${decodedOk} of ${perWord.size} words decode`);
+}
+
+const svgCheck = await page.evaluate(async () => {
+  const { sheetSVG, sheetSetSVG, sheetCells } = await import('./js/calibSheet.js');
+  const parse = s => new DOMParser().parseFromString(s, 'image/svg+xml');
+  const svg = sheetSVG('letter', 2, 4, 0x7f);
+  const doc = parse(svg);
+  const root = doc.documentElement;
+  const err = doc.querySelector('parsererror');
+  const cells = doc.querySelectorAll('g.cells rect').length;
+  const label = (doc.querySelector('text.label') || {}).textContent || '';
+  const black = sheetCells('letter', 2, 0x7f).black.length;
+  const other = sheetSVG('letter', 3, 4, 0x7f);
+  const otherCells = parse(other).querySelectorAll('g.cells rect').length;
+  const set = sheetSetSVG('A4', 3, 0x10);
+  const setLabels = set.map(s => ((parse(s).querySelector('text.label') || {}).textContent || ''));
+  const same = sheetSVG('letter', 2, 4, 0x7f) === svg;
+  return {
+    err: !!err, tag: root.tagName, w: root.getAttribute('width'), h: root.getAttribute('height'), vb: root.getAttribute('viewBox'),
+    cells, black, label, otherCells, otherBlack: sheetCells('letter', 3, 0x7f).black.length, set: set.length, setLabels, same,
+    frame: doc.querySelectorAll('rect.frame').length, ruler: doc.querySelectorAll('g.ruler line').length,
+  };
+});
+check('the sheet is SVG in real millimetres that parses, with its frame, every black cell, a 150 mm ruler and the label',
+  !svgCheck.err && svgCheck.tag === 'svg' && svgCheck.w === '215.9mm' && svgCheck.h === '279.4mm' && svgCheck.vb === '0 0 215.9 279.4' &&
+  svgCheck.cells === svgCheck.black && svgCheck.frame === 1 && svgCheck.ruler === 152 &&
+  /US Letter/.test(svgCheck.label) && /layout v1/.test(svgCheck.label) && /sheet 2 of 4/.test(svgCheck.label) && /set 7F/.test(svgCheck.label) && /Actual size/.test(svgCheck.label),
+  `${svgCheck.w} x ${svgCheck.h}, ${svgCheck.cells} cells drawn of ${svgCheck.black}; "${svgCheck.label}"`);
+check('a set is numbered 1 to N under one job, sheets differ only in their data cells, and the output is deterministic',
+  svgCheck.set === 3 && svgCheck.setLabels.every((l, i) => new RegExp(`sheet ${i + 1} of 3`).test(l) && /set 10/.test(l)) &&
+  svgCheck.otherCells === svgCheck.otherBlack && svgCheck.otherCells !== svgCheck.cells && svgCheck.same,
+  `${svgCheck.set} sheets; sheet 2 has ${svgCheck.cells} black cells, sheet 3 ${svgCheck.otherCells}`);
 
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //

@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.5
+version: 1.2.6
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -792,6 +792,9 @@ checkpoint that needs a person.
    Letter and A4, the word encoder and decoder with its CRC, the SVG generator
    for a numbered set, and the locked reference geometry. Tests: every field
    round-trips; every single-cell corruption is rejected; criterion 15.
+   *Shipped v1.30.0, 2026-10-02: the reference is
+   `test/fixtures/calib_layout_v1.json`, written once by
+   `test/freeze-layout.mjs`, which refuses to run again without `--force`.*
 4. **Printing from the app.** The Step 1 panel, the print page, the SVG
    download, the print record, the paper and lighting advice. Test: the page's
    `@page` size and every sheet's number, job and paper are what the panel
@@ -1119,6 +1122,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.6 (2026-10-02): Part A step 3 shipped in v1.30.0; layout v1 frozen.
 - v1.2.5 (2026-10-02): B.4 shipped in v1.29.3.
 - v1.2.4 (2026-10-02): B.2 shipped, thumbnails in v1.29.1 and merge in v1.29.2.
 - v1.2.3 (2026-10-02): B.1 shipped in v1.29.0; its status note records the

@@ -369,8 +369,24 @@ real-photo checkpoint. Building in the PRD's suggested order.
     and says the JSON is invalid. Every project the app writes loads, and the
     library import path reads the same minimal shape without complaint, so
     this is a hand-edited-file edge; recorded, not fixed.
-- ▶ NEXT: Part A step 3, the layout and the code (`js/calibSheet.js`); then
-  steps 4 to 13; B.3 at any point.
+- ✅ Part A step 3, the layout and the code. `js/calibSheet.js`, pure: layout
+  v1 as insets from the paper edge (`layoutGeometry` for any stock in the
+  paper table with a code; Letter 28 words, A4 30, A3 46, exactly the PRD's
+  table), the 34-bit word with its CRC-8 (`encodeWord` / `decodeWord`), the
+  clock pattern with its missing tooth, `sheetCells` and `sheetSVG` in real
+  millimetres with the ruler and the label. `test/freeze-layout.mjs` wrote
+  `test/fixtures/calib_layout_v1.json` once and refuses to run again; the
+  suite regenerates both stocks and compares, failing with the PRD's message.
+  31,680 words round-trip, 73,440 single-cell flips are all caught, an A4
+  sheet's cells read back as its 30 words. 747 checks, all passing, no
+  console errors; dist rebuilt and smoke-tested — v1.30.0.
+  - ⚠ **Layout v1 is now frozen.** From this commit any change to
+    `js/calibSheet.js` that moves a rectangle or a cell fails the suite until
+    a v2 layout is added beside it. Sam has not printed a sheet yet, so if the
+    first real print shows a flaw in the layout, the freeze can be lifted
+    with `--force` before anything is in the field; after that it cannot.
+- ▶ NEXT: Part A step 4, printing from the app; then 5 to 13; B.3 at any
+  point.
 
 ### Handoff to a fresh session, 2026-10-02
 
