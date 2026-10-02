@@ -10,11 +10,15 @@ ai_update: Update last_updated and version. Rename file to match. Append changel
 
 # PRD: Calibration sheets, drawer scale, and the backlog
 
-Status: **SIGNED OFF 2026-10-02: Part A phase 1 and Part B items B.1 to B.4,
-with open questions 1 to 15 settled on their recommendations. Build in
-progress.** Part A phases 2 and 3 wait for their own sign-off after phase 1's
-real-photo checkpoint. · 2026-09-29 · target branch
-`claude/2.5d-photo-stl-s3-y0oodn`
+Status: **Part A phase 1 BUILT, v1.28.0 to v1.30.10, 2026-10-02, all
+thirteen steps including the two droppable ones; its real-photo checkpoint
+(step 10) waits on Sam's prints. Part B items B.1, B.2 and B.4 SHIPPED
+(v1.29.0 to v1.29.3); B.3 next.** Signed off 2026-10-02 with open questions 1
+to 15 on their recommendations. Part A phases 2 and 3 wait for their own
+sign-off after phase 1's checkpoint. Two criteria were revised while building
+and are marked where they stand: 14 (the wrong-paper check without a focal
+length) and 12 (the single-colour model's tolerance). · 2026-09-29 · target
+branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 Sam, 2026-09-27: is there a pattern or fiducial that could be printed on a
 sheet of paper that would help with accuracy, whether or not the print scale
@@ -850,7 +854,7 @@ checkpoint that needs a person.
     measured with a steel rule, stores them with the print check by job and
     sheet, and the verdict then takes its scale from the ruler, the sheet's
     position from the edges when visible and from the print check otherwise.*
-13. **README** and this PRD's status line.
+13. **README** and this PRD's status line. *Shipped v1.30.10, 2026-10-02.*
 
 ### Phase 2: several sheets (sign-off after phase 1's checkpoint)
 

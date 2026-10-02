@@ -86,7 +86,8 @@ the fully offline option.
   offers to switch; it never switches on its own. With the focal length a phone
   writes into its photos it can judge a tilted sheet. Without it, it judges
   photos taken from straight above and stays quiet rather than guess on steep
-  tilts.
+  tilts. A **calibration sheet** printed from the app is a rectangle the app
+  measures instead of trusts; see "Calibration sheets" below.
 - **Graph paper / dot grid / cutting mat** — calibrate off a printed grid
   instead of the sheet's edges. Pick the pitch (metric 1–10 mm, imperial
   1/10–1 in, cutting-mat presets, or a custom one) and put the four handles on
@@ -567,6 +568,71 @@ rotation instead of replacing it.
 
 Free-floating drawer labels such as "TOP DRAWER" drag and turn the same way.
 
+### Calibration sheets
+
+A sheet of paper is only as good as its size, and a printer only prints at the
+size it was asked for when the dialog says *Actual size*. A calibration sheet
+is a page the app prints and then measures: a 2 mm frame line around the edge
+with a code track inside it, the middle left clean for the part, and a ruler
+along the bottom. Nothing is printed within 10 mm of the paper's edge, so the
+edge stays clean for the double check below.
+
+**Printing.** Under Step 1's paper size, **Print calibration sheets** opens a
+panel: US Letter or A4, one to eight numbered sheets, **Print** through the
+browser's own dialog or **Download SVG** to print elsewhere. Choose *Actual
+size* or *100 percent* if the dialog offers it; if it doesn't, print anyway,
+the app measures whatever scale comes out. Each set gets a two-character job
+code, printed on every sheet and remembered in this browser. Cardstock lies
+flatter than copy paper; matte paper and soft light read best.
+
+**What the code carries.** Every 27 mm of the track is one word: the layout
+version, the paper the sheet was made for, its number in the set, the job,
+and its position around the frame, with a checksum. Any 53 mm of visible
+track identifies the sheet; a word with one bad cell is dropped, never
+misread. The layout is frozen, so a sheet printed today will be read by the
+app in years.
+
+**What happens on a photo.** Put the part inside the frame's window (the
+corner ticks show it) and photograph the whole sheet as you would plain paper.
+Step 1 recognises the sheet on load, fits a lens term and a mapping from the
+frame and every cell of the code, and then measures the paper's own edges
+against it. That is the double check: the code says what stock the sheet was
+made for, the picker says what you chose, and the edges say what the paper
+actually is, and the edges win. The panel reads *Printed at 1:1 on US
+Letter*, or *Printed at 96.2 percent across and 96.3 percent down, corrected
+for* when Fit to page was on, or *This US Letter sheet was printed on A4
+paper*. A picker set to the wrong size is overridden and told so. The corners
+snap to the paper's edges through the fit, within a tenth of a pixel on the
+synthetic photos, and the fit figure in millimetres says how well the frame
+agreed with itself: a bent sheet or an uncorrected lens raise it. Drag a
+corner and the fit runs again from there and snaps back; untick **Use the
+sheet fit** to keep your own corners.
+
+**When the edges cannot be seen.** On a white desk the paper's edge has no
+contrast, but the frame and the code still do. Every time a sheet is read
+with its edges visible, its print scale is recorded in this browser by job
+and sheet, so a later photo of the same sheet on a pale desk uses that record
+and says which check it came from. Without one, the print scale is reported
+as unverified and a 1:1 print is assumed. For a figure under the paper's cut
+tolerance, measure the frame's outside edges with a steel rule and type them
+into the panel's ruler row: the scale is then known on both axes, feed
+direction included, and is preferred over the edges' size.
+
+**Before tracing.** The panel says what is wrong with a photo while it can
+still be retaken: the sheet too small in the frame (move closer or use the
+2× lens), the code blurred or glared (hold still, tap to focus, move the
+light), or the sheet not flat (tape the corners down). Segmentation then sees
+only the window: the printed band is masked out, the paper colour is sampled
+from the clean ring around the window and fitted as a smooth surface, so a
+lamp on one side does not read as object, and a trace that runs within 1 mm
+of the band is called out.
+
+**Not yet.** Several sheets around a large part, a sheet on a drawer's floor
+for the drawer scan, and parallax correction for thick parts are planned as
+the next phases (`docs/calibration_and_backlog_prd_v1.2.md`, phases 2 and
+3). A photo whose code is too blurred to read at all is treated as plain
+paper rather than fitted from the frame lines alone.
+
 ## Tips for good photos
 
 - Shoot from directly above, with the object roughly centred over the paper.
@@ -1017,6 +1083,13 @@ run `npm test`, and commit the baseline it records. `npm run real` prints a
 line per photo, with what the lens fit would make of it and whether the
 wrong-paper check fired; `--record` rewrites the baselines after a change
 that made them better.
+
+The calibration sheet is tested against photos rendered from the print page's
+own SVG (`test/sheetPhoto.js`): rasterised flat through a print scale, anchor,
+registration offset and feed skew, photographed by a pinhole camera, bowed by
+the lens, blurred, lit unevenly and bent, with the truth of every stage kept.
+Layout v1's geometry is frozen in `test/fixtures/calib_layout_v1.json`; any
+change to it fails the suite until a v2 is added beside it.
 ## Roadmap
 
 ### Shipped
@@ -1070,14 +1143,10 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 
 All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
 
-- **Calibration sheets** — a printable sheet, printed from the app, whose frame
-  carries a code naming its paper size, layout version, sheet number and print
-  job. The app measures the print scale against the real paper edge instead of
-  trusting it, catches the wrong paper, and survives the sheet being partly
-  covered. Later phases fit several sheets around a large part, and correct
-  parallax for thick parts. Plain paper gets more precise corners and a
-  wrong-size warning first, with no printing needed. **Awaiting sign-off**
-  (phase 1).
+- **Calibration sheets, phases 2 and 3** — several sheets around a large
+  part, a sheet on a drawer's floor for the drawer scan, and parallax
+  correction for thick parts. Phase 1 (one sheet) shipped in v1.30.x and waits
+  on its real-photo checkpoint; the later phases need their own sign-off.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0; a calibration sheet on the drawer floor, recognised on its own,
   will do the same without a coin in Part A phase 2.

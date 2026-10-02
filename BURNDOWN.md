@@ -595,7 +595,17 @@ real-photo checkpoint. Building in the PRD's suggested order.
   with it, not with the edges; on a white desk the ruler still gives the
   scale with the position from the print check. 808 checks, all
   passing, no console errors; dist rebuilt and smoke-tested — v1.30.9.
-- ▶ NEXT: Part A step 13, README and the PRD's status line; then B.3.
+- ✅ Part A step 13, README and the PRD's status line. The README gains a
+  "Calibration sheets" section under the workflow (printing, what the code
+  carries, what happens on a photo, when the edges cannot be seen, before
+  tracing, not yet), a line in the reference list, a tests paragraph on the
+  SVG-rendered photos and the frozen layout, and its roadmap bullet moves to
+  phases 2 and 3. The PRD's status line says phase 1 is built with the
+  checkpoint pending and names the two criteria revised while building.
+  808 checks, all passing, no console errors; dist rebuilt and
+  smoke-tested — v1.30.10.
+- ▶ NEXT: B.3, nest speed and the overfull drawer: measure first on
+  `test/nest-bench.mjs`, then exact changes, then the quality-gated ones.
 
 ### Handoff to a fresh session, 2026-10-02
 
