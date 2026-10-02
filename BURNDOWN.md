@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.27
+version: 1.28
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -731,7 +731,35 @@ real-photo checkpoint. Building in the PRD's suggested order.
     step 16.
   - ⚠ The job code is printed in upper-case hex everywhere now (`jobHex`);
     the finder's first draft printed it lower-case and the test said 5a.
-- ▶ NEXT: Part A step 16, rectification and segmentation for a set.
+- ✅ Part A step 16, rectification and segmentation for a set. Step 2
+  rectifies the rectangle on the table that holds every sheet's paper plus
+  5 mm (`tableExtent`), axis-aligned to the PHOTO rather than to the anchor
+  sheet (`tableAxisAngle`: the anchor was laid by hand at 92° in the test,
+  and the first cut came out transposed and tilted), at the drawer scan's
+  3200 px ceiling with the joint fit's lens term. `computeDiffMap` takes a
+  list of sheets, each a paper polygon and a window polygon in rectified
+  px, labels every pixel desk, band or window, samples the paper on a ring
+  inside every window (one lighting surface over the table), the desk on a
+  ring round every paper, and masks every band outright. The band warning
+  checks every sheet's paper and window; the trace info names the set; the
+  project records the set. Measured: a 500 × 40 mm part between four
+  sheets on a 1.1 m table traces at 500.07 × 40.10 at 2.92 px/mm; a part
+  0.9 mm from a sheet reads 41.45 wide and is warned about; unticking the
+  sheet fit returns to the one sheet. 832 checks, all passing, no console
+  errors; dist rebuilt and smoke-tested — v1.32.2.
+  - ⚠ Criterion 20's traced form is bounded by the rectified pixel: 0.35 mm
+    at the 3200 px ceiling on a 1.1 m table, the same bound criterion 4
+    carries from rectify's 1600 px cap. The test lays the part along the
+    pixel grid (camera square to the table) and measures to one pixel; the
+    calibration's own figure is step 15's 0.06 mm through the mapping. An
+    earlier draft measured the part with an oriented box over a 2° tilt and
+    read a pixel large from the staircase, which is the box, not the fit.
+  - ⚠ A part under a millimetre from a sheet at 2.9 px/mm reads up to 1.5 mm
+    larger toward the sheet (the gap and the paper's edge pixel are
+    neither), which is what the band warning is for.
+  - ⚠ The lens slider is not an override in set mode: the joint fit's term
+    is used and the slider shows it.
+- ▶ NEXT: Part A step 17, drawer scale from a sheet.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1092,6 +1120,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.28 (2026-10-02): Part A step 16 shipped as v1.32.2.
 - v1.27 (2026-10-02): Part A step 15 shipped as v1.32.1.
 - v1.26 (2026-10-02): Part A step 14 shipped as v1.32.0.
 - v1.25 (2026-10-02): Phases 2 and 3 of the calibration PRD signed off by Sam before the real-photo checkpoint; build resumes at step 14.

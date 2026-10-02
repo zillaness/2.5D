@@ -642,10 +642,18 @@ check on record. A second set in the same photo gets its scale fitted
 against the first and checked against its own edges ("Set 3C: 100.0
 percent, fitted against set 5A, and its own edges agree"). On synthetic
 photos of four sheets around a 500 mm part the joint mapping measures the
-part within 0.1 mm where one sheet at one end comes out worse. For now the
-corners still follow the one sheet under them; rectifying the whole table
-from the joint fit, and tracing a part between the sheets, is the next step
-of phase 2.
+part within 0.1 mm where one sheet at one end comes out worse. Step 2 then
+rectifies the whole table from the set, in the photo's own orientation and at
+the drawer scan's resolution ceiling (3200 px on the long side, so a metre
+of table is about 3 px/mm), with every sheet's paper and window carried in:
+the printed bands are masked, the paper colour is sampled from every
+window's clean ring and fitted as one smooth surface, the desk colour from
+around every sheet, and a part lying on the desk between the sheets is
+traced at its size to within a pixel. The trace info says "Rectified from 4
+calibration sheets fitted on one plane", and a trace within 1 mm of any
+sheet's band is called out, since a part that close reads larger toward the
+sheet. Untick **Use the sheet fit** to go back to the one sheet under the
+corners.
 
 **Not yet.** A sheet on a drawer's floor for the drawer scan, and parallax
 correction for thick parts, are the rest of phases 2 and 3
@@ -1168,7 +1176,7 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   correction for thick parts. Phase 1 (one sheet) shipped in v1.30.x and waits
   on its real-photo checkpoint; phases 2 and 3 were signed off on 2026-10-02
   and are being built: finding several sheets shipped in v1.32.0, the
-  joint fit in v1.32.1.
+  joint fit in v1.32.1, rectification and segmentation for a set in v1.32.2.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0; a calibration sheet on the drawer floor, recognised on its own,
   will do the same without a coin in Part A phase 2.

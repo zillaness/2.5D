@@ -16499,6 +16499,114 @@ const jointTest = await page.evaluate(async () => {
     `${a.found} found, verdicts ${a.verdicts && a.verdicts.join('/')}; "${a.joint && a.joint.message}"`);
 }
 
+// ---------- Several sheets: rectification and segmentation for a set (Part A phase 2, step 16 of calibration_and_backlog_prd_v1.2) ----------
+//
+// Step 2 rectifies the whole table from the joint fit, at the drawer scan's
+// ceiling, with every sheet's paper and window carried into the rectified
+// image: the bands are masked, the paper colour comes from every window's
+// ring, the desk colour from around every sheet, and the part on the desk
+// between the sheets is traced at its size (criterion 20, traced).
+
+console.log('\nSeveral sheets: rectification and segmentation');
+
+const setTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderTablePhoto } = await import('./test/sheetPhoto.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens }, captureFrac: st.captureFrac };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  st.captureFrac = 0;
+  app.syncRefControls();
+  const sel = $('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  const load = async r => { await new Promise(res => app.loadImageFromURL(r.canvas.toDataURL('image/png'), res)); await wait(120); };
+  const bboxOf = pts => { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const p of pts) { a = Math.min(a, p.x); c = Math.max(c, p.x); b = Math.min(b, p.y); d = Math.max(d, p.y); } return { w: c - a, h: d - b, minX: a, minY: b }; };
+  const centroid = poly => ({ x: poly.reduce((s, p) => s + p.x, 0) / poly.length, y: poly.reduce((s, p) => s + p.y, 0) / poly.length });
+  const out = {};
+  // Four sheets of one set at 96 percent around a 500 x 40 mm part, lens
+  // 0.08, noise, 12 MP, the camera square to the table: at the drawer scan's
+  // 3200 px ceiling a 1.1 m table is 2.9 px/mm, and a trace is quantised to
+  // the pixel, so the part is laid along the pixel grid and measured by its
+  // axis box to within one pixel. The perspective case is step 15's.
+  const photo = { table: { w: 1400, h: 700 }, W: 4000, H: 3000, supersample: 1, pose: { height: 1000, tilt: 0, spin: 0 }, k1: 0.08, noise: 3 };
+  const four = [{ x: 300, y: 350, rot: 92 }, { x: 700, y: 150, rot: 3 }, { x: 1100, y: 350, rot: -88 }, { x: 700, y: 550, rot: 182 }]
+    .map((p, i) => ({ ...p, sheet: i + 1, count: 4, job: 0x5a, paper: 'letter', scale: 0.96 }));
+  const tb = await renderTablePhoto({ ...photo, sheets: four, objects: [{ x: 450, y: 330, w: 500, h: 40, r: 4 }] });
+  await load(tb);
+  out.active = app.sheet.setActive;
+  app.goStep(2);
+  await wait(100);
+  {
+    const r = st.rect, w = st.sheetWindow && st.sheetWindow.set, dm = st.diffMap;
+    const at = p => dm.diff[Math.round(p.y) * dm.w + Math.round(p.x)];
+    const sh = w && w.sheets[0];
+    const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    const band = sh && mid(mid(sh.paper[0], sh.paper[1]), mid(sh.window[0], sh.window[1]));
+    const win = sh && centroid(sh.window);
+    const desk = { x: 3 * r.pxPerMm, y: 3 * r.pxPerMm };
+    // The part's centre and a desk point beside it, through the photo.
+    const part = w && w.photoToPx(tb.truth.tableToPhoto({ x: 700, y: 350 }));
+    const deskMid = w && w.photoToPx(tb.truth.tableToPhoto({ x: 700, y: 400 }));
+    const t = app.traceEditor.getTrace();
+    out.set = {
+      rect: { w: r.canvas.width, h: r.canvas.height, pxPerMm: r.pxPerMm }, count: w && w.count, extent: w && w.extent,
+      probes: w && { band: at(band), window: at(win), desk: at(desk), deskMid: at(deskMid), part: at(part) }, threshold: st.seg.threshold, lighting: dm.lighting, sheetsInModel: dm.sheets,
+      bbox: bboxOf(t.outer), holes: t.holes.length, info: $('traceInfo').textContent, warn: st.sheetWindowWarn, k1: st.lens.k1,
+    };
+  }
+  // Unticking the sheet fit returns Step 2 to the one sheet.
+  app.goStep(1);
+  app.sheet.fitOn = false;
+  app.sheet.recognise();
+  st.rectDirty = true;
+  app.goStep(2);
+  await wait(50);
+  out.single = { active: app.sheet.setActive, set: !!(st.sheetWindow && st.sheetWindow.set), paperW: st.rect.paperRect.w / st.rect.pxPerMm, paperH: st.rect.paperRect.h / st.rect.pxPerMm };
+  app.goStep(1);
+  app.sheet.fitOn = true;
+  // A part 0.5 mm from a sheet's edge, on the desk: traced as itself, and warned about.
+  const square = [{ x: 300, y: 350, rot: 90 }, { x: 700, y: 150, rot: 0 }, { x: 1100, y: 350, rot: -90 }, { x: 700, y: 550, rot: 180 }]
+    .map((p, i) => ({ ...p, sheet: i + 1, count: 4, job: 0x5a, paper: 'letter', scale: 0.96 }));
+  // Sheet 2's paper spans y 10.3 to 289.7; the part's top edge sits 0.9 mm
+  // below it, under three pixels at this resolution.
+  const near = await renderTablePhoto({ ...photo, sheets: square, objects: [{ x: 450, y: 290.6, w: 500, h: 40, r: 4 }] });
+  await load(near);
+  app.goStep(2);
+  await wait(100);
+  out.near = { active: app.sheet.setActive, bbox: bboxOf(app.traceEditor.getTrace().outer), warn: st.sheetWindowWarn, info: $('traceInfo').textContent };
+  app.goStep(1);
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens; st.captureFrac = before.captureFrac;
+  app.syncRefControls();
+  return out;
+});
+{
+  const r = setTest, s = r.set;
+  check('Step 2 rectifies the whole table from the set at the drawer scan\'s ceiling, every sheet\'s paper and window carried in, the lighting model on',
+    r.active && s.count === 4 && Math.max(s.rect.w, s.rect.h) === 3200 && Math.abs(s.extent.w - (s.rect.w / s.rect.pxPerMm)) < 1 && s.extent.w > 1080 && s.extent.w < 1120 &&
+    s.sheetsInModel === 4 && s.lighting && Math.abs(s.k1 - 0.08) < 0.002,
+    `${s.rect.w} × ${s.rect.h} px at ${s.rect.pxPerMm.toFixed(2)} px/mm for ${s.extent.w.toFixed(0)} × ${s.extent.h.toFixed(0)} mm, axes ${(s.extent.phi * 180 / Math.PI).toFixed(1)}° off the anchor's; ${s.count} sheets in the model; lens ${s.k1}`);
+  check('every sheet\'s band is masked, its window and the desk are background, and the part on the desk is foreground',
+    s.probes && s.probes.band === 0 && s.probes.window < s.threshold && s.probes.desk < s.threshold && s.probes.deskMid < s.threshold && s.probes.part > s.threshold,
+    `diff on a band ${s.probes && s.probes.band}, in a window ${s.probes && s.probes.window}, on the desk ${s.probes && s.probes.desk} and ${s.probes && s.probes.deskMid}, on the part ${s.probes && s.probes.part}; threshold ${s.threshold}`);
+  // One pixel at 2.9 px/mm is 0.35 mm: the trace's quantisation, not the
+  // calibration's error, which step 15 measures at 0.06 mm through the mapping.
+  check('a 500 mm part between four sheets is traced at its size within a pixel (0.35 mm at the 3200 px ceiling), and the trace info names the set (criterion 20, traced)',
+    Math.abs(s.bbox.w - 500) < 0.4 && Math.abs(s.bbox.h - 40) < 0.4 && s.holes === 0 && /Rectified from 4 calibration sheets/.test(s.info) && !s.warn,
+    `${s.bbox.w.toFixed(2)} × ${s.bbox.h.toFixed(2)} mm at ${s.rect.pxPerMm.toFixed(2)} px/mm, ${s.holes} holes; "${s.info.replace(/\n/g, ' / ')}"`);
+  // The gap is under three pixels, and the pixels between part and paper
+  // are neither, so the trace reaches to the sheet's edge: up to the gap and
+  // a pixel more. That is what the warning is for.
+  check('a part under a millimetre from a sheet\'s edge is traced as itself, not with the band, and the trace warns about the band',
+    r.near.active && Math.abs(r.near.bbox.w - 500) < 0.4 && r.near.bbox.h > 39.6 && r.near.bbox.h < 41.7 && r.near.warn && r.near.warn.distMm < 1 && /sheet's printed band/.test(r.near.info),
+    `${r.near.bbox.w.toFixed(2)} × ${r.near.bbox.h.toFixed(2)} mm; warn ${JSON.stringify(r.near.warn)}`);
+  check('unticking the sheet fit returns Step 2 to the one sheet\'s rectification',
+    !r.single.active && !r.single.set && Math.abs(r.single.paperW - 215.9) < 0.5 && Math.abs(r.single.paperH - 279.4) < 0.5,
+    `set ${r.single.set}, paper ${r.single.paperW.toFixed(1)} × ${r.single.paperH.toFixed(1)} mm`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

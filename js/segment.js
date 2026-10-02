@@ -6,6 +6,7 @@
 // lighter-but-tinted, or coloured. Morphological open/close cleans noise.
 
 export function computeDiffMap(canvas, opts = {}) {
+  if (typeof opts === 'object' && Array.isArray(opts.sheets) && opts.sheets.length) return computeDiffMapSet(canvas, opts);
   // opts: { borderPct=0.04, paperRect } — paperRect { x,y,w,h } (px) enables the
   // "beyond the paper" dual-reference model: a pixel counts as background if it
   // resembles EITHER the paper (sampled just inside the paper rect) OR the
@@ -123,6 +124,111 @@ export function computeDiffMap(canvas, opts = {}) {
     diff[i] = Math.min(255, d);
   }
   return { diff, w, h, paperColor: paper, bgColor: bg, window: win || null, lighting: !!surface };
+}
+
+// Per-row x-ranges of a convex polygon in canvas px: [lo, hi] per row,
+// -1 where the row misses it. Shared by the one-window model above and the
+// set model below.
+function rowRanges(poly, w, h) {
+  const rr = new Int32Array(h * 2).fill(-1);
+  let top = -1, bot = -1;
+  for (let y = 0; y < h; y++) {
+    const yc = y + 0.5;
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      if ((a.y <= yc && b.y > yc) || (b.y <= yc && a.y > yc)) {
+        const x = a.x + (yc - a.y) / (b.y - a.y) * (b.x - a.x);
+        if (x < lo) lo = x;
+        if (x > hi) hi = x;
+      }
+    }
+    if (lo <= hi) {
+      rr[2 * y] = Math.max(0, Math.ceil(lo)); rr[2 * y + 1] = Math.min(w - 1, Math.floor(hi));
+      if (top < 0) top = y;
+      bot = y;
+    }
+  }
+  return { rr, top, bot, inside: (x, y) => rr[2 * y] >= 0 && x >= rr[2 * y] && x <= rr[2 * y + 1] };
+}
+
+// The background model for a set of sheets on a table
+// (calibration_and_backlog_prd_v1.2, phase 2, plan step 16). opts.sheets is
+// a list of { paper, window }, convex polygons in canvas px: each sheet's
+// paper and its clean window. Every pixel is labelled desk, band (on a
+// sheet but outside its window) or window. The paper colour is sampled on a
+// ring just inside every window and fitted as one smooth surface over the
+// table, the desk colour on a ring just outside every paper; a band pixel
+// is background outright, a window pixel is compared against the paper at
+// that spot, a desk pixel against the desk, and as in the one-paper model
+// a pixel near either is background.
+function computeDiffMapSet(canvas, opts) {
+  const borderPct = opts.borderPct || 0.04;
+  const w = canvas.width, h = canvas.height;
+  const label = new Uint8Array(w * h);   // 0 desk, 1 band, 2 window
+  const papers = opts.sheets.map(sh => rowRanges(sh.paper, w, h));
+  const windows = opts.sheets.map(sh => rowRanges(sh.window, w, h));
+  for (const P of papers) for (let y = P.top; y >= 0 && y <= P.bot; y++) { const lo = P.rr[2 * y], hi = P.rr[2 * y + 1]; if (lo >= 0) label.fill(1, y * w + lo, y * w + hi + 1); }
+  for (const W of windows) for (let y = W.top; y >= 0 && y <= W.bot; y++) { const lo = W.rr[2 * y], hi = W.rr[2 * y + 1]; if (lo >= 0) label.fill(2, y * w + lo, y * w + hi + 1); }
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const band = Math.max(2, Math.round(Math.min(w, h) * borderPct));
+  const median = arr => { arr.sort((a, b) => a - b); return arr.length ? arr[arr.length >> 1] : null; };
+  const sampleColor = pred => {
+    const rs = [], gs = [], bs = [];
+    for (let y = 0; y < h; y += 2) {
+      for (let x = 0; x < w; x += 2) {
+        const p = (y * w + x) * 4;
+        if (data[p + 3] < 128) continue;
+        if (!pred(x, y)) continue;
+        rs.push(data[p]); gs.push(data[p + 1]); bs.push(data[p + 2]);
+      }
+    }
+    return rs.length >= 20 ? [median(rs), median(gs), median(bs)] : null;
+  };
+  // A ring just inside each window, in the window's own frame: within
+  // `ring` px of its row's ends or its top and bottom rows.
+  const ringPx = Math.max(2, Math.round(band / 2));
+  const inWindowRing = (x, y) => {
+    if (label[y * w + x] !== 2) return false;
+    for (const W of windows) {
+      if (!W.inside(x, y)) continue;
+      if (x < W.rr[2 * y] + ringPx || x > W.rr[2 * y + 1] - ringPx || y < W.top + ringPx || y > W.bot - ringPx) return true;
+    }
+    return false;
+  };
+  // Desk just outside each paper: within 3 bands of its bounding box.
+  const boxes = papers.map(P => { let x0 = w, x1 = -1; for (let y = P.top; y >= 0 && y <= P.bot; y++) { if (P.rr[2 * y] >= 0) { x0 = Math.min(x0, P.rr[2 * y]); x1 = Math.max(x1, P.rr[2 * y + 1]); } } return { x0: x0 - 3 * band, x1: x1 + 3 * band, y0: P.top - 3 * band, y1: P.bot + 3 * band }; });
+  const nearPaper = (x, y) => label[y * w + x] === 0 && boxes.some(b => x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1);
+  let paper = sampleColor(inWindowRing);
+  const lighting = opts.lighting !== false;
+  const surface = lighting && paper ? fitPaperSurface(data, w, h, inWindowRing, paper) : null;
+  let bg = sampleColor(nearPaper);
+  if (!bg) bg = sampleColor((x, y) => label[y * w + x] === 0);
+  if (!paper) paper = [255, 255, 255];
+
+  const score = (p, ref) => {
+    const dr = data[p] - ref[0], dg = data[p + 1] - ref[1], db = data[p + 2] - ref[2];
+    const dl = (dr + dg + db) / 3;
+    const dcr = dr - dl, dcg = dg - dl, dcb = db - dl;
+    return Math.abs(dl) * 0.7 + Math.sqrt(dcr * dcr + dcg * dcg + dcb * dcb) * 1.6;
+  };
+  const diff = new Uint8ClampedArray(w * h);
+  const ref = [0, 0, 0];
+  for (let i = 0, p = 0; i < w * h; i++, p += 4) {
+    if (data[p + 3] < 128 || label[i] === 1) { diff[i] = 0; continue; }
+    let d;
+    if (label[i] === 2) {
+      if (surface) { const x = i % w, y = (i / w) | 0; for (let c = 0; c < 3; c++) ref[c] = surface.at(c, x, y); d = score(p, ref); }
+      else d = score(p, paper);
+      if (bg) d = Math.min(d, score(p, bg));
+    } else {
+      d = bg ? score(p, bg) : score(p, paper);
+      d = Math.min(d, score(p, paper));
+    }
+    diff[i] = Math.min(255, d);
+  }
+  return { diff, w, h, paperColor: paper, bgColor: bg, window: null, lighting: !!surface, sheets: opts.sheets.length, label };
 }
 
 // A quadratic surface per channel, a + b x + c y + d x y + e x^2 + f y^2 in

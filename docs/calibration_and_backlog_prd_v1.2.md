@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.18
+version: 1.2.19
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -235,6 +235,12 @@ distance, or a correction, reduces the size error.
     Four sheets around a 500 mm synthetic part, rendered with lens distortion
     and pixel noise, measure it within 0.2 mm. The same part calibrated from
     one sheet at one end is measured in the same test and must come out worse.
+    *Status (v1.32.2): met through the joint mapping, 500.06 mm against one
+    sheet's 499.89; the traced part is bounded by the rectified image's
+    pixel, 0.35 mm at the 3200 px ceiling on a 1.1 m table, and reads
+    500.07 × 40.10. The one-sheet margin is narrow on a synthetic photo when
+    that sheet's edges are visible; the large one-sheet failure is a sheet
+    without visible edges, which assumes 1:1 and reads 520.6.*
 21. **One print job, one scale.** Sheets carrying the same job share a fitted
     print scale, so one sheet with visible edges verifies the set. A sheet from
     another job, or on other paper, is verified on its own edges.
@@ -893,6 +899,18 @@ checkpoint that needs a person.
     reports it; the corners still follow the one sheet until step 16.
 16. **Rectification and segmentation for a set.** The table rectangle, the
     list of paper regions in the background model, every band masked.
+    *Shipped v1.32.2, 2026-10-02.* Step 2 rectifies the rectangle on the
+    table that holds every sheet's paper (plus 5 mm), axis-aligned to the
+    photo rather than to the anchor sheet, which was laid by hand at any
+    angle (`tableAxisAngle`), at `SCAN_MAX_LONG_SIDE_PX` with the joint
+    fit's lens term; `computeDiffMap` takes a list of sheets, each a paper
+    polygon and a window polygon, and labels every pixel desk, band or
+    window. Measured: a 500 × 40 mm part between four sheets on a 1.1 m
+    table traces at 500.07 × 40.10 mm at 2.9 px/mm; a part 0.9 mm from a
+    sheet reads 1.45 mm larger toward it and is warned about. Criterion 20
+    is therefore met through the mapping (step 15, 0.06 mm) and, traced,
+    to within one pixel of the 3200 px ceiling (0.35 mm on this table),
+    the same bound criterion 4 carries from rectify's cap.
 17. **Drawer scale from a sheet.** Recognition inside a drawer scan, the
     sheet masked out, the discrepancy report and the one-click rescale.
     Criterion 23. **Checkpoint:** a real large part with four sheets, and a
@@ -1196,6 +1214,8 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.19 (2026-10-02): Part A step 16 shipped in v1.32.2; criterion 20's
+  status recorded at the criterion.
 - v1.2.18 (2026-10-02): Part A step 15 shipped in v1.32.1; criterion 20's
   traced form deferred to step 16, noted at the step.
 - v1.2.17 (2026-10-02): Part A step 14 shipped in v1.32.0.

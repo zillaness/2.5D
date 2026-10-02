@@ -284,23 +284,41 @@ export function fitSheets(sheets, imgW, imgH, scales = {}, opts = {}) {
   };
 }
 
+// The angle of the photo's x axis on the table, at the photo's centre: the
+// rectified table keeps the photo's orientation rather than the anchor
+// sheet's, which was laid by hand at any angle.
+export function tableAxisAngle(joint, imgW, imgH) {
+  const p0 = joint.photoToTable({ x: imgW / 2, y: imgH / 2 });
+  const p1 = joint.photoToTable({ x: imgW / 2 + 100, y: imgH / 2 });
+  return Math.atan2(p1.y - p0.y, p1.x - p0.x);
+}
+
 // The rectangle on the table that holds every sheet's paper, from each
-// sheet's verdict rectangle (design mm) through its pose, with a margin.
-// Returns { x0, y0, w, h, corners (table mm, TL TR BR BL) }.
-export function tableExtent(joint, rects, marginMm = 0) {
+// sheet's verdict rectangle (design mm) through its pose, with a margin,
+// axis-aligned in a frame rotated by `phi` (tableAxisAngle). Returns
+// { x0, y0, w, h, phi, corners (table mm, TL TR BR BL), toLocal } where
+// toLocal takes a table point to millimetres from the rectangle's top-left
+// corner along its own axes, which is what the rectified image is.
+export function tableExtent(joint, rects, marginMm = 0, phi = 0) {
+  const c = Math.cos(phi), s = Math.sin(phi);
+  const rot = t => ({ x: t.x * c + t.y * s, y: -t.x * s + t.y * c });
+  const unrot = r => ({ x: r.x * c - r.y * s, y: r.x * s + r.y * c });
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  joint.sheets.forEach((s, i) => {
+  joint.sheets.forEach((sh, i) => {
     const rc = rects && rects[i] && rects[i].corners;
-    const stock = PAPER_SIZES[s.identity.paper];
+    const stock = PAPER_SIZES[sh.identity.paper];
     const dW = Math.min(stock.w, stock.h), dH = Math.max(stock.w, stock.h);
     const corners = rc || [{ x: 0, y: 0 }, { x: dW, y: 0 }, { x: dW, y: dH }, { x: 0, y: dH }];
-    for (const c of corners) {
-      const t = s.designToTable(c);
-      x0 = Math.min(x0, t.x); y0 = Math.min(y0, t.y); x1 = Math.max(x1, t.x); y1 = Math.max(y1, t.y);
+    for (const q of corners) {
+      const r = rot(sh.designToTable(q));
+      x0 = Math.min(x0, r.x); y0 = Math.min(y0, r.y); x1 = Math.max(x1, r.x); y1 = Math.max(y1, r.y);
     }
   });
   x0 -= marginMm; y0 -= marginMm; x1 += marginMm; y1 += marginMm;
-  return { x0, y0, w: x1 - x0, h: y1 - y0, corners: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] };
+  const corners = [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }].map(unrot);
+  const toLocal = t => { const r = rot(t); return { x: r.x - x0, y: r.y - y0 }; };
+  const fromLocal = l => unrot({ x: l.x + x0, y: l.y + y0 });
+  return { x0, y0, w: x1 - x0, h: y1 - y0, phi, corners, toLocal, fromLocal };
 }
 
 // One paragraph for the panel: the plane, the lens, and each job's scale

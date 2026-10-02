@@ -15,7 +15,7 @@ import { sheetSetSVG, printPageHTML, drawJob, jobHex, paperLabel as calibPaperLa
 import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
 import { findSheets, describeFound, pointInQuad as sheetPointInQuad } from './calibFind.js';
-import { fitSheets, describeJoint } from './calibJoint.js';
+import { fitSheets, describeJoint, tableExtent, tableAxisAngle } from './calibJoint.js';
 import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance, frameOutsideMm, rulerScale } from './calibVerdict.js';
 import { lensParams as calibLensParams, undistortPixel as calibUndistort } from './lens.js';
 import { computeHomography as calibHomography, applyHomography as calibApplyH } from './homography.js';
@@ -595,9 +595,68 @@ function sheetFindAll() {
   state.sheets = res && res.sheets.length ? res : null;
   if (state.sheets) sheetJointFit();
   if (state.sheets && !cornerEditor.overlay) cornerEditor.overlay = (ctx, vp) => sheetDrawOverlay(ctx, vp);
+  if (sheetSetActive()) {
+    // The set arrives after the load has painted; a Step 2 already open
+    // was rectified from the one sheet and is redone from the table.
+    state.rectDirty = true;
+    if (state.step === 2 && !scanActive()) { if (doRectify()) retrace(); }
+  }
   sheetSyncPanel();
   cornerEditor.draw();
   return state.sheets;
+}
+
+// The set is what Step 2 rectifies from when two or more sheets were fitted
+// together (plan step 16): the whole table, every sheet's band masked.
+function sheetSetActive() {
+  const all = state.sheets;
+  const j = all && all.joint;
+  return (j && j.ok && j.sheets.length >= 2 && state.sheetFit && state.reference === 'rect' && !scanOn()) ? j : null;
+}
+const SET_MARGIN_MM = 5;
+function doRectifySet(joint) {
+  const all = state.sheets;
+  const rects = joint.sheets.map(js => all.sheets[js.index].verdict && all.sheets[js.index].verdict.rect);
+  const iw = state.image.naturalWidth || state.image.width, ih = state.image.naturalHeight || state.image.height;
+  const ext = tableExtent(joint, rects, SET_MARGIN_MM, tableAxisAngle(joint, iw, ih));
+  const corners = ext.corners.map(p => joint.tableToPhoto(p));
+  if (!corners.every(c => Number.isFinite(c.x) && Number.isFinite(c.y))) return false;
+  const res = rectify(state.image, corners, ext.w, ext.h, { k1: joint.k1, k2: 0, marginMm: 0, maxLongSidePx: SCAN_MAX_LONG_SIDE_PX });
+  if (!res) { toast('The set of sheets could not be rectified — check the sheets, or untick "Use the sheet fit".'); return false; }
+  state.rect = res;
+  state.rectDirty = false;
+  state.lens.k1 = joint.k1;
+  $('lensSlider').value = Math.round(joint.k1 * 1000);
+  $('lensVal').textContent = joint.k1.toFixed(3);
+  // Every sheet's paper and clean window in the rectified image, for the
+  // background model and the band warning.
+  const ppm = res.pxPerMm;
+  const toPx = t => { const l = ext.toLocal(t); return { x: l.x * ppm, y: l.y * ppm }; };
+  const sheets = joint.sheets.map((js, i) => {
+    const s = all.sheets[js.index];
+    const stock = PAPER_SIZES[s.identity.paper];
+    const dW = Math.min(stock.w, stock.h), dH = Math.max(stock.w, stock.h);
+    const pc = (rects[i] && rects[i].corners) || [{ x: 0, y: 0 }, { x: dW, y: 0 }, { x: dW, y: dH }, { x: 0, y: dH }];
+    const win = s.fit.geom.window;
+    const wc = [{ x: win.x, y: win.y }, { x: win.x + win.w, y: win.y }, { x: win.x + win.w, y: win.y + win.h }, { x: win.x, y: win.y + win.h }];
+    return { paper: pc.map(p => toPx(js.designToTable(p))), window: wc.map(p => toPx(js.designToTable(p))), sheet: s.identity.sheet, job: s.identity.job };
+  });
+  const mm = poly => poly.map(p => ({ x: p.x / ppm, y: p.y / ppm }));
+  state.sheetWindow = {
+    px: null, mm: null,
+    set: { count: sheets.length, extent: { w: ext.w, h: ext.h, phi: ext.phi }, tableToPx: toPx, photoToPx: p => toPx(joint.photoToTable(p)),
+      sheets: sheets.map(sh => ({ ...sh, paperMm: mm(sh.paper), windowMm: mm(sh.window) })) },
+  };
+  state.sheetWindowWarn = null;
+  state.diffMap = computeDiffMap(res.canvas, { sheets });
+  if (state.seg.autoThreshold) {
+    state.seg.threshold = otsuThreshold(state.diffMap.diff);
+    $('threshSlider').value = state.seg.threshold;
+    $('threshVal').textContent = state.seg.threshold;
+  }
+  traceEditor.setRectified(res.canvas, res.pxPerMm);
+  if (state.back.showing) exitUnderside(); else backUISync();
+  return true;
 }
 
 // The joint fit (phase 2, plan step 15): every sheet found gets its own
@@ -833,7 +892,7 @@ function sheetSyncPanel() {
     const more = document.createElement('div');
     more.id = 'sheetSetNote';
     more.style.marginTop = '4px';
-    more.textContent = describeFound(all) + (all.joint ? ' ' + all.joint.message + ' The corners still follow the one sheet above.' : '');
+    more.textContent = describeFound(all) + (all.joint ? ' ' + all.joint.message + ' Step 2 rectifies the whole table from the set; the corners above mark the one sheet.' : '');
     el.appendChild(more);
   }
   if (s) {
@@ -1049,6 +1108,8 @@ function doRectify() {
   if (state.reference === 'coin') return rectifyCoin();
   if (state.reference === 'bar') return rectifyBar();
   if (state.reference === 'grid') runGridAutoCount();
+  const set = sheetSetActive();
+  if (set) return doRectifySet(set);
   const { w, h } = currentPaper();
   const scan = scanOn();
   // A drawer is five to fifteen times the area of one tool on a sheet, and the
@@ -2393,9 +2454,9 @@ function sheetWindowPx(res) {
 function sheetWindowProximity(outer) {
   const w = state.sheetWindow;
   if (!w || !outer || outer.length < 3) return null;
-  const poly = w.mm;
+  const polys = w.set ? w.set.sheets.flatMap(sh => [sh.paperMm, sh.windowMm]) : [w.mm];
   let best = Infinity;
-  for (const p of outer) {
+  for (const poly of polys) for (const p of outer) {
     for (let i = 0; i < poly.length; i++) {
       const a = poly[i], b = poly[(i + 1) % poly.length];
       const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy || 1;
@@ -2434,11 +2495,15 @@ function updateTraceInfo(msg) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
+  const set = state.sheetWindow && state.sheetWindow.set;
   el.textContent =
     `Outline: ${outer.length} pts, ${fmtDim(maxX - minX)} × ${fmtDimL(maxY - minY)}\n` +
     `Holes: ${holes.length} traced + ${circles.length} circles` +
+    (set ? `\nRectified from ${set.count} calibration sheets fitted on one plane.` : '') +
     (state.sheetWindowWarn
-      ? `\nWithin ${fmtDim(state.sheetWindowWarn.distMm)} mm of the sheet's printed band: the object may run into it. Keep it inside the window's corner ticks.`
+      ? (set
+        ? `\nWithin ${fmtDim(state.sheetWindowWarn.distMm)} mm of a sheet's printed band: the object may run into it. Keep the part clear of the sheets.`
+        : `\nWithin ${fmtDim(state.sheetWindowWarn.distMm)} mm of the sheet's printed band: the object may run into it. Keep it inside the window's corner ticks.`)
       : '');
 }
 
@@ -7327,6 +7392,10 @@ function serializeProject(includePhoto) {
       identity: state.sheet.identity, rotation: state.sheet.rotation, pxPerMm: state.sheet.pxPerMm,
       verdict: { source: state.sheet.verdict.source, stock: state.sheet.verdict.stock, scale: state.sheet.verdict.scale, message: state.sheet.verdict.message },
       fit: { rmsMm: state.sheet.fit.rmsMm, k1: state.sheet.fit.k1, points: state.sheet.fit.points, lines: state.sheet.fit.lines },
+      ...(state.sheetWindow && state.sheetWindow.set && state.sheets && state.sheets.joint ? { set: {
+        count: state.sheetWindow.set.count, rmsMm: state.sheets.joint.fit.rmsMm, k1: state.sheets.joint.k1,
+        jobs: Object.fromEntries(Object.entries(state.sheets.joint.jobs).map(([j, info]) => [j, { scale: info.scale, fixed: info.fixed }])),
+      } } : {}),
     } : (state.sheetSaved || null),
     // The JPEG a project was loaded with is written back as it came, so a
     // re-edit that only touches the trace does not re-encode the photo and
@@ -8436,6 +8505,7 @@ window.__app = {
     findAll: () => sheetFindAll(),
     get all() { return state.sheets; },
     get joint() { return state.sheets && state.sheets.joint; },
+    get setActive() { return !!sheetSetActive(); },
     get state() { return state.sheet; },
     get fitOn() { return state.sheetFit; },
     set fitOn(v) { state.sheetFit = !!v; },
