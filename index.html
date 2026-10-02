@@ -106,6 +106,9 @@
           <label for="paperSize">Size</label>
           <select id="paperSize"></select>
         </div>
+        <!-- Filled by updatePaperCheck when the sheet's proportions do not
+             match the size picked above (js/paperAspect.js). -->
+        <p class="warn" id="paperCheck" hidden style="margin:2px 0 8px"></p>
         <div class="field">
           <label for="paperOrient">Orientation in photo</label>
           <select id="paperOrient">

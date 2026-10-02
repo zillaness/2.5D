@@ -14573,6 +14573,194 @@ check('auto mode follows live system changes', autoLight.cls && !autoDark.cls,
   `light cls/mq ${autoLight.cls}/${autoLight.mq}, dark cls/mq ${autoDark.cls}/${autoDark.mq}`);
 await page.evaluate(() => document.getElementById('themeToggle').click()); // back to dark
 
+// ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
+//
+// Last on purpose: the end-to-end half loads its own photo through the real
+// file input, which replaces whatever the earlier blocks left on screen.
+
+console.log('\nPaper proportions check');
+
+const aspectGrid = await page.evaluate(async () => {
+  const { checkPaperAspect } = await import('./js/paperAspect.js');
+  const { PAPER_SIZES } = await import('./js/paperSizes.js');
+  // A pinhole camera 450 mm above a sheet tilted by `tilt` about an in-plane
+  // axis; ppx/ppy is where the principal point lands in the image, which is
+  // off-centre for a cropped photo.
+  const W = 4000, H = 3000, diag = 5000;
+  const shoot = (w, h, f, tilt, axis, ppx, ppy) => {
+    const t = tilt * Math.PI / 180, a = axis * Math.PI / 180, sp = 7 * Math.PI / 180;
+    const rA = [Math.cos(a), Math.sin(a), 0];
+    const rP = [-Math.sin(a) * Math.cos(t), Math.cos(a) * Math.cos(t), Math.sin(t)];
+    const P = (u0, v0) => {
+      const u = u0 * Math.cos(sp) - v0 * Math.sin(sp), v = u0 * Math.sin(sp) + v0 * Math.cos(sp);
+      const cu = u * Math.cos(a) + v * Math.sin(a), cv = -u * Math.sin(a) + v * Math.cos(a);
+      return [cu * rA[0] + cv * rP[0], cu * rA[1] + cv * rP[1], 450 + cu * rA[2] + cv * rP[2]];
+    };
+    const pr = Q => ({ x: ppx + f * Q[0] / Q[2], y: ppy + f * Q[1] / Q[2] });
+    return [pr(P(-w / 2, -h / 2)), pr(P(w / 2, -h / 2)), pr(P(w / 2, h / 2)), pr(P(-w / 2, h / 2))];
+  };
+  const out = { exif: { n: 0, falseFlags: 0, missed: 0 }, bare: { n: 0, falseFlags: 0, missedAt0: 0, missedByTilt: {} } };
+  for (const axis of [0, 90, 30, 60]) {
+    for (const tilt of [0, 5, 10, 15, 20, 25]) {
+      for (const fm of [0.6, 1.2, 1.8]) {
+        const f = fm * diag;
+        // Trusted EXIF: an uncropped photo, principal point at the centre.
+        const L = shoot(215.9, 279.4, f, tilt, axis, W / 2, H / 2);
+        const A = shoot(210, 297, f, tilt, axis, W / 2, H / 2);
+        const le = checkPaperAspect(L, W, H, 'letter', PAPER_SIZES, { f });
+        const ae = checkPaperAspect(A, W, H, 'letter', PAPER_SIZES, { f });
+        out.exif.n++;
+        if (le.mismatch) out.exif.falseFlags++;
+        if (!ae.mismatch || ae.suggestion !== 'A4') out.exif.missed++;
+        // No EXIF, and possibly cropped off-centre.
+        for (const [cx, cy] of [[0, 0], [0.15, 0.1], [-0.2, 0.15]]) {
+          const L2 = shoot(215.9, 279.4, f, tilt, axis, W * (0.5 + cx), H * (0.5 + cy));
+          const A2 = shoot(210, 297, f, tilt, axis, W * (0.5 + cx), H * (0.5 + cy));
+          out.bare.n++;
+          if (checkPaperAspect(L2, W, H, 'letter', PAPER_SIZES).mismatch) out.bare.falseFlags++;
+          const ab = checkPaperAspect(A2, W, H, 'letter', PAPER_SIZES);
+          if (!ab.mismatch) {
+            out.bare.missedByTilt[tilt] = (out.bare.missedByTilt[tilt] || 0) + 1;
+            if (tilt === 0) out.bare.missedAt0++;
+          }
+        }
+      }
+    }
+  }
+  return out;
+});
+
+check('with the phone\'s focal length, A4 under a Letter setting is flagged and named at every tilt up to 25 degrees',
+  aspectGrid.exif.missed === 0,
+  `${aspectGrid.exif.n - aspectGrid.exif.missed} of ${aspectGrid.exif.n} poses caught`);
+check('with the phone\'s focal length, a true Letter sheet is never flagged',
+  aspectGrid.exif.falseFlags === 0, `${aspectGrid.exif.falseFlags} false flags in ${aspectGrid.exif.n} poses`);
+check('without EXIF, even cropped off-centre, a true Letter sheet is never flagged',
+  aspectGrid.bare.falseFlags === 0, `${aspectGrid.bare.falseFlags} false flags in ${aspectGrid.bare.n} poses`);
+check('without EXIF, A4 is still caught in every straight-down pose; beyond that the tilt itself is undetermined',
+  aspectGrid.bare.missedAt0 === 0,
+  `missed by tilt (of 36 poses each): ${JSON.stringify(aspectGrid.bare.missedByTilt)}`);
+
+const exifRead = await page.evaluate(async () => {
+  const { readFocalLength, focalPixels } = await import('./js/exif.js');
+  // A minimal JPEG: SOI, an APP1 EXIF segment carrying IFD0 -> Exif IFD with
+  // FocalLength 5.7 mm, FocalLengthIn35mmFormat 26, and 4000 x 3000 pixel
+  // dimensions, then SOS. Built in either byte order.
+  const build = le => {
+    const tiff = new DataView(new ArrayBuffer(96));
+    const u16 = (o, v) => tiff.setUint16(o, v, le), u32 = (o, v) => tiff.setUint32(o, v, le);
+    tiff.setUint8(0, le ? 0x49 : 0x4d); tiff.setUint8(1, le ? 0x49 : 0x4d);
+    u16(2, 42); u32(4, 8);
+    u16(8, 1); u16(10, 0x8769); u16(12, 4); u32(14, 1); u32(18, 26); u32(22, 0);
+    u16(26, 4);
+    u16(28, 0x920a); u16(30, 5); u32(32, 1); u32(36, 80);
+    u16(40, 0xa405); u16(42, 3); u32(44, 1); u16(48, 26);
+    u16(52, 0xa002); u16(54, 4); u32(56, 1); u32(60, 4000);
+    u16(64, 0xa003); u16(66, 4); u32(68, 1); u32(72, 3000);
+    u32(76, 0);
+    u32(80, 57); u32(84, 10);
+    const app1 = new Uint8Array(2 + 2 + 6 + 96);
+    const dv = new DataView(app1.buffer);
+    dv.setUint16(0, 0xffe1); dv.setUint16(2, 2 + 6 + 96);
+    app1.set([0x45, 0x78, 0x69, 0x66, 0, 0], 4);
+    app1.set(new Uint8Array(tiff.buffer), 10);
+    const out = new Uint8Array(2 + app1.length + 4);
+    out.set([0xff, 0xd8], 0); out.set(app1, 2); out.set([0xff, 0xda, 0, 2], 2 + app1.length);
+    return out.buffer;
+  };
+  const le = readFocalLength(build(true)), be = readFocalLength(build(false));
+  const bare = readFocalLength(new Uint8Array([0xff, 0xd8, 0xff, 0xda, 0, 2]).buffer);
+  const cut = readFocalLength(build(true).slice(0, 40));
+  return {
+    le, be, bare, cut,
+    fUncropped: focalPixels(le, 4000, 3000), fRotated: focalPixels(le, 3000, 4000),
+    fCropped: focalPixels(le, 2400, 1800),
+  };
+});
+
+check('EXIF focal length reads in both byte orders, and only the focal-length and size tags',
+  exifRead.le && exifRead.be && exifRead.le.f35 === 26 && exifRead.be.f35 === 26 &&
+  Math.abs(exifRead.le.focalMm - 5.7) < 1e-9 && exifRead.le.w === 4000 && exifRead.le.h === 3000 &&
+  Object.keys(exifRead.le).sort().join(',') === 'f35,focalMm,h,w',
+  `le ${JSON.stringify(exifRead.le)} / be ${JSON.stringify(exifRead.be)}`);
+check('a JPEG with no EXIF, or a truncated one, gives no focal length rather than a wrong one',
+  exifRead.bare === null && exifRead.cut === null, `${JSON.stringify(exifRead.bare)} / ${JSON.stringify(exifRead.cut)}`);
+check('the focal length is trusted on the camera\'s own pixels, turned or not, and dropped for a crop',
+  Math.abs(exifRead.fUncropped - 26 / Math.hypot(36, 24) * 5000) < 1e-6 &&
+  exifRead.fRotated === exifRead.fUncropped && exifRead.fCropped === null,
+  `uncropped ${exifRead.fUncropped && exifRead.fUncropped.toFixed(1)} px, rotated ${exifRead.fRotated && exifRead.fRotated.toFixed(1)}, cropped ${exifRead.fCropped}`);
+
+// End to end: a realistic A4 photo (a centred camera, the wide lens, a few
+// degrees of tilt) saved as a JPEG with EXIF, through the real file input,
+// with US Letter selected.
+const photoBytes = await page.evaluate(async () => {
+  const { computeHomography, applyHomography } = await import('./js/homography.js');
+  const W = 2000, H = 1500, f = 0.6 * Math.hypot(W, H), t = 18 * Math.PI / 180;
+  const pts = [[-105, -148.5], [105, -148.5], [105, 148.5], [-105, 148.5]].map(([x, y]) => {
+    const X = x, Y = y * Math.cos(t), Z = 600 + y * Math.sin(t);
+    return { x: W / 2 + f * X / Z, y: H / 2 + f * Y / Z };
+  });
+  const Hm = computeHomography([{ x: 0, y: 0 }, { x: 210, y: 0 }, { x: 210, y: 297 }, { x: 0, y: 297 }], pts);
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#3a352f'; ctx.fillRect(0, 0, W, H);
+  ctx.beginPath();
+  [[0, 0], [210, 0], [210, 297], [0, 297]].forEach(([x, y], i) => {
+    const q = applyHomography(Hm, x, y); if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y);
+  });
+  ctx.closePath(); ctx.fillStyle = '#f3f1ea'; ctx.fill();
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+  const jpg = new Uint8Array(await blob.arrayBuffer());
+  // Splice an EXIF segment in after SOI: 35 mm-equivalent 26 mm on these
+  // exact pixel dimensions, so it reads as an uncropped phone photo.
+  const tiff = new DataView(new ArrayBuffer(72));
+  tiff.setUint8(0, 0x49); tiff.setUint8(1, 0x49);
+  tiff.setUint16(2, 42, true); tiff.setUint32(4, 8, true);
+  tiff.setUint16(8, 1, true); tiff.setUint16(10, 0x8769, true); tiff.setUint16(12, 4, true);
+  tiff.setUint32(14, 1, true); tiff.setUint32(18, 26, true); tiff.setUint32(22, 0, true);
+  tiff.setUint16(26, 3, true);
+  tiff.setUint16(28, 0xa405, true); tiff.setUint16(30, 3, true); tiff.setUint32(32, 1, true);
+  tiff.setUint16(36, Math.round(0.6 * 43.2666), true);
+  tiff.setUint16(40, 0xa002, true); tiff.setUint16(42, 4, true); tiff.setUint32(44, 1, true); tiff.setUint32(48, W, true);
+  tiff.setUint16(52, 0xa003, true); tiff.setUint16(54, 4, true); tiff.setUint32(56, 1, true); tiff.setUint32(60, H, true);
+  tiff.setUint32(64, 0, true);
+  const seg = new Uint8Array(4 + 6 + 72);
+  new DataView(seg.buffer).setUint16(0, 0xffe1);
+  new DataView(seg.buffer).setUint16(2, 2 + 6 + 72);
+  seg.set([0x45, 0x78, 0x69, 0x66, 0, 0], 4);
+  seg.set(new Uint8Array(tiff.buffer), 10);
+  const out = new Uint8Array(jpg.length + seg.length);
+  out.set(jpg.subarray(0, 2), 0); out.set(seg, 2); out.set(jpg.subarray(2), 2 + seg.length);
+  // Letter selected, as a person who never changed the default would have it.
+  const sel = document.getElementById('paperSize');
+  sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  window.__app.state.reference = 'rect';
+  window.__app.state.scan.on = false;
+  window.__app.syncRefControls();
+  window.__app.goStep(1);
+  return Array.from(out);
+});
+await page.setInputFiles('#fileInput', {
+  name: 'a4-on-desk.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(photoBytes),
+});
+await page.waitForFunction(() => window.__app.state.photoFocal &&
+  !document.getElementById('paperCheck').hidden, null, { timeout: 5000 }).catch(() => {});
+const paperUi = await page.evaluate(async () => {
+  const el = document.getElementById('paperCheck');
+  const before = { shown: !el.hidden, text: el.textContent, focal: window.__app.state.photoFocal,
+    known: window.__app.state.paperCheck && window.__app.state.paperCheck.known };
+  const use = document.getElementById('paperCheckUse');
+  if (use) use.click();
+  return { before, after: { size: window.__app.state.paper.size, shown: !el.hidden } };
+});
+
+check('a JPEG through the file input yields the phone\'s focal length for the check',
+  paperUi.before.focal && paperUi.before.focal.f35 === 26 && paperUi.before.known === true,
+  JSON.stringify(paperUi.before.focal));
+check('an A4 photo with Letter selected is flagged, named as A4, and switched in one click',
+  paperUi.before.shown && /A4/.test(paperUi.before.text) && paperUi.after.size === 'A4' && !paperUi.after.shown,
+  `"${paperUi.before.text}" -> ${paperUi.after.size}, warning shown ${paperUi.after.shown}`);
+
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;
 

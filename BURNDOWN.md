@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.23
+version: 1.24
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -274,7 +274,64 @@ real-photo checkpoint. Building in the PRD's suggested order.
     old check compared against the drawn corner, so a perfect fit would have
     read 0.71 px out. The new check compares in `rectify`'s convention and says
     why in a comment.
-- ▶ NEXT: Part A step 1b, the wrong-paper check.
+- ✅ Part A step 1b, the wrong-paper check (`js/paperAspect.js`, `js/exif.js`,
+  a warning with a one-click switch under Step 1's paper size). 708 checks,
+  all passing, no console errors; dist rebuilt and smoke-tested — v1.28.1.
+  - ⚠ **Criterion 14 as written was not achievable, and was revised.** Tip the
+    phone about one axis, the commonest tilt, and one pair of the sheet's edges
+    stays parallel in the photo; the vanishing-point construction then cannot
+    find the focal length, and without it the true proportions are
+    undetermined. Measured over 144 poses: with the focal length known, zero
+    false flags and zero misses to 25 degrees; without it, zero false flags
+    over 216 poses including off-centre crops, every straight-down A4 caught,
+    and fewer caught as tilt grows.
+  - ⚠ So EXIF reading came forward from phase 3. `js/exif.js` reads the two
+    focal-length tags and the pixel dimensions, nothing else, and the focal
+    length is trusted only when the photo is still the size the camera wrote:
+    a crop moves the principal point, a resize changes the diagonal.
+  - ⚠ The suite's own step-1 photo, drawn as A4, is geometrically a
+    Legal-proportioned sheet under an ordinary centred camera: its corners were
+    placed by hand, not by a camera. Step 1 now shows "looks like Legal" on it.
+    Harmless, nothing switches, and the trace tests use exact corners; the UI
+    test renders a camera-made photo instead.
+- ▶ NEXT: Part A step 2, the real-photo harness, then B.1, the coin drawer
+  check. Work moves to a fresh session from here; see the handoff below.
+
+### Handoff to a fresh session, 2026-10-02
+
+**State.** Branch `claude/2.5d-photo-stl-s3-y0oodn`, v1.28.1, 708 checks green.
+The plan is `docs/calibration_and_backlog_prd_v1.2.md`, signed off for Part A
+phase 1 and Part B items B.1 to B.4. Steps 1a and 1b are done.
+
+**Next, in order** (the PRD's suggested order):
+1. Part A step 2: the real-photo harness. `test/fixtures/real/`, a sidecar per
+   photo naming two hand-marked points on a steel rule and their distance, a
+   measuring test with a synthetic self-test, recorded baselines that may not
+   regress, and a marking page so Sam can add photos (downscale to about
+   2400 px, strip location, keep the focal-length tags). Then the checkpoint:
+   Sam's first photos.
+2. B.1: the coin drawer check with a one-click rescale (PRD Part B.1).
+3. B.2 thumbnails and merge; B.4 the rotation-step control and the rectified
+   JPEG round trip.
+4. Part A steps 3 to 13: the calibration sheet itself.
+5. B.3: nest speed, measuring first.
+
+**Conventions this session established, so they are not rediscovered:**
+- Corners are in `rectify`'s pixel convention: pixel k's value sits at
+  coordinate k. A canvas path vertex at x is half a pixel off that, so
+  synthetic truth drawn with paths is compared at x - 0.5.
+- Synthetic photos for anything that reasons about the camera (aspect,
+  parallax, pose) must come from a centred pinhole camera with a plausible
+  focal length. The suite's step-1 photo was placed by hand and reads as a
+  Legal-proportioned sheet.
+- Time things warm: `test/nest-bench.mjs` takes the minimum of five runs after
+  a warm-up. Cold first runs read up to five times slow.
+- Commit per unit with the suite's printed total in the message; bump
+  `js/version.js` and rebuild `dist/` with `npm run smoke` on every version.
+
+**Waiting on Sam:** real photos for the step 2 checkpoint; repointing GitHub's
+default branch so the two stale branches can be deleted (deletion is blocked in
+these sessions); the go-ahead to deploy, since gh-pages still serves v1.25.0.
 - ⚠ The frontmatter said version 1.15 while the CHANGELOG stopped at v1.7. The
   entries for v1.8 through v1.15 were never written and cannot be reconstructed
   from the file, so they are recorded as a gap rather than invented. The bumps
@@ -539,6 +596,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.24 (2026-10-02): Steps 1a and 1b shipped as v1.28.0 and v1.28.1; criterion 14 revised; handoff to a fresh session written.
 - v1.23 (2026-10-02): Calibration and backlog PRD signed off for Part A phase 1 and Part B items B.1 to B.4; build started.
 - v1.22 (2026-09-29): Calibration PRD widened to docs/calibration_and_backlog_prd_v1.2.md with the twelve approved suggestions and the backlog; README Next up corrected.
 - v1.21 (2026-09-28): Calibration sheet PRD revised to v1.1 with encoding, multi-sheet and parallax phases.

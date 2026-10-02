@@ -7,6 +7,8 @@ import { rectify } from './homography.js';
 import { estimateDistortion } from './lens.js';
 import { detectPaperCorners } from './detectPaper.js';
 import { refineCorners } from './edgeFit.js';
+import { checkPaperAspect } from './paperAspect.js';
+import { readFocalLength, focalPixels } from './exif.js';
 import { computeDiffMap, otsuThreshold, segmentObject, segmentObjects } from './segment.js';
 import { scanParts, SCAN_DEFAULTS } from './scan.js';
 import {
@@ -179,7 +181,7 @@ const parseDim = str => parseLength(str, state.units);
 
 // ---------- widgets ----------
 
-const cornerEditor = new CornerEditor($('cornerCanvas'), () => { state.rectDirty = true; });
+const cornerEditor = new CornerEditor($('cornerCanvas'), () => { state.rectDirty = true; updatePaperCheck(); });
 const traceEditor = new TraceEditor($('traceCanvas'), {
   onChange: (throttled) => {
     updateTraceInfo();
@@ -424,11 +426,28 @@ function updateStepButtons() {
 // started. onFail runs when that decode then fails, which is the only way the
 // caller hears about it: the file name and the label are already on screen by
 // then, but state.image still holds the photo before this one.
+// The phone's focal length, read from the photo's EXIF when it has one
+// (js/exif.js): only the two focal-length tags, held for this photo, never
+// saved. It is what lets the paper check judge a tilted sheet; without it the
+// check falls back to every plausible lens and only grows more cautious.
+let focalToken = 0;
+function readPhotoFocal(file) {
+  const token = ++focalToken;
+  state.photoFocal = null;
+  if (!file || !file.slice || !/jpe?g/i.test(file.type)) return;
+  file.slice(0, 262144).arrayBuffer().then(buf => {
+    if (token !== focalToken) return;
+    state.photoFocal = readFocalLength(buf);
+    updatePaperCheck();
+  }).catch(() => {});
+}
+
 function loadFile(file, onFail, onLoad) {
   if (!file || !file.type.startsWith('image/')) {
     toast('Please choose an image file.');
     return false;
   }
+  readPhotoFocal(file);
   state.fileName = (file.name || 'object').replace(/\.[^.]+$/, '');
   const url = URL.createObjectURL(file);
   // onLoad runs once the photo is actually on screen, which is the moment a
@@ -522,6 +541,44 @@ function autoDetect(announce = true) {
   }
   state.rectDirty = true;
   cornerEditor.setCorners(state.corners);
+  updatePaperCheck();
+}
+
+// Do the sheet's proportions match the size picked? (Part A step 1 of
+// docs/calibration_and_backlog_prd_v1.2.md.) A warning with a one-click switch,
+// never a silent change: a person may be using an odd sheet on purpose, and
+// the custom size is the way to say so.
+function updatePaperCheck() {
+  const el = $('paperCheck');
+  if (!el) return;
+  const hide = () => { el.hidden = true; el.textContent = ''; };
+  if (state.reference !== 'rect' || scanOn() || !state.image || !state.corners) return hide();
+  const iw = state.image.naturalWidth || state.image.width;
+  const ih = state.image.naturalHeight || state.image.height;
+  let chk = null;
+  try {
+    chk = checkPaperAspect(state.corners, iw, ih, state.paper.size, PAPER_SIZES,
+      { k1: state.lens.k1, k2: state.lens.k2, f: focalPixels(state.photoFocal, iw, ih) });
+  } catch (err) { console.error('checkPaperAspect failed', err); }
+  state.paperCheck = chk;
+  if (!chk || !chk.mismatch) return hide();
+  const sel = PAPER_SIZES[state.paper.size];
+  el.textContent = `This sheet's proportions (${chk.measured.toFixed(3)}) do not match ` +
+    `${sel.name} (${chk.expected.toFixed(3)}). ` +
+    (chk.suggestion ? `It looks like ${PAPER_SIZES[chk.suggestion].name}. `
+      : 'Check the size, or set a custom one. ');
+  if (chk.suggestion) {
+    const b = document.createElement('button');
+    b.className = 'btn small';
+    b.id = 'paperCheckUse';
+    b.textContent = `Use ${PAPER_SIZES[chk.suggestion].name}`;
+    b.addEventListener('click', () => {
+      sizeSel.value = chk.suggestion;
+      sizeSel.dispatchEvent(new Event('change'));
+    });
+    el.appendChild(b);
+  }
+  el.hidden = false;
 }
 
 function coinDiameterMm() {
@@ -5141,6 +5198,7 @@ sizeSel.addEventListener('change', () => {
   state.paper.size = sizeSel.value;
   $('customSizeRow').hidden = sizeSel.value !== 'custom';
   state.rectDirty = true;
+  updatePaperCheck();
 });
 $('paperOrient').addEventListener('change', e => {
   state.paper.orientation = e.target.value;
@@ -5229,6 +5287,7 @@ function syncRefControls() {
   if (r === 'grid') syncGridFields();
   if (r === 'bar') syncBarFields();
   syncScanFields();
+  updatePaperCheck();
 }
 
 $('scanMode').addEventListener('change', e => {
@@ -5868,6 +5927,7 @@ function reRectifyLens() {
     // Re-rectify from the original photo with the new coefficient, then retrace.
     if (!state.image || state.reference !== 'rect') return;
     state.rectDirty = true;
+    updatePaperCheck();
     if (doRectify()) retrace();
   }, 160);
 }
@@ -7324,7 +7384,7 @@ document.title = `2.5D v${APP_VERSION} — photo to printable solid`;
 
 // Test hook (used by the headless test-suite; harmless in normal use).
 window.__app = {
-  state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect, doRectify,
+  state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect, doRectify, updatePaperCheck,
   updateStepButtons, currentPaper, syncRefControls,
   backRender, updateTraceInfo,
   cornerEditor, traceEditor, syncHolePanel, APP_VERSION,

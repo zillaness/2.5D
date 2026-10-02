@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.1
+version: 1.2.2
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -196,8 +196,15 @@ distance, or a correction, reduces the size error.
     single-colour model marks the dark side as object. (Droppable step.)
 13. **Plain paper gets better too.** Edge-fitted corners bring the existing
     synthetic's corner error under 1 px, from 2.4.
-14. **Plain paper catches the wrong size.** With Letter selected, a synthetic A4
-    sheet is flagged and a true Letter sheet is not, at any tilt up to 25°.
+14. **Plain paper catches the wrong size.** With Letter selected, a true Letter
+    sheet is never flagged, with or without EXIF, even cropped off-centre. With
+    the phone's focal length from EXIF on an uncropped photo, an A4 sheet is
+    flagged and named at any tilt up to 25°. Without it, A4 is flagged in every
+    straight-down pose and less often as tilt grows. *Revised 2026-10-02 from
+    "at any tilt up to 25°", which the geometry does not allow without a focal
+    length: tipping the phone about one axis keeps one pair of the sheet's edges
+    parallel in the photo, and that leaves the focal length, and with it the
+    true proportions, undetermined.*
 15. **Layout v1 is locked.** Regenerating either layout reproduces the
     committed reference geometry exactly; any change fails the suite with a
     message to make a v2. Synthetic sheet photos are rendered from the SVG the
@@ -619,13 +626,21 @@ when every edge fits well and the corners stay close to the coarse ones;
 otherwise the coarse corners stand.
 
 With precise corners the app can also check the paper size. A photo taken
-close to straight down keeps the sheet's true aspect ratio, and a tilted one
-can be corrected with the method whiteboard-scanning apps use (Zhang and He):
-the two vanishing points of the sheet's edges give the focal length, and the
-focal length gives the true aspect ratio. Letter (0.773) and A4 (0.707) are 9
-percent apart, so a warning, "This looks like A4, not Letter", is reliable
-well beyond ordinary tilt. It warns and offers to switch; it never switches on
-its own, because the person may be using a custom sheet on purpose.
+close to straight down keeps the sheet's true aspect ratio; a tilted one
+foreshortens, and Zhang and He's whiteboard-scanning construction recovers the
+true ratio given the focal length. The same construction can estimate the
+focal length from the two vanishing points, but not when the phone is tipped
+about one axis, the commonest tilt: then one pair of edges stays parallel and
+the focal length is undetermined. So `js/paperAspect.js` computes the ratio over
+every plausible camera (focal length 0.4 to 2.2 image diagonals, principal
+point anywhere in the middle 40 percent of the frame in case the photo was
+cropped) and warns only when the selected stock fits none of them. When the
+photo's EXIF records a focal length on the camera's own pixel dimensions, the
+camera is pinned and the check is sharp. `js/exif.js`, pulled forward from
+phase 3 for this, reads only the focal-length and pixel-size tags. Letter
+(0.773) and A4 (0.707) are 9 percent apart. It warns and offers to switch; it
+never switches on its own, because the person may be using a custom sheet on
+purpose.
 
 ### Testing: a frozen layout and real photos
 
@@ -1089,6 +1104,10 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.2 (2026-10-02): Criterion 14 revised after building step 1b: without a
+  focal length a one-axis tilt leaves the true proportions undetermined, so the
+  promise without EXIF is no false flags and straight-down catches, and the
+  25° promise needs EXIF. Design text updated; EXIF reading pulled forward.
 - v1.2.1 (2026-10-02): Sam signed off Part A phase 1 and Part B items B.1 to B.4,
   with every open question on its recommendation. Status flipped; filename kept
   at _v1.2 because README, BURNDOWN and the drawer scan PRD cite it.

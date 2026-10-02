@@ -81,7 +81,12 @@ the fully offline option.
   come out where its nominal rectangle has them, which is what its size refers
   to. Drag the four handles only if one looks off (a magnifier loupe appears
   while dragging, the yellow edge marks the top). A rectangle corrects
-  perspective and skew exactly.
+  perspective and skew exactly. If the sheet's proportions do not match the
+  size picked, say US Letter selected with A4 on the desk, Step 1 says so and
+  offers to switch; it never switches on its own. With the focal length a phone
+  writes into its photos it can judge a tilted sheet. Without it, it judges
+  photos taken from straight above and stays quiet rather than guess on steep
+  tilts.
 - **Graph paper / dot grid / cutting mat** — calibrate off a printed grid
   instead of the sheet's edges. Pick the pitch (metric 1–10 mm, imperial
   1/10–1 in, cutting-mat presets, or a custom one) and put the four handles on
