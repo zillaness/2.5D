@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.22
+version: 1.2.23
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -259,16 +259,16 @@ distance, or a correction, reduces the size error.
 24. **Corrected with the phone's focal length.** With an EXIF focal length
     present, a 10 mm synthetic part rendered with true parallax from 400 mm
     measures within 0.2 mm. Uncorrected, the same render reads 2.6 mm large on
-    100 mm.
+    100 mm. *Met, v1.33.1: 99.89 corrected, 102.46 uncorrected.*
 25. **Corrected without trusting the phone.** A sheet raised on a surface of
     stated height recovers the camera height within 3 percent with no EXIF at
     all, and flags an EXIF focal length that disagrees by more than 3 percent.
 26. **The correction is visible.** The readout names it ("parallax: 2.4 percent
     at 10 mm, corrected") along with the camera height and tilt, so a changed
-    dimension never comes as a surprise.
+    dimension never comes as a surprise. *Met, v1.33.1.*
 27. **No data, no correction, and it says so.** Without EXIF or a raised sheet,
     nothing is corrected, the readout says parallax is uncorrected, and it
-    carries the stand-back advice.
+    carries the stand-back advice. *Met, v1.33.0 and v1.33.1.*
 
 ## A.3 Scope
 
@@ -947,6 +947,18 @@ checkpoint that needs a person.
     input's EXIF read as a phone's photo would.
 20. **The correction.** Rectify at the base section's top plane, per-section
     correction for the rest, the readout. Tests: criteria 24, 26, 27.
+    *Shipped v1.33.1, 2026-10-02.* The paper's corners (or the set's table
+    rectangle) are raised about the point below the camera by D / (D − t)
+    before rectify, and the window, bands and paper regions come through
+    the same construction, lowered; the rectification records the plane,
+    the factor and the point below the camera in rectified millimetres. A
+    thickness typed after the trace scales the outline, holes, circles and
+    sections about that point by (D − t_new) / (D − t_old) rather than
+    re-rectifying, which would lose the trace; a section whose top is at
+    another height is scaled for the mesh by its own factor. Measured:
+    uncorrected 102.46 × 40.99 for a 100 × 40 × 10 mm part from 400 mm,
+    corrected 99.89 × 39.99; a 500 × 40 × 10 part on a table a metre down
+    500.07 × 40.02.
 21. **The raised sheet.** Detection by magnified paper edges, the height
     prompt, the EXIF cross-check. Criterion 25. **Checkpoint:** what EXIF
     survives on Sam's own phone and browser, and one real thick part.
@@ -1236,6 +1248,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.23 (2026-10-02): Part A step 20 shipped in v1.33.1; criteria 24, 26 and 27 met.
 - v1.2.22 (2026-10-02): Part A step 19 shipped in v1.33.0.
 - v1.2.21 (2026-10-02): Part A step 18 shipped in v1.32.4; phase 2 built, status line updated.
 - v1.2.20 (2026-10-02): Part A step 17 shipped in v1.32.3; criterion 23 met.

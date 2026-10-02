@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.31
+version: 1.32
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -818,7 +818,36 @@ real-photo checkpoint. Building in the PRD's suggested order.
     read `fit.H` off it, threw inside the load's callback chain, and the
     scratch run hung on a load that never called back. The sheet now keeps
     its `H`, and the scratch runner races every load against a timeout.
-- ▶ NEXT: Part A step 20, the correction.
+- ✅ Part A step 20, the correction. With the camera placed and a sheet
+  under the corners, `doRectify` rectifies at the base section's top plane:
+  the paper's corners (or the set's table rectangle) go to where they would
+  lie at that height, raised about the point below the camera by
+  D / (D − t), and the window, bands and paper regions come through the
+  same construction, lowered; the rectification records the plane, the
+  factor and the point below the camera in rectified millimetres
+  (`state.rect.parallax`). A thickness typed after the trace scales the
+  outline, holes, circles and sections about that point by
+  (D − t_new) / (D − t_old) (`parallaxRetarget`) rather than re-rectifying,
+  which would lose the trace; a section whose top is at another height is
+  scaled for the mesh by its own factor (`parallaxRegions`, in
+  `rebuildMesh`). The readout says corrected, with the camera's height and
+  tilt. Measured: a 100 × 40 × 10 mm part from 400 mm reads 102.46 × 40.99
+  uncorrected and 99.89 × 39.99 corrected (criterion 24); a 500 × 40 × 10
+  part on a table a metre down 500.07 × 40.02; the retarget and the section
+  factors exact. 849 checks, all passing, no console errors; dist rebuilt
+  and smoke-tested — v1.33.1.
+  - ⚠ Two tests failed only in the full run: step 19's expected "not yet
+    corrected" (true until step 20 existed) and step 20's uncorrected case,
+    which found a focal length left over from the previous block's JPEG.
+    The second is a real gap: `loadImageFromURL` never cleared
+    `state.photoFocal`, so a project's or the queue's photo could carry an
+    earlier JPEG's focal length. It clears it now, unless a `loadFile` read
+    is in flight for the same photo.
+  - ⚠ The raster is made at the thickness typed when Step 2 opens (5 mm by
+    default); a thickness typed later moves the trace, not the picture, so
+    the picture is then out of scale with the trace by a percent or so until
+    Step 2 is re-rectified. The readout and the trace are right either way.
+- ▶ NEXT: Part A step 21, the raised sheet.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1179,6 +1208,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.32 (2026-10-02): Part A step 20 shipped as v1.33.1.
 - v1.31 (2026-10-02): Part A step 19 shipped as v1.33.0.
 - v1.30 (2026-10-02): Part A step 18 shipped as v1.32.4; phase 2 complete.
 - v1.29 (2026-10-02): Part A step 17 shipped as v1.32.3.

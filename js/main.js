@@ -16,7 +16,7 @@ import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
 import { findSheets, describeFound, pointInQuad as sheetPointInQuad } from './calibFind.js';
 import { fitSheets, describeJoint, tableExtent, tableAxisAngle } from './calibJoint.js';
-import { cameraFromHomography, parallaxFactor, describeParallax } from './parallax.js';
+import { cameraFromHomography, parallaxFactor, describeParallax, raisePoint, lowerPoint } from './parallax.js';
 import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance, frameOutsideMm, rulerScale } from './calibVerdict.js';
 import { lensParams as calibLensParams, undistortPixel as calibUndistort } from './lens.js';
 import { computeHomography as calibHomography, applyHomography as calibApplyH } from './homography.js';
@@ -451,13 +451,16 @@ function updateStepButtons() {
 // (js/exif.js): only the two focal-length tags, held for this photo, never
 // saved. It is what lets the paper check judge a tilted sheet; without it the
 // check falls back to every plausible lens and only grows more cautious.
-let focalToken = 0;
+let focalToken = 0, focalPending = false;
 function readPhotoFocal(file) {
   const token = ++focalToken;
   state.photoFocal = null;
+  focalPending = false;
   if (!file || !file.slice || !/jpe?g/i.test(file.type)) return;
+  focalPending = true;
   file.slice(0, 262144).arrayBuffer().then(buf => {
     if (token !== focalToken) return;
+    focalPending = false;
     state.photoFocal = readFocalLength(buf);
     updatePaperCheck();
     parallaxUpdate();
@@ -546,6 +549,9 @@ function loadFile(file, onFail, onLoad) {
 }
 
 function loadImageFromURL(url, done, fail) {
+  // A photo that does not come through loadFile carries no focal length of
+  // its own; one left from an earlier JPEG must not place its camera.
+  if (!focalPending) state.photoFocal = null;
   const img = new Image();
   img.onload = () => {
     state.image = img;
@@ -682,19 +688,30 @@ function doRectifySet(joint) {
   const rects = joint.sheets.map(js => all.sheets[js.index].verdict && all.sheets[js.index].verdict.rect);
   const iw = state.image.naturalWidth || state.image.width, ih = state.image.naturalHeight || state.image.height;
   const ext = tableExtent(joint, rects, SET_MARGIN_MM, tableAxisAngle(joint, iw, ih));
-  const corners = ext.corners.map(p => joint.tableToPhoto(p));
+  // Parallax (step 20): the table rectangle as it lies on the base section's
+  // top plane, raised about the point below the camera.
+  const px0 = state.parallax;
+  const cam = px0 && px0.camera && px0.plane === 'table' && px0.t > 0 && px0.t < px0.camera.height ? { D: px0.camera.height, t: px0.t, below: px0.belowPlane } : null;
+  const corners = ext.corners.map(p => joint.tableToPhoto(cam ? raisePoint(p, cam.below, cam.D, cam.t) : p));
   if (!corners.every(c => Number.isFinite(c.x) && Number.isFinite(c.y))) return false;
   const res = rectify(state.image, corners, ext.w, ext.h, { k1: joint.k1, k2: 0, marginMm: 0, maxLongSidePx: SCAN_MAX_LONG_SIDE_PX });
   if (!res) { toast('The set of sheets could not be rectified — check the sheets, or untick "Use the sheet fit".'); return false; }
   state.rect = res;
   state.rectDirty = false;
+  res.parallax = null;
+  if (px0) { px0.corrected = !!cam; px0.message = describeParallax(px0); }
+  if (cam) {
+    const l = ext.toLocal(cam.below);
+    res.parallax = { t: cam.t, factor: parallaxFactor(cam.D, cam.t), height: cam.D, belowPx: { x: l.x * res.pxPerMm, y: l.y * res.pxPerMm }, belowMm: { x: l.x, y: l.y } };
+  }
   state.lens.k1 = joint.k1;
   $('lensSlider').value = Math.round(joint.k1 * 1000);
   $('lensVal').textContent = joint.k1.toFixed(3);
   // Every sheet's paper and clean window in the rectified image, for the
   // background model and the band warning.
   const ppm = res.pxPerMm;
-  const toPx = t => { const l = ext.toLocal(t); return { x: l.x * ppm, y: l.y * ppm }; };
+  // A plane feature appears in the raised raster lowered about the point below the camera.
+  const toPx = t => { const l = ext.toLocal(cam ? lowerPoint(t, cam.below, cam.D, cam.t) : t); return { x: l.x * ppm, y: l.y * ppm }; };
   const sheets = joint.sheets.map((js, i) => {
     const s = all.sheets[js.index];
     const stock = PAPER_SIZES[s.identity.paper];
@@ -1204,7 +1221,14 @@ function doRectify() {
   // a drawer worth rectifying: every millimetre of margin is warp time and
   // segmentation area spent on the floor around the drawer.
   const marginMm = scan ? 0 : (state.captureFrac || 0) * Math.max(w, h);
-  const res = rectify(state.image, state.corners, w, h,
+  // Parallax (phase 3, step 20): with the camera placed and a sheet under
+  // the corners, rectify at the base section's top plane. The paper's
+  // corners are taken to where they would lie on that plane, raised about
+  // the point below the camera, so the part's top face is traced at true
+  // size and what is traced is what is built.
+  const raised = parallaxRaisedCorners();
+  const rectCorners = raised ? raised.corners : state.corners;
+  const res = rectify(state.image, rectCorners, w, h,
     { k1: state.lens.k1, k2: state.lens.k2, marginMm,
       maxLongSidePx: scan ? SCAN_MAX_LONG_SIDE_PX : undefined });
   if (!res) {
@@ -1213,11 +1237,12 @@ function doRectify() {
   }
   state.rect = res;
   state.rectDirty = false;
+  parallaxRectified(res, raised, rectCorners);
   // A calibration sheet's clean window, carried into the rectified image
   // through the same construction rectify used: everything outside it, the
   // printed band and the desk, is background to the segmenter, and the
   // paper colour is sampled just inside it.
-  const win = sheetWindowPx(res);
+  const win = sheetWindowPx(res, rectCorners);
   state.sheetWindow = win ? { px: win, mm: win.map(p => ({ x: p.x / res.pxPerMm, y: p.y / res.pxPerMm })) } : null;
   state.sheetWindowWarn = null;
   // Beyond-paper: give the segmenter the paper rect so it treats both the paper
@@ -2510,9 +2535,9 @@ function retrace() {
 
 // The sheet's window as a polygon in the rectified image, or null when the
 // photo has no sheet, the fit is off, or the reference is not plain paper.
-function sheetWindowPx(res) {
+function sheetWindowPx(res, corners = state.corners) {
   const s = state.sheet;
-  if (!s || !state.sheetFit || state.reference !== 'rect' || scanOn() || !res || !res.paperRect || !state.corners) return null;
+  if (!s || !state.sheetFit || state.reference !== 'rect' || scanOn() || !res || !res.paperRect || !corners) return null;
   const win = s.geom.window;
   const design = [{ x: win.x, y: win.y }, { x: win.x + win.w, y: win.y }, { x: win.x + win.w, y: win.y + win.h }, { x: win.x, y: win.y + win.h }];
   const iw = state.image.naturalWidth || state.image.width, ih = state.image.naturalHeight || state.image.height;
@@ -2520,10 +2545,93 @@ function sheetWindowPx(res) {
   const und = p => ((k1 || k2) ? calibUndistort(p, k1, k2, lp) : p);
   const R = res.paperRect;
   const dst = [{ x: R.x, y: R.y }, { x: R.x + R.w, y: R.y }, { x: R.x + R.w, y: R.y + R.h }, { x: R.x, y: R.y + R.h }];
-  const Hinv = calibHomography(state.corners.map(und), dst);
+  const Hinv = calibHomography(corners.map(und), dst);
   if (!Hinv) return null;
   const pts = design.map(p => { const q = und(s.designToPhoto(p)); return calibApplyH(Hinv, q.x, q.y); });
   return pts.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)) ? pts : null;
+}
+
+// ---------- parallax: the correction (calibration_and_backlog_prd_v1.2, Part A phase 3, step 20) ----------
+//
+// The paper's corners as they would lie on the plane of the base section's
+// top face: raised about the point below the camera by D / (D - t), in the
+// sheet's design frame (so through its print scale), then into the photo.
+// Null when there is no camera, no sheet under the corners, or no thickness.
+function parallaxRaisedCorners() {
+  const p = state.parallax, s = state.sheet;
+  if (!p || !p.camera || !s || !state.sheetFit || state.reference !== 'rect' || scanOn() || p.plane !== 'sheet' || !(p.t > 0)) return null;
+  const D = p.camera.height, t = p.t;
+  if (!(t < D)) return null;
+  const B = p.belowPlane;
+  const sc = p.scale;
+  const designCorners = s.verdict.rect.corners;
+  const r = s.rotation || 0;
+  // Raised in real millimetres, then back to design millimetres.
+  const raisedDesign = designCorners.map(c => {
+    const real = raisePoint({ x: c.x * sc.x, y: c.y * sc.y }, { x: B.x * sc.x, y: B.y * sc.y }, D, t);
+    return { x: real.x / sc.x, y: real.y / sc.y };
+  });
+  const photo = raisedDesign.map(q => s.designToPhoto(q));
+  const corners = [0, 1, 2, 3].map(i => photo[(i + r) % 4]);
+  if (!corners.every(c => Number.isFinite(c.x) && Number.isFinite(c.y))) return null;
+  return { corners, D, t, below: B, factor: parallaxFactor(D, t) };
+}
+
+// Record what a rectification was made at: the plane's height, the factor,
+// and the point below the camera in rectified pixels, which every later
+// correction scales about.
+function parallaxRectified(res, raised, rectCorners) {
+  const p = state.parallax;
+  res.parallax = null;
+  if (p) { p.corrected = false; p.message = describeParallax(p); }
+  if (!raised || !p || !p.camera) return;
+  const s = state.sheet;
+  const iw = state.image.naturalWidth || state.image.width, ih = state.image.naturalHeight || state.image.height;
+  const lp = calibLensParams(iw, ih), k1 = state.lens.k1, k2 = state.lens.k2;
+  const und = q => ((k1 || k2) ? calibUndistort(q, k1, k2, lp) : q);
+  const R = res.paperRect;
+  const dst = [{ x: R.x, y: R.y }, { x: R.x + R.w, y: R.y }, { x: R.x + R.w, y: R.y + R.h }, { x: R.x, y: R.y + R.h }];
+  const Hinv = calibHomography(rectCorners.map(und), dst);
+  let belowPx = null;
+  if (Hinv && s) { const q = und(s.designToPhoto(raised.below)); belowPx = calibApplyH(Hinv, q.x, q.y); }
+  res.parallax = { t: raised.t, factor: raised.factor, height: raised.D, belowPx, belowMm: belowPx ? { x: belowPx.x / res.pxPerMm, y: belowPx.y / res.pxPerMm } : null };
+  p.corrected = true;
+  p.message = describeParallax(p);
+}
+
+// The base thickness changed after the trace: the raster was made at the
+// old plane, so everything traced on it is scaled about the point below the
+// camera by (D - t_new) / (D - t_old), without a re-rectification that would
+// lose the trace. A section's own thickness is handled at build time.
+function parallaxRetarget(tNew) {
+  const rp = state.rect && state.rect.parallax;
+  if (!rp || !rp.belowMm || !(tNew > 0) || !(tNew < rp.height) || Math.abs(tNew - rp.t) < 1e-9) return false;
+  const k = (rp.height - tNew) / (rp.height - rp.t);
+  const B = rp.belowMm;
+  const sc = pt => ({ x: B.x + (pt.x - B.x) * k, y: B.y + (pt.y - B.y) * k });
+  const { outer, holes, circles } = traceEditor.getTrace();
+  if (outer && outer.length) traceEditor.setTrace(outer.map(sc), (holes || []).map(h => h.map(sc)));
+  if (circles && circles.length) traceEditor.setCircles(circles.map(c => { const m = sc({ x: c.cx, y: c.cy }); return { ...c, cx: m.x, cy: m.y, d: c.d * k }; }));
+  for (const r of state.regions) if (r.pts && r.pts.length) r.pts = r.pts.map(sc);
+  rp.t = tNew; rp.factor = parallaxFactor(rp.height, tNew);
+  traceEditor.setSections(state.regions);
+  return true;
+}
+
+// The regions as the mesh should see them: a section whose top is not at
+// the plane the raster was made at is scaled about the point below the
+// camera by its own factor.
+function parallaxRegions() {
+  const rp = state.rect && state.rect.parallax;
+  if (!rp || !rp.belowMm) return state.regions;
+  return state.regions.map((r, i) => {
+    if (i === 0 || !r.pts || !r.pts.length) return r;
+    const top = (r.zBase || 0) + (r.thickness || 0);
+    if (!(top > 0) || !(top < rp.height) || Math.abs(top - rp.t) < 1e-9) return r;
+    const k = (rp.height - top) / (rp.height - rp.t);
+    const B = rp.belowMm;
+    return { ...r, pts: r.pts.map(pt => ({ x: B.x + (pt.x - B.x) * k, y: B.y + (pt.y - B.y) * k })) };
+  });
 }
 
 // How close the outline runs to the window's edge, when there is a window:
@@ -2771,7 +2879,7 @@ function rebuildMesh(fit = false) {
     const q = QUALITY_PRESETS[state.model.quality] || QUALITY_PRESETS.medium;
     let mesh = null;
     try {
-      mesh = buildModel(outer, holes, circles, state.regions, {
+      mesh = buildModel(outer, holes, circles, parallaxRegions(), {
         arcSegments: state.model.arcSegments, chordTol: q.chordTol,
         labels: labelsForMesh(),
       });
@@ -7341,7 +7449,11 @@ $('regionName').addEventListener('change', e => {
 });
 $('thickness').addEventListener('change', e => {
   const mm = parseDim(e.target.value);
-  if (mm > 0) { currentRegion().thickness = mm; rebuildMesh(); if (state.selRegion === 0) parallaxUpdate(); }
+  if (mm > 0) {
+    if (state.selRegion === 0) parallaxRetarget(mm);
+    currentRegion().thickness = mm; rebuildMesh();
+    if (state.selRegion === 0) { parallaxUpdate(); if (state.rect && state.rect.parallax) { state.parallax.corrected = true; state.parallax.message = describeParallax(state.parallax); } updateTraceInfo(); }
+  }
   refreshModelFields();
   traceEditor.draw();
 });
@@ -8759,6 +8871,9 @@ window.__app = {
     get state() { return state.parallax; },
     setFocal: f => { state.photoFocal = f; updatePaperCheck(); parallaxUpdate(); },
     get focal() { return state.photoFocal; },
+    get rect() { return state.rect && state.rect.parallax; },
+    retarget: t => parallaxRetarget(t),
+    regions: () => parallaxRegions(),
   },
   // Calibration sheets: the panel, the print and the download with their
   // record, and the clock the job is drawn from.

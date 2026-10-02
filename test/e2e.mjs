@@ -16804,9 +16804,9 @@ delete camTest.jpeg;
   check('with the focal length and one sheet the camera is placed: height within 0.5 percent, tilt within 0.2 degrees, the point below within 1 mm (tilted 6 degrees)',
     t.height && Math.abs(t.height / t.truthH - 1) < 0.005 && Math.abs(t.tilt - 6) < 0.2 && Math.abs(t.belowDist - t.truthBelow) < 1 && t.source === 'exif' && t.plane === 'sheet',
     `height ${t.height && t.height.toFixed(1)} (true ${t.truthH.toFixed(1)}), tilt ${t.tilt && t.tilt.toFixed(2)}°, below ${t.belowDist && t.belowDist.toFixed(1)} mm from the centre (true ${t.truthBelow.toFixed(1)})`);
-  check('Step 1 says where the camera was and what a 5 mm part shows, and Step 2\'s readout names the parallax, not yet corrected',
+  check('Step 1 says where the camera was and what a 5 mm part shows, and Step 2\'s readout names the parallax (corrected, since step 20)',
     t.noteShown && /Camera 39\d mm above the sheet, tilted 6\.\d°/.test(t.note) && /5 mm part shows its top 1\.\d percent large/.test(t.note) &&
-    Math.abs(t.factor - t.truthH / (t.truthH - 5)) < 0.001 && /Parallax: 1\.\d percent at 5 mm, not yet corrected \(camera 39\d mm above the sheet, tilted 6\.\d°/.test(t.traceInfo),
+    Math.abs(t.factor - t.truthH / (t.truthH - 5)) < 0.001 && /Parallax: 1\.\d percent at 5 mm, corrected \(camera 39\d mm above the sheet, tilted 6\.\d°/.test(t.traceInfo),
     `"${t.note}" / "${t.traceInfo.replace(/\n/g, ' / ')}"`);
   check('a resized photo\'s focal length is refused, and without a sheet the focal length alone places no camera',
     !r.resized.camera && /resized or cropped/.test(r.resized.message) && !r.plain.camera && /a calibration sheet is needed/.test(r.plain.message),
@@ -16820,6 +16820,122 @@ delete camTest.jpeg;
   check('the focal length is read from a JPEG\'s EXIF through the file input and places the camera as a phone\'s photo arrives',
     r.exif.focal && r.exif.focal.f35 === 26 && r.exif.camera && r.exif.camera.source === 'exif' && Math.abs(r.exif.camera.height - 397.8) < 3 && Math.abs(r.exif.camera.tiltDeg - 6) < 0.3,
     `focal ${JSON.stringify(r.exif.focal)}; camera ${JSON.stringify(r.exif.camera)}`);
+}
+
+// ---------- Parallax: the correction (Part A phase 3, step 20 of calibration_and_backlog_prd_v1.2) ----------
+//
+// Criterion 24: with an EXIF focal length, a 10 mm part rendered with true
+// parallax from 400 mm measures within 0.2 mm; uncorrected it reads 2.6 mm
+// large on 100 mm. Criterion 26: the readout names the correction with the
+// camera's height and tilt. Criterion 27: without data nothing is corrected
+// and the readout says so. Also the thickness typed after the trace, a
+// section of another thickness, and a set on a table.
+
+console.log('\nParallax: the correction');
+
+const corrTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderSheetPhoto, renderTablePhoto } = await import('./test/sheetPhoto.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens }, captureFrac: st.captureFrac, thickness: st.regions[0].thickness };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  st.captureFrac = 0;
+  st.seg.autoThreshold = true;
+  app.syncRefControls();
+  const sel = $('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  const load = async r => { await new Promise(res => app.loadImageFromURL(r.canvas.toDataURL('image/png'), res)); await wait(120); };
+  const bboxOf = pts => { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const p of pts) { a = Math.min(a, p.x); c = Math.max(c, p.x); b = Math.min(b, p.y); d = Math.max(d, p.y); } return { w: c - a, h: d - b, minX: a, minY: b, cx: (a + c) / 2, cy: (b + d) / 2 }; };
+  const out = {};
+  const W = 2400, H = 1800;
+  // A 100 x 40 x 10 mm part on the sheet, the camera 400 mm straight above the sheet's centre, 26 mm equivalent.
+  const part = { x: 58, y: 100, w: 100, h: 40, z: 10, r: 2, color: '#23364a' };
+  const photo = await renderSheetPhoto({ paper: 'letter', sheet: 2, count: 4, job: 0x7f, W, H, pose: { height: 400, tilt: 0, f35: 26 }, k1: 0.03, noise: 2, objects: [part] });
+  // Uncorrected: no focal length (none left from an earlier photo either), the base thickness 10 mm.
+  st.regions[0].thickness = 10;
+  app.parallax.setFocal(null);
+  await load(photo);
+  app.goStep(2);
+  await wait(100);
+  out.uncorrected = { bbox: bboxOf(app.traceEditor.getTrace().outer), info: $('traceInfo').textContent, rectParallax: app.parallax.rect, corrected: app.parallax.state && app.parallax.state.corrected };
+  app.goStep(1);
+  // Corrected: the focal length arrives (as EXIF would), Step 2 is rectified at the 10 mm plane.
+  app.parallax.setFocal({ f35: 26, focalMm: null, w: W, h: H });
+  st.rectDirty = true;
+  app.goStep(2);
+  await wait(100);
+  {
+    const t = app.traceEditor.getTrace();
+    out.corrected = { bbox: bboxOf(t.outer), info: $('traceInfo').textContent, rectParallax: app.parallax.rect && { t: app.parallax.rect.t, factor: app.parallax.rect.factor, height: app.parallax.rect.height, belowMm: app.parallax.rect.belowMm },
+      corrected: app.parallax.state.corrected, message: app.parallax.state.message, window: !!app.sheet.window, winMm: app.sheet.window && app.sheet.window.mm.map(p => ({ x: +p.x.toFixed(1), y: +p.y.toFixed(1) })) };
+  }
+  // The thickness typed afterwards: the trace is retargeted without a re-rectification.
+  {
+    const beforeRetarget = bboxOf(app.traceEditor.getTrace().outer);
+    const ok = app.parallax.retarget(20);
+    st.regions[0].thickness = 20;
+    app.parallax.update();
+    const after = bboxOf(app.traceEditor.getTrace().outer);
+    out.retarget = { ok, before: beforeRetarget, after, rect: app.parallax.rect && { t: app.parallax.rect.t, factor: app.parallax.rect.factor }, factorExpected: (400 - 20) / (400 - 10) };
+    app.parallax.retarget(10);
+    st.regions[0].thickness = 10;
+    app.parallax.update();
+  }
+  // A section of another thickness is scaled for the mesh by its own factor.
+  {
+    const tr = app.traceEditor.getTrace();
+    const b = bboxOf(tr.outer);
+    const sq = [{ x: b.cx - 10, y: b.cy - 10 }, { x: b.cx + 10, y: b.cy - 10 }, { x: b.cx + 10, y: b.cy + 10 }, { x: b.cx - 10, y: b.cy + 10 }];
+    st.regions.push({ name: 'Boss', pts: sq, thickness: 30, zBase: 0, top: { mode: 'none', size: 1 }, bottom: { mode: 'none', size: 1 } });
+    const regs = app.parallax.regions();
+    const scaled = bboxOf(regs[1].pts);
+    out.section = { drawn: bboxOf(sq).w, scaled: scaled.w, expected: 20 * (400 - 30) / (400 - 10), base: regs[0] === st.regions[0] };
+    st.regions.pop();
+  }
+  app.goStep(1);
+  // A set on a table with a 10 mm part between the sheets, camera a metre up: the whole table at the part's plane.
+  const four = [{ x: 300, y: 350, rot: 92 }, { x: 700, y: 150, rot: 3 }, { x: 1100, y: 350, rot: -88 }, { x: 700, y: 550, rot: 182 }]
+    .map((p, i) => ({ ...p, sheet: i + 1, count: 4, job: 0x5a, paper: 'letter', scale: 0.96 }));
+  const tb = await renderTablePhoto({ table: { w: 1400, h: 700 }, W: 4000, H: 3000, supersample: 1, pose: { height: 1000, tilt: 0, spin: 0, f35: 26 }, k1: 0.08, noise: 3, sheets: four,
+    objects: [{ x: 450, y: 330, w: 500, h: 40, z: 10, r: 4 }] });
+  await load(tb);
+  st.regions[0].thickness = 10;
+  app.parallax.setFocal({ f35: 26, focalMm: null, w: 4000, h: 3000 });
+  st.rectDirty = true;
+  app.goStep(2);
+  await wait(150);
+  out.set = { active: app.sheet.setActive, bbox: bboxOf(app.traceEditor.getTrace().outer), info: $('traceInfo').textContent, corrected: app.parallax.state.corrected, rect: app.parallax.rect && { t: app.parallax.rect.t, factor: app.parallax.rect.factor } };
+  app.goStep(1);
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens; st.captureFrac = before.captureFrac; st.regions[0].thickness = before.thickness;
+  app.syncRefControls();
+  return out;
+});
+{
+  const r = corrTest;
+  const u = r.uncorrected, c = r.corrected;
+  check('without a focal length nothing is corrected: a 10 mm part from 400 mm reads 2.6 mm large on 100 mm, and the readout says parallax is uncorrected (criterion 27)',
+    !u.rectParallax && !u.corrected && Math.abs(u.bbox.w - 100 * 400 / 390) < 0.4 && Math.abs(u.bbox.h - 40 * 400 / 390) < 0.3 && /Parallax uncorrected/.test(u.info),
+    `${u.bbox.w.toFixed(2)} × ${u.bbox.h.toFixed(2)} mm (expected ${(100 * 400 / 390).toFixed(2)} × ${(40 * 400 / 390).toFixed(2)}); "${u.info.replace(/\n/g, ' / ')}"`);
+  check('with the focal length the part is traced at true size within 0.2 mm, rectified at its top plane (criterion 24)',
+    c.rectParallax && c.rectParallax.t === 10 && Math.abs(c.rectParallax.factor - 400 / 390) < 0.001 && Math.abs(c.bbox.w - 100) < 0.2 && Math.abs(c.bbox.h - 40) < 0.2 && c.corrected,
+    `${c.bbox.w.toFixed(2)} × ${c.bbox.h.toFixed(2)} mm; factor ${c.rectParallax && c.rectParallax.factor.toFixed(4)} at ${c.rectParallax && c.rectParallax.t} mm, camera ${c.rectParallax && c.rectParallax.height.toFixed(1)} mm`);
+  check('the readout names the correction with the camera height and tilt (criterion 26), and the sheet\'s window is carried into the raised raster',
+    /Parallax: 2\.6 percent at 10 mm, corrected \(camera 40\d mm above the sheet, tilted 0\.\d°, from the photo's focal length\)/.test(c.info) && c.window && c.winMm && c.winMm.length === 4,
+    `"${c.info.replace(/\n/g, ' / ')}"; window ${JSON.stringify(c.winMm)}`);
+  const rt = r.retarget;
+  check('a thickness typed after the trace retargets the outline about the point below the camera without a re-rectification',
+    rt.ok && Math.abs(rt.after.w / rt.before.w - rt.factorExpected) < 0.002 && rt.rect && rt.rect.t === 20 && Math.abs(rt.rect.factor - 400 / 380) < 0.001,
+    `${rt.before.w.toFixed(2)} → ${rt.after.w.toFixed(2)} mm (factor ${(rt.after.w / rt.before.w).toFixed(4)}, expected ${rt.factorExpected.toFixed(4)})`);
+  check('a section of another thickness is scaled for the mesh by its own factor, the base untouched',
+    r.section.base && Math.abs(r.section.scaled - r.section.expected) < 0.01 && Math.abs(r.section.drawn - 20) < 1e-9,
+    `drawn ${r.section.drawn.toFixed(2)} mm, built ${r.section.scaled.toFixed(3)} mm (expected ${r.section.expected.toFixed(3)})`);
+  const s = r.set;
+  check('a set on a table is rectified at the part\'s plane too: a 500 x 40 x 10 mm part a metre down traces at true size within a pixel',
+    s.active && s.corrected && s.rect && s.rect.t === 10 && Math.abs(s.bbox.w - 500) < 0.4 && Math.abs(s.bbox.h - 40) < 0.4 && /Parallax: 1\.0 percent at 10 mm, corrected/.test(s.info),
+    `${s.bbox.w.toFixed(2)} × ${s.bbox.h.toFixed(2)} mm; "${s.info.replace(/\n/g, ' / ')}"`);
 }
 
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
