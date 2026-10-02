@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.29
+version: 1.30
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -786,7 +786,16 @@ real-photo checkpoint. Building in the PRD's suggested order.
     edge, and phase 1's tests are unchanged.
   - ⚠ The coin's apply returned early without a coin, so its undo could not
     reach a sheet's rescale; the undo now comes first and is shared.
-- ▶ NEXT: Part A step 18, README.
+- ✅ Part A step 18, README. The calibration sheet section's "Several
+  sheets" paragraph split into finding, fitting and Step 2, with the drawer
+  cross-reference; the reference list says several sheets are fitted
+  together; the tests paragraph describes the table renderer; the drawer
+  scan section's sheet check and the roadmap were written at steps 16 and
+  17. Phase 2 is complete, its checkpoint (a real large part with four
+  sheets, a real drawer with a sheet on its floor) waiting on Sam's prints
+  with phase 1's. 836 checks, all passing, no console errors; dist rebuilt
+  and smoke-tested — v1.32.4.
+- ▶ NEXT: Part A phase 3, step 19, EXIF and the camera position.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1147,6 +1156,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.30 (2026-10-02): Part A step 18 shipped as v1.32.4; phase 2 complete.
 - v1.29 (2026-10-02): Part A step 17 shipped as v1.32.3.
 - v1.28 (2026-10-02): Part A step 16 shipped as v1.32.2.
 - v1.27 (2026-10-02): Part A step 15 shipped as v1.32.1.

@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.20
+version: 1.2.21
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -14,7 +14,8 @@ Status: **Part A phase 1 BUILT, v1.28.0 to v1.30.10, 2026-10-02, all
 thirteen steps including the two droppable ones; its real-photo checkpoint
 (step 10) waits on Sam's prints. Part B items B.1, B.2 and B.4 SHIPPED
 (v1.29.0 to v1.29.3); B.3 SHIPPED (v1.30.11 to v1.31.1). Part A phases 2 and
-3 SIGNED OFF 2026-10-02, build in progress.** Signed off 2026-10-02 with open
+3 SIGNED OFF 2026-10-02; phase 2 BUILT, v1.32.0 to v1.32.4, its checkpoint
+waiting with phase 1's; phase 3 in progress.** Signed off 2026-10-02 with open
 questions 1 to 15 on their recommendations. Sam signed off phases 2 and 3 on
 2026-10-02 before phase 1's real-photo checkpoint, which this document had
 staged first; the checkpoint still stands and anything it shows wrong on real
@@ -927,7 +928,7 @@ checkpoint that needs a person.
     synthetic drawer of criterion 23: -7.49 percent against a true -7.50,
     the bar 110.95 → 119.94 for 120, the sheet absent from the shapes. The
     checkpoint waits on Sam's prints with the rest.
-18. **README.**
+18. **README.** *Shipped v1.32.4, 2026-10-02; phase 2 complete.*
 
 ### Phase 3: parallax (signed off 2026-10-02, before phase 1's checkpoint)
 
@@ -1226,6 +1227,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.21 (2026-10-02): Part A step 18 shipped in v1.32.4; phase 2 built, status line updated.
 - v1.2.20 (2026-10-02): Part A step 17 shipped in v1.32.3; criterion 23 met.
 - v1.2.19 (2026-10-02): Part A step 16 shipped in v1.32.2; criterion 20's
   status recorded at the criterion.

@@ -87,7 +87,8 @@ the fully offline option.
   writes into its photos it can judge a tilted sheet. Without it, it judges
   photos taken from straight above and stays quiet rather than guess on steep
   tilts. A **calibration sheet** printed from the app is a rectangle the app
-  measures instead of trusts; see "Calibration sheets" below.
+  measures instead of trusts, and several of them around a large part are
+  fitted together on one plane; see "Calibration sheets" below.
 - **Graph paper / dot grid / cutting mat** — calibrate off a printed grid
   instead of the sheet's edges. Pick the pitch (metric 1–10 mm, imperial
   1/10–1 in, cutting-mat presets, or a custom one) and put the four handles on
@@ -627,33 +628,43 @@ from the clean ring around the window and fitted as a smooth surface, so a
 lamp on one side does not read as object, and a trace that runs within 1 mm
 of the band is called out.
 
-**Several sheets.** Lay sheets of a set around a large part, by hand, at any
-angle, and Step 1 finds every one of them: each bright sheet-sized patch of
-the photo is tried as a sheet, and on a white desk, where the paper has no
-edge, the frame's dark ring is tried instead. The panel lists what it found
-("4 calibration sheets in this photo: sheets 1, 2, 3 and 4 of set 7f"), the
-overlay marks each frame with its number, a sheet cut by the photo's edge is
-found from its visible part and marked as cut, and a set printed twice is
-still two sheets, with a note to print a fresh set so each has its own
-number. The set is then fitted together: one plane and one lens term for
-every sheet, a position and rotation per sheet, and one print scale per set,
-fixed from whichever sheet of that set has its edges, a ruler or a print
-check on record. A second set in the same photo gets its scale fitted
-against the first and checked against its own edges ("Set 3C: 100.0
-percent, fitted against set 5A, and its own edges agree"). On synthetic
-photos of four sheets around a 500 mm part the joint mapping measures the
-part within 0.1 mm where one sheet at one end comes out worse. Step 2 then
-rectifies the whole table from the set, in the photo's own orientation and at
-the drawer scan's resolution ceiling (3200 px on the long side, so a metre
-of table is about 3 px/mm), with every sheet's paper and window carried in:
-the printed bands are masked, the paper colour is sampled from every
+**Several sheets: finding them.** A part larger than a sheet is measured
+between sheets, not beyond one. Lay sheets of a set around it, by hand, at
+any angle, two on opposite sides at the least and one per side for choice,
+and Step 1 finds every one of them as the photo loads: each bright
+sheet-sized patch of the photo is tried as a sheet, and on a white desk,
+where the paper has no edge, the frame's dark ring is tried instead. The
+panel lists what it found ("4 calibration sheets in this photo: sheets 1, 2,
+3 and 4 of set 7F") and the overlay marks each frame with its number. A sheet
+cut by the photo's edge is found from its visible part and marked as cut; a
+set printed twice is still two sheets, with a note to print a fresh set so
+each has its own number; a part lying on the table is never mistaken for one.
+
+**Several sheets: fitting them.** The set is fitted together on one plane:
+one mapping from the table to the photo and one lens term for every sheet, a
+position and rotation per sheet, and one print scale per set, fixed from
+whichever sheet of that set has its edges, a ruler reading or a print check
+on record, since the frames alone cannot tell a print scale from a camera
+distance. A second set in the same photo gets its scale fitted against the
+first and checked against its own edges ("Set 3C: 100.0 percent, fitted
+against set 5A, and its own edges agree"). On synthetic photos of four sheets
+around a 500 mm part, with lens distortion and noise, the joint mapping
+measures the part within 0.1 mm; one sheet at one end comes out worse, and
+much worse when that sheet's edges cannot be seen.
+
+**Several sheets: Step 2.** Step 2 rectifies the whole table from the set, in
+the photo's own orientation and at the drawer scan's resolution ceiling
+(3200 px on the long side, so a metre of table is about 3 px/mm, and a
+trace is good to that pixel), with every sheet's paper and window carried
+in: the printed bands are masked, the paper colour is sampled from every
 window's clean ring and fitted as one smooth surface, the desk colour from
 around every sheet, and a part lying on the desk between the sheets is
-traced at its size to within a pixel. The trace info says "Rectified from 4
-calibration sheets fitted on one plane", and a trace within 1 mm of any
-sheet's band is called out, since a part that close reads larger toward the
-sheet. Untick **Use the sheet fit** to go back to the one sheet under the
-corners.
+traced at its size. The trace info says "Rectified from 4 calibration sheets
+fitted on one plane", and a trace within 1 mm of any sheet's band is called
+out, since a part that close reads larger toward the sheet. Untick **Use the
+sheet fit** to go back to the one sheet under the corners. A sheet on a
+drawer's floor checks the drawer scan's scale instead; see "Checking the
+scale with a calibration sheet" under the drawer scan.
 
 **Not yet.** Parallax correction for thick parts is phase 3
 (`docs/calibration_and_backlog_prd_v1.2.md`). A photo whose code is too
@@ -1130,7 +1141,12 @@ own SVG (`test/sheetPhoto.js`): rasterised flat through a print scale, anchor,
 registration offset and feed skew, photographed by a pinhole camera, bowed by
 the lens, blurred, lit unevenly and bent, with the truth of every stage kept.
 Layout v1's geometry is frozen in `test/fixtures/calib_layout_v1.json`; any
-change to it fails the suite until a v2 is added beside it.
+change to it fails the suite until a v2 is added beside it. Several sheets
+are tested on a table: `renderTablePhoto` composes flat sheets at any
+position and angle on one plane, with parts between them, and photographs
+the plane with the same camera, so the finder, the joint fit, the table
+rectification and the drawer's sheet check are all measured against a truth
+per sheet.
 ## Roadmap
 
 ### Shipped
