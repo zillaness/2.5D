@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.24
+version: 1.2.25
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -14,8 +14,9 @@ Status: **Part A phase 1 BUILT, v1.28.0 to v1.30.10, 2026-10-02, all
 thirteen steps including the two droppable ones; its real-photo checkpoint
 (step 10) waits on Sam's prints. Part B items B.1, B.2 and B.4 SHIPPED
 (v1.29.0 to v1.29.3); B.3 SHIPPED (v1.30.11 to v1.31.1). Part A phases 2 and
-3 SIGNED OFF 2026-10-02; phase 2 BUILT, v1.32.0 to v1.32.4, its checkpoint
-waiting with phase 1's; phase 3 in progress.** Signed off 2026-10-02 with open
+3 SIGNED OFF 2026-10-02 and BUILT the same day, v1.32.0 to v1.32.4 and
+v1.33.0 to v1.33.3; every checkpoint (steps 10, 17 and 21) waits on Sam's
+prints and phone.** Signed off 2026-10-02 with open
 questions 1 to 15 on their recommendations. Sam signed off phases 2 and 3 on
 2026-10-02 before phase 1's real-photo checkpoint, which this document had
 staged first; the checkpoint still stands and anything it shows wrong on real
@@ -979,6 +980,7 @@ checkpoint that needs a person.
     Sam's phone with the rest. A set of two with one raised leaves one
     sheet on the table, which is not a set: three or more.
 22. **README**, including that centring the part does not fix its size.
+    *Shipped v1.33.3, 2026-10-02; phase 3 complete.*
 
 ---
 
@@ -1264,6 +1266,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.25 (2026-10-02): Part A step 22 shipped in v1.33.3; phase 3 built, status line updated.
 - v1.2.24 (2026-10-02): Part A step 21 shipped in v1.33.2; criterion 25 met.
 - v1.2.23 (2026-10-02): Part A step 20 shipped in v1.33.1; criteria 24, 26 and 27 met.
 - v1.2.22 (2026-10-02): Part A step 19 shipped in v1.33.0.

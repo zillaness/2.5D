@@ -1250,14 +1250,14 @@ separate **Blueprint** fork, which owns the CAD-drawing-import direction.)*
 All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
 
 - **Calibration sheets, phases 2 and 3** — several sheets around a large
-  part, a sheet on a drawer's floor for the drawer scan, and parallax
-  correction for thick parts. Phase 1 (one sheet) shipped in v1.30.x and waits
-  on its real-photo checkpoint; phases 2 and 3 were signed off on 2026-10-02
-  and are being built: finding several sheets shipped in v1.32.0, the
-  joint fit in v1.32.1, rectification and segmentation for a set in v1.32.2,
-  the drawer scale from a sheet in v1.32.3; phase 3's camera position from
-  the focal length in v1.33.0, the correction in v1.33.1 and the raised
-  sheet in v1.33.2.
+  part, fitted together on one plane and rectified as one table; a sheet on
+  a drawer's floor for the drawer scan; and parallax for thick parts, the
+  camera placed from the photo's focal length or from a sheet raised on a
+  book, the part rectified at its own top plane. Shipped v1.32.0 to v1.33.2
+  (2026-10-02). All three phases wait on their real-photo checkpoints: a
+  real set printed and photographed, a real large part with four sheets, a
+  real drawer with a sheet on its floor, and what EXIF survives Sam's own
+  phone and browser.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0 and the sheet on the drawer floor in v1.32.3; see "Checking the
   scale with a calibration sheet" under the drawer scan.
@@ -1285,6 +1285,20 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
 - Photogrammetry — multi-photo full-3D reconstruction.
 
 ### Known gaps
+
+- Everything about the calibration sheets is measured on synthetic photos
+  until the real-photo checkpoints are done: a rendered paper edge has no
+  curl, shadow or pale desk, and a rendered code no printer dot gain.
+- A photo whose code is too blurred to read at all is treated as plain
+  paper; the frame lines alone are not fitted.
+- A set rectified at the drawer scan's 3200 px ceiling is traced to that
+  pixel: 0.35 mm on a 1.1 m table. The calibration itself is good to a
+  twentieth of that.
+- A thickness typed after the trace moves the trace to its plane but not the
+  rectified picture, which stays a percent or so out of scale with it until
+  Step 2 is re-rectified; the readout and the trace are right either way.
+- A set of two sheets with one of them raised leaves one sheet on the table,
+  which is not a set: three or more.
 
 - The grid and cutting-mat auto-count is validated against synthetic fixtures
   only; it has not been checked against real photographs of real graph paper.

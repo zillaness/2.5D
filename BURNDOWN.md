@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.33
+version: 1.34
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -873,7 +873,80 @@ real-photo checkpoint. Building in the PRD's suggested order.
     EXIF route.
   - ⚠ The typed height is held in `state.sheets.raisedH` for the photo and
     not saved in the project; a reload re-asks.
-- ▶ NEXT: Part A step 22, README.
+- ✅ Part A step 22, README. The calibration sheet section now carries the
+  camera's position, the correction, the raised sheet and what centring
+  does not do; the roadmap bullet says phases 2 and 3 shipped and what the
+  checkpoints are; Known gaps lists what the synthetic photos cannot show,
+  the unbuilt line-only fallback, the trace's pixel at the ceiling, the
+  picture left out of scale after a later thickness, and the two-sheet set.
+  The PRD's status line says every phase is built and every checkpoint
+  waits on Sam. 853 checks, all passing, no console errors; dist rebuilt
+  and smoke-tested — v1.33.3.
+- ▶ NEXT: nothing queued. The calibration PRD is built end to end; its three
+  checkpoints (steps 10, 17 and 21) and Part B.5's housekeeping wait on Sam.
+  See the handoff below.
+
+### Handoff to a fresh session, 2026-10-02 (third)
+
+**State.** Branch `claude/2.5d-photo-stl-s3-y0oodn`, v1.33.3, every unit
+of `docs/calibration_and_backlog_prd_v1.2.md` built and pushed: Part A
+phases 1, 2 and 3 (steps 1 to 22) and Part B items B.1 to B.4. Sam signed
+off phases 2 and 3 before phase 1's real-photo checkpoint; all three
+checkpoints are open, and everything about the sheet is synthetic until
+they are done.
+
+**What exists now, for orientation.** Phase 1 as in the second handoff.
+Phase 2: `detectPaperRegions` in `js/detectPaper.js` (seeds), `js/calibFind.js`
+(the finder, duplicates, cut sheets), `js/calibJoint.js` (the joint fit,
+`tableExtent`, `tableAxisAngle`, `describeJoint`), the set model in
+`js/segment.js` (`computeDiffMap` with `sheets`), `doRectifySet`,
+`sheetJointFit`, `sheetFindAll` and the drawer's `scanSheetCheck` in
+`js/main.js`. Phase 3: `js/parallax.js` (`cameraFromHomography`,
+`focalFromHeight`, `raisePoint`/`lowerPoint`, the readout) and
+`parallaxUpdate`, `parallaxRaisedCorners`, `parallaxRectified`,
+`parallaxRetarget`, `parallaxRegions`, `sheetRaisedHeight` in `js/main.js`.
+The renderer `test/sheetPhoto.js` has `renderTablePhoto` (sheets at any
+pose on one plane, raised sheets as layers, raised objects through the
+camera). Test hooks: `app.sheet.{findAll, all, joint, setActive}`,
+`app.parallax.{state, setFocal, focal, rect, retarget, regions, raised,
+raisedHeight}`, `app.scan.{sheetCheck, sheetApply, sheet}`.
+
+**Waiting on Sam, in order of what unblocks most:**
+1. **The checkpoints.** Print a set (Step 1, "Print calibration sheets",
+   Actual size), then: (a) phase 1, one sheet at 1:1 and one printed with
+   Fit to page, one under a lamp, each with a steel rule, through
+   `test/mark-photo.html` into `test/fixtures/real/`; (b) phase 2, a real
+   large part with four sheets around it, and a real drawer with a sheet on
+   its floor; (c) phase 3, a photo straight from the phone (no messaging
+   app, which strips EXIF) of a thick part on a sheet, and the same with one
+   sheet on a book of measured height. Things to look at first on real
+   photos: the frame found by `detectPaperCorners` rather than the paper;
+   the lens term the fits choose against the slider; whether the phone's
+   focal length survives the browser's file input (`app.parallax.focal`);
+   how far the EXIF camera and the raised-sheet camera agree.
+2. Repointing GitHub's default branch, so the two stale branches can be
+   deleted (blocked in sessions).
+3. The go-ahead to deploy: gh-pages still serves v1.25.0.
+4. Part B.5's housekeeping, which this PRD left outside the build.
+
+**Known gaps recorded this session, none blocking:** the second handoff's
+list, plus: the line-only fallback is still not built; a cut sheet's
+off-photo corners come from its single fit until the joint fit places
+them; a set at the 3200 px ceiling is traced to that pixel (0.35 mm on a
+1.1 m table); a thickness typed after the trace moves the trace, not the
+picture; a set of two with one raised is not a set; the raised sheet's
+height is not saved in the project; the lens slider is not an override in
+set mode; `loadImageFromURL` cleared no stale focal length before v1.33.1.
+
+**Conventions kept, plus three new ones:**
+- A scratch runner races every `loadImageFromURL` against a timeout: a
+  throw inside the load's callback chain otherwise hangs the run silently.
+- Measure a traced part laid along the pixel grid, by its axis box; an
+  oriented box over a tilted staircase reads a pixel large.
+- Chain a background suite with `( ... ) &` on its own line: `a && b & c`
+  backgrounds the whole list, and this session once committed and pushed
+  from the background without meaning to (it went fine).
+- The rest as before.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1234,6 +1307,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.34 (2026-10-02): Part A step 22 shipped as v1.33.3; the calibration PRD built end to end; third handoff written.
 - v1.33 (2026-10-02): Part A step 21 shipped as v1.33.2.
 - v1.32 (2026-10-02): Part A step 20 shipped as v1.33.1.
 - v1.31 (2026-10-02): Part A step 19 shipped as v1.33.0.
