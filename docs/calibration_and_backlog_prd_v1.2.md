@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.10
+version: 1.2.11
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -823,7 +823,12 @@ checkpoint that needs a person.
    whenever a sheet is read with its edges visible, keyed by job and sheet
    under `2p5d.calibchecks.v1`, rather than as a separate ceremony; a later
    photo that disagrees replaces the record and says so.*
-9. **Photo-quality guidance.** Criterion 11.
+9. **Photo-quality guidance.** Criterion 11. *Shipped v1.30.6, 2026-10-02:
+   `photoGuidance` in `js/calibVerdict.js`, three signals, one instruction
+   each, under the sheet panel. A code track too blurred to read at all gets
+   no sheet and so no guidance: the line-only fallback of step 6 is not
+   built, because four frame lines cannot name the layout without a camera
+   assumption; see BURNDOWN.*
 10. **Segmentation and integration.** The frame-relative mask, the window-edge
     warning, recognition on every load including the queue, the checkbox, an
     additive `sheet` block in projects. Tests: criterion 18; an object traced
@@ -1135,6 +1140,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.11 (2026-10-02): Part A step 9 shipped in v1.30.6.
 - v1.2.10 (2026-10-02): Part A step 8 shipped in v1.30.5.
 - v1.2.9 (2026-10-02): Part A step 7 shipped in v1.30.4.
 - v1.2.8 (2026-10-02): Part A steps 5 and 6 shipped in v1.30.2 and v1.30.3.

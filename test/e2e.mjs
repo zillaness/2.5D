@@ -15735,6 +15735,71 @@ const verdictTest = await page.evaluate(async () => {
     r.traced ? `96 percent: ${r.traced.w.toFixed(3)} × ${r.traced.h.toFixed(3)} mm; 1:1: ${r.traced100 ? `${r.traced100.w.toFixed(3)} × ${r.traced100.h.toFixed(3)}` : '?'} mm; rectified at ${r.traced.rectPxPerMm && r.traced.rectPxPerMm.toFixed(2)} px/mm from a ${r.traced.pxPerMm.toFixed(1)} px/mm photo; corners ${r.traced.cornerErr.toFixed(2)} px` : 'no trace');
 }
 
+// ---------- Calibration sheet: photo-quality guidance (Part A step 9 of calibration_and_backlog_prd_v1.2) ----------
+//
+// Criterion 11: a sheet under 4 px/mm, a blurred or glared code track, and a
+// fit figure over 0.2 mm each produce a specific instruction, on a synthetic
+// render of each, through the app's own load path.
+
+console.log('\nCalibration sheet: photo-quality guidance');
+
+const guidanceTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderSheetPhoto } = await import('./test/sheetPhoto.js');
+  const { photoGuidance } = await import('./js/calibVerdict.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens } };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  app.syncRefControls();
+  const sel = $('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  const load = async r => {
+    await new Promise(res => app.loadImageFromURL(r.canvas.toDataURL('image/png'), res));
+    await wait(50);
+    const s = st.sheet;
+    return s ? { pxPerMm: s.pxPerMm, share: s.cleanShare, fit: s.fit.rmsMm, words: s.words,
+      guidance: s.guidance.map(g => g.signal), lines: Array.from($('sheetPanel').querySelectorAll('.sheet-guidance')).map(e => e.textContent) } : null;
+  };
+  const base = { paper: 'letter', sheet: 2, count: 4, job: 0x7f, W: 2400, H: 1800, pose: { height: 330, tilt: 6, axis: 20, spin: 3 } };
+  const out = {};
+  out.good = await load(await renderSheetPhoto(base));
+  out.small = await load(await renderSheetPhoto({ ...base, pose: { height: 520, tilt: 6, axis: 20, spin: 3 } }));
+  // Blurred enough to lose words, not so blurred that none read: a photo
+  // whose code cannot be read at all gets no sheet (the line-only fallback
+  // is not built), and so no guidance either.
+  out.blurred = await load(await renderSheetPhoto({ ...base, blur: 2.8, noise: 10 }));
+  out.bent = await load(await renderSheetPhoto({ ...base, bend: 3 }));
+  out.pure = {
+    none: photoGuidance({ pxPerMm: 6, cleanShare: 0.95, fitMm: 0.05 }).length,
+    all: photoGuidance({ pxPerMm: 3, cleanShare: 0.5, fitMm: 0.4 }).map(g => g.signal),
+    unknown: photoGuidance({ pxPerMm: null, cleanShare: null, fitMm: null }).length,
+  };
+  app.sheet.clearChecks();
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens;
+  app.syncRefControls();
+  return out;
+});
+{
+  const r = guidanceTest;
+  const d = x => x ? `${x.pxPerMm.toFixed(1)} px/mm, ${Math.round(x.share * 100)} percent of words, fit ${x.fit.toFixed(3)} mm -> [${x.guidance.join(', ')}]` : 'no sheet';
+  check('a good photo gets no instruction',
+    r.good && r.good.guidance.length === 0 && r.good.lines.length === 0, d(r.good));
+  check('a sheet under 4 px/mm says to move closer or use the 2x lens (criterion 11)',
+    r.small && r.small.pxPerMm < 4 && r.small.guidance.length === 1 && r.small.guidance[0] === 'resolution' && /Move closer, or use the 2× lens/.test(r.small.lines[0]),
+    `${d(r.small)}; "${r.small && r.small.lines[0]}"`);
+  check('a blurred code track says to hold still, focus, or move the light (criterion 11)',
+    r.blurred && r.blurred.share < 0.8 && r.blurred.guidance.includes('code') && r.blurred.lines.some(l => /Hold still, tap to focus, or move the light/.test(l)),
+    `${d(r.blurred)}; "${r.blurred && r.blurred.lines.join(' | ')}"`);
+  check('a fit figure over 0.2 mm says to flatten the sheet (criterion 11)',
+    r.bent && r.bent.fit > 0.2 && r.bent.guidance.includes('fit') && r.bent.lines.some(l => /Tape the corners down or use cardstock/.test(l)),
+    `${d(r.bent)}; "${r.bent && r.bent.lines.join(' | ')}"`);
+  check('the guidance is one instruction per signal past its threshold, and silent on what it cannot measure',
+    r.pure.none === 0 && r.pure.all.join() === 'resolution,code,fit' && r.pure.unknown === 0, JSON.stringify(r.pure));
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

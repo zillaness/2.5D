@@ -519,8 +519,29 @@ real-photo checkpoint. Building in the PRD's suggested order.
     sheets, after it 79.98 on both. The sheet owes equality with 1:1, which
     it delivers exactly; absolute accuracy under 0.1 mm needs the cap raised,
     which the drawer scan already does for its own path.
-- ▶ NEXT: Part A step 9, photo-quality guidance; then 10 to 13; B.3 at any
-  point.
+- ✅ Part A step 9, photo-quality guidance: `photoGuidance` in
+  `js/calibVerdict.js`, pure, three signals from what recognition already
+  measures (pixels per millimetre on the sheet from the fitted corners, the
+  share of code words read on the sides that were found, the fit figure),
+  one specific instruction each past its threshold, shown under the sheet
+  panel. Through the load path: a good photo says nothing; a sheet at 3.5
+  px/mm says move closer or use the 2x lens; blur 2.8 px with noise reads 16
+  of 28 words and says hold still, tap to focus or move the light; a 3 mm
+  bend gives a 0.40 mm fit and says tape the corners down or use cardstock.
+  793 checks, all passing, no console errors; dist rebuilt and
+  smoke-tested — v1.30.6.
+  - ⚠ **The line-only fallback is not built.** A code track too blurred to
+    read at all (3.2 px of blur at 5.5 px/mm) yields no words, recognition
+    returns `lineOnly`, and Step 1 treats the photo as plain paper: no
+    verdict, no guidance. The PRD's fallback names the layout by the frame's
+    aspect ratio, but four frame lines alone fix a homography for any aspect;
+    naming Letter (0.753) against A4 (0.684) needs the camera assumption
+    `js/paperAspect.js` already makes, sharp with EXIF and ambiguous when
+    tilted without it. Worth building on that module in step 10 or later; the
+    blur that defeats the code is well past where the guidance fires.
+- ▶ NEXT: Part A step 10, segmentation and integration (the window mask,
+  the window-edge warning, the project's sheet block, criterion 18); then
+  11 to 13; B.3 at any point.
 
 ### Handoff to a fresh session, 2026-10-02
 

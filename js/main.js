@@ -14,7 +14,7 @@ import { scanParts, SCAN_DEFAULTS, fitCircle, findCoinCandidate, coinScaleCheck,
 import { sheetSetSVG, printPageHTML, drawJob, jobHex, paperLabel as calibPaperLabel, LAYOUT_VERSION as CALIB_LAYOUT } from './calibSheet.js';
 import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
-import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel } from './calibVerdict.js';
+import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance } from './calibVerdict.js';
 import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
@@ -624,11 +624,24 @@ function sheetRecognise() {
   const corners = [0, 1, 2, 3].map(i => photoCorners[(i + r) % 4]);
   if (!corners.every(c => Number.isFinite(c.x) && Number.isFinite(c.y))) { sheetSyncPanel(); return null; }
 
+  // What makes this photo good or bad, said before anyone traces: pixels
+  // per millimetre on the sheet, the share of code words read on the sides
+  // that were found, and the fit figure.
+  const paperMm = currentPaper();
+  const sideLen = (a, b) => Math.hypot(corners[a].x - corners[b].x, corners[a].y - corners[b].y);
+  const pxPerMm = (sideLen(0, 1) / paperMm.w + sideLen(1, 2) / paperMm.h + sideLen(2, 3) / paperMm.w + sideLen(3, 0) / paperMm.h) / 4;
+  let expectedWords = 0;
+  for (const l of rec.lines || []) {
+    const sd = fit.geom.sides.find(s2 => s2.side === l.side);
+    if (sd) expectedWords += sd.words;
+  }
+  const cleanShare = expectedWords ? rec.words.length / expectedWords : null;
+  const guidance = photoGuidance({ pxPerMm, cleanShare, fitMm: fit.fit.rmsMm });
   state.sheet = {
     identity: rec.identity, rotation: r, verdict, rect, note,
     fit: { ...fit.fit, k1: fit.k1 }, words: rec.words.length, wordsRead: rec.wordsRead,
     designToPhoto: fit.designToPhoto, photoToDesign: fit.photoToDesign, geom: fit.geom,
-    corners,
+    corners, pxPerMm, cleanShare, guidance,
   };
   if (verdict.overridePicker && verdict.overridePicker !== state.paper.size) {
     state.paper.size = verdict.overridePicker;
@@ -681,6 +694,13 @@ function sheetSyncPanel() {
   });
   lab.append(box, document.createTextNode(' Use the sheet fit'));
   el.append(text, lab);
+  for (const g of (s && s.guidance) || []) {
+    const p = document.createElement('div');
+    p.className = 'warn sheet-guidance';
+    p.style.margin = '4px 0 0';
+    p.textContent = g.text;
+    el.appendChild(p);
+  }
   el.hidden = false;
 }
 

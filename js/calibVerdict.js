@@ -188,6 +188,32 @@ export function sheetVerdict({ identity, rect, picker, record }, opts = {}) {
   };
 }
 
+// Photo-quality guidance (plan step 9, criterion 11). Recognition already
+// measures what makes a photo good or bad, so the panel says it before
+// anyone traces. Each signal past its threshold is one specific instruction.
+export const GUIDANCE_THRESHOLDS = Object.freeze({
+  minPxPerMm: 4,        // six pixels per 1.5 mm cell
+  minCleanShare: 0.8,   // of the code words on the sides that were found
+  maxFitMm: 0.2,
+});
+
+export function photoGuidance({ pxPerMm, cleanShare, fitMm }, thresholds = GUIDANCE_THRESHOLDS) {
+  const out = [];
+  if (Number.isFinite(pxPerMm) && pxPerMm < thresholds.minPxPerMm) {
+    out.push({ signal: 'resolution', value: pxPerMm,
+      text: `The sheet is small in the photo (${pxPerMm.toFixed(1)} px/mm). Move closer, or use the 2× lens.` });
+  }
+  if (Number.isFinite(cleanShare) && cleanShare < thresholds.minCleanShare) {
+    out.push({ signal: 'code', value: cleanShare,
+      text: `The code is blurred or glared (${Math.round(cleanShare * 100)} percent of its words read). Hold still, tap to focus, or move the light.` });
+  }
+  if (Number.isFinite(fitMm) && fitMm > thresholds.maxFitMm) {
+    out.push({ signal: 'fit', value: fitMm,
+      text: `The sheet may not be flat (fit ${fitMm.toFixed(2)} mm). Tape the corners down or use cardstock.` });
+  }
+  return out;
+}
+
 export function jobHex(job) {
   return (Number(job) & 0xff).toString(16).toUpperCase().padStart(2, '0');
 }
