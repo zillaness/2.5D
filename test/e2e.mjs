@@ -15370,6 +15370,108 @@ const sheetRender = await page.evaluate(async () => {
     `lens: ${r.lens.distortedAt.toFixed(0)} at the bowed position, ${r.lens.undistortedAt.toFixed(0)} at the straight one; edge slope ${r.blur.sharpSlope.toFixed(0)} -> ${r.blur.blurSlope.toFixed(0)}; paper sd ${r.noise.clean.toFixed(1)} -> ${r.noise.noisy.toFixed(1)}`);
 }
 
+// ---------- Calibration sheet: recognition (Part A step 6 of calibration_and_backlog_prd_v1.2) ----------
+//
+// From rough corners to the sheet's identity, its frame lines and every
+// clock cell as a design-to-photo correspondence (js/calibDetect.js). The
+// photos come from the renderer above, so each case says exactly what was
+// in the frame.
+
+console.log('\nCalibration sheet: recognition');
+
+const recog = await page.evaluate(async () => {
+  const { renderSheetPhoto, stockDims } = await import('./test/sheetPhoto.js');
+  const { recogniseSheet } = await import('./js/calibDetect.js');
+  const { computeHomography, applyHomography } = await import('./js/homography.js');
+  const paper = stockDims('letter');
+  // Rough corners: the truth, or the truth pushed off by `offMm` in a
+  // different direction at each corner.
+  const rough = (truth, offMm = 0) => {
+    const Hp = truth.Hp;
+    const dirs = [[1, 1], [-1, 1], [-1, -1], [1, -1]];
+    return truth.corners.map((c, i) => {
+      if (!offMm) return { x: c.x, y: c.y };
+      const mm = [[0, 0], [paper.w, 0], [paper.w, paper.h], [0, paper.h]][i];
+      const q = applyHomography(Hp, mm[0] + dirs[i][0] * offMm, mm[1] + dirs[i][1] * offMm);
+      return { x: q.x - 0.5, y: q.y - 0.5 };
+    });
+  };
+  // How far the recognised points sit from the truth: each clock cell's
+  // design centre through the truth mapping against the photo point read.
+  const pointError = (res, truth) => {
+    if (!res.ok || !res.points.length) return null;
+    let sum = 0, max = 0;
+    for (const p of res.points) {
+      const q = truth.designToPhoto(p.design);
+      const d = Math.hypot(q.x - 0.5 - p.raw.x, q.y - 0.5 - p.raw.y);
+      sum += d * d; max = Math.max(max, d);
+    }
+    return { rms: Math.sqrt(sum / res.points.length), max, n: res.points.length };
+  };
+  const base = { paper: 'letter', sheet: 2, count: 4, job: 0x7f, W: 2400, H: 1800, pose: { height: 330, tilt: 8, axis: 30, spin: 4 } };
+  const run = async (name, opts, roughOff = 0, detectOpts = {}, reorder = null) => {
+    const r = await renderSheetPhoto({ ...base, ...opts });
+    const t0 = performance.now();
+    let rc = rough(r.truth, roughOff);
+    // As a detector or a person would hand them over: by position in the
+    // photo, not by the sheet's own top-left.
+    if (reorder) rc = reorder.map(i => rc[i]);
+    const res = recogniseSheet(r.canvas, rc, paper, detectOpts);
+    const ms = performance.now() - t0;
+    return { name, ms, ok: res.ok, reason: res.reason, identity: res.identity, rotation: res.rotation,
+      words: res.ok ? res.words.length : 0, wordsRead: res.wordsRead, lines: res.ok ? res.lines.map(l => `${l.side}:${l.inliers}`) : [],
+      sides: res.sides, err: pointError(res, r.truth), pxPerMm: r.truth.pxPerMm, points: res.ok ? res.points.length : 0,
+      runs: res.sides ? res.sides.map(s => `${s.side}:${s.longestRunMm.toFixed(0)}`).join(' ') : '' };
+  };
+  const out = {};
+  out.clean = await run('1:1', {});
+  out.blur = await run('blur and noise', { blur: 1.5, noise: 8 });
+  out.lensKnown = await run('lens known', { k1: 0.1 }, 0, { k1: 0.1 });
+  out.lensUnknown = await run('lens unknown', { k1: 0.1 });
+  out.off5 = await run('corners 5 mm off', {}, 5);
+  out.covered = await run('left side covered', { objects: [{ x: 4, y: -5, w: 20, h: 290, color: '#2a2622' }] });
+  out.clipped = await run('bottom clipped', { bottomMargin: 20 });
+  // 40 percent out of frame: the camera looks at the sheet's top-left; the
+  // bottom-right is off the photo.
+  out.partial = await run('40 percent out of frame', { pose: { height: 280, ppx: 2400 * 0.78, ppy: 1800 * 0.8 } });
+  out.scaled = await run('96 percent print', { scale: 0.96 });
+  out.upsideDown = await run('sheet upside down', { pose: { height: 330, spin: 180 } }, 0, {}, [2, 3, 0, 1]);
+  // No sheet: a plain Letter sheet drawn without ink, through the same camera.
+  {
+    const r = await renderSheetPhoto({ ...base, scale: 0.0001 });
+    const res = recogniseSheet(r.canvas, rough(r.truth), paper);
+    out.plain = { ok: res.ok, reason: res.reason };
+  }
+  return out;
+});
+{
+  const r = recog;
+  const id = x => x.ok && x.identity && x.identity.paper === 'letter' && x.identity.sheet === 2 && x.identity.job === 0x7f && x.identity.version === 1;
+  const line = x => `${x.name}: ${x.ok ? `${x.words} words (${x.wordsRead} read), lines ${x.lines.join(' ')}, points ${x.points}, rms ${x.err ? x.err.rms.toFixed(2) : '?'} px max ${x.err ? x.err.max.toFixed(2) : '?'}` : `FAILED ${x.reason}`}; runs ${x.runs} at ${x.pxPerMm.toFixed(1)} px/mm in ${x.ms.toFixed(0)} ms`;
+  for (const k of Object.keys(r)) if (r[k].name) console.log('  ' + line(r[k]));
+  check('a 1:1 sheet at 1:1 is recognised: layout 1, Letter, sheet 2, job 7F, all 28 words, four frame lines, 224 clock points within half a pixel RMS',
+    id(r.clean) && r.clean.words === 28 && r.clean.lines.length === 4 && r.clean.points === 224 && r.clean.err.rms < 0.5 && r.clean.rotation === 0, line(r.clean));
+  check('blurred and noisy, it is still identified with most words and the points within a pixel',
+    id(r.blur) && r.blur.words >= 20 && r.blur.err.rms < 1, line(r.blur));
+  check('under a lens the photo reads with the coefficient known, and is still identified with it unknown',
+    id(r.lensKnown) && r.lensKnown.words >= 24 && r.lensKnown.err.rms < 0.6 && id(r.lensUnknown) && r.lensUnknown.words >= 16,
+    `${line(r.lensKnown)} | ${line(r.lensUnknown)}`);
+  check('rough corners 5 mm off still yield the identity and the same points',
+    id(r.off5) && r.off5.words >= 24 && r.off5.err.rms < 0.6, line(r.off5));
+  check('one frame side covered: the other three are read and the identity stands',
+    id(r.covered) && r.covered.lines.length === 3 && !r.covered.lines.some(l => /^left/.test(l)) && r.covered.words >= 18, line(r.covered));
+  check('the bottom side lost to a printer margin reads the same way',
+    id(r.clipped) && r.clipped.lines.length === 3 && !r.clipped.lines.some(l => /^bottom/.test(l)) && r.clipped.words >= 18, line(r.clipped));
+  check('40 percent of the sheet out of frame: identified from two sides that are not parallel',
+    id(r.partial) && r.partial.lines.length >= 2 && r.partial.words >= 6, line(r.partial));
+  check('a 96 percent print is recognised and its points land where the scaled ink is',
+    id(r.scaled) && r.scaled.words >= 24 && r.scaled.err.rms < 0.6, line(r.scaled));
+  check('a sheet photographed upside down reads with its rotation known',
+    id(r.upsideDown) && r.upsideDown.rotation === 2 && r.upsideDown.words >= 24, line(r.upsideDown));
+  check('a plain sheet finds no frame and says so',
+    !r.plain.ok && /no frame/.test(r.plain.reason), r.plain.reason);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

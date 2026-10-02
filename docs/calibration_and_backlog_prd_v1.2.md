@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.7
+version: 1.2.8
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -802,10 +802,14 @@ checkpoint that needs a person.
    iframe rather than a popup, so it works where popups are blocked; the
    record is per browser under `2p5d.calibprints.v1`.*
 5. **SVG-rendered synthetic photos.** The renderer the remaining steps test
-   against.
+   against. *Shipped v1.30.2, 2026-10-02: `test/sheetPhoto.js`.*
 6. **Recognition.** Profiles, dips, line fits, code reading, the line-only
    fallback. Tests: 1:1, blur, radial distortion, corners 5 mm off, one side
-   covered, the bottom side clipped, 40 percent out of frame.
+   covered, the bottom side clipped, 40 percent out of frame. *Shipped
+   v1.30.3, 2026-10-02: `js/calibDetect.js`, two passes, frame profiles every
+   millimetre then the track every quarter millimetre behind the interpolated
+   dip; a side counts as a frame line only with an unbroken 15 mm run of dips,
+   which is what keeps the ruler's digits from passing for one.*
 7. **The fit.** Least-squares homography with normalisation, lens, the fit
    figure. Tests: criteria 6, 7 and 8.
 8. **The double check, the verdict, the print check.** The five-parameter
@@ -1124,6 +1128,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.8 (2026-10-02): Part A steps 5 and 6 shipped in v1.30.2 and v1.30.3.
 - v1.2.7 (2026-10-02): Part A step 4 shipped in v1.30.1.
 - v1.2.6 (2026-10-02): Part A step 3 shipped in v1.30.0; layout v1 frozen.
 - v1.2.5 (2026-10-02): B.4 shipped in v1.29.3.

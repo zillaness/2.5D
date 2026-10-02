@@ -419,8 +419,38 @@ real-photo checkpoint. Building in the PRD's suggested order.
   percent from the corner with offset and skew, a swallowed bottom side, the
   lens, blur and noise. 760 checks, all passing, no console errors;
   dist rebuilt and smoke-tested — v1.30.2.
-- ▶ NEXT: Part A step 6, recognition (`js/calibDetect.js`, drafted); then 7
-  to 13; B.3 at any point.
+- ✅ Part A step 6, recognition: `js/calibDetect.js`, `recogniseSheet(image,
+  roughCorners, paperMm, {k1})`. Pass 1 walks a profile every millimetre
+  along each rough side from 8 mm outside the paper edge to 40 mm inside,
+  finds the paper edge as the first bright step and the frame as the first
+  dark dip of frame width; a side is a frame line only if its dips form an
+  unbroken run of 15 mm. Pass 2 samples the clock row and the two data rows
+  every quarter millimetre behind the dip centre interpolated between
+  profiles, placed by the dip's own width (2 mm of ink at the local print
+  scale), so a bowed or scaled frame still has its track found. Black clock
+  runs give the cell pitch and the word boundaries; data cells are read at
+  the positions the clock implies, both directions, and only words passing
+  the CRC and agreeing on identity and rotation survive. Output: identity,
+  rotation, every clock cell as a design-to-photo point, every frame dip as a
+  point on a design line, the paper-edge points. On the renderer at 5.5 px/mm:
+  all 28 words and 224 points at 0.18 px RMS for 1:1, blur and noise, a lens
+  known or unknown, corners 5 mm off, a 96 percent print and a sheet upside
+  down (rotation 2); 20 words with the left side covered, 22 with the bottom
+  swallowed, 9 with 40 percent out of frame; a plain sheet says "no frame".
+  120 to 330 ms on a 4 MP photo. 770 checks, all passing, no console
+  errors; dist rebuilt and smoke-tested — v1.30.3.
+  - ⚠ **The ruler's digits can pass for a frame line.** They are 2.2 mm tall,
+    all one height, within 40 mm of the bottom edge, and a profile through a
+    "1" is a frame-width dip; with the bottom frame swallowed by a printer
+    margin the first draft fitted a clean line through them and handed step 7
+    a bogus side. A frame line is continuous and glyphs are dots, so the 15 mm
+    run gate was added; a layout v2 should still keep digits out of that band.
+  - ⚠ The first two-pass draft lost words at every chunk boundary: a track
+    sample just past a chunk's last profile fell outside that chunk's region.
+    Every bracketing region is now tried. Worth remembering for anything else
+    that reads a photo in chunks.
+- ▶ NEXT: Part A step 7, the fit (`js/calibFit.js`); then 8 to 13; B.3 at any
+  point.
 
 ### Handoff to a fresh session, 2026-10-02
 
