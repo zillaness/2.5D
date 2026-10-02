@@ -167,7 +167,12 @@ function partFromMask(part, pxPerMm, o) {
     }
   }
 
-  return { outer, holes, area: outerRaw.area, bbox: bboxOfPts(outer) };
+  // A circle through the RAW boundary, before refinement, for the coin check.
+  // Simplify then Chaikin keeps a rectangle's box but cuts inside a convex
+  // curve: a 24 mm disc comes out of refine about 0.3 mm under, and a scale
+  // check cannot carry that bias. Cheap enough to do for every part.
+  const disc = fitCircle(outerRaw.pts);
+  return { outer, holes, area: outerRaw.area, bbox: bboxOfPts(outer), disc };
 }
 
 // Reading order: down the drawer in bands, left to right within each band.
@@ -213,4 +218,127 @@ export function scanParts(masks, pxPerMm, opts = {}) {
     if (part) parts.push(part);
   }
   return readingOrder(parts).map((p, i) => ({ ...p, name: `Tool ${i + 1}` }));
+}
+
+// ---------- the coin check (calibration_and_backlog_prd_v1.2, Part B.1) ----------
+//
+// A drawer scan takes its scale from the drawer's corners and the typed width
+// and depth. Corners marked at the rim, where they are easiest to see, put the
+// scale on a plane one drawer-depth nearer the camera than the tools, so every
+// tool reads small by (H - d) / H: 7.5 percent for a 60 mm drawer from 800 mm.
+// A coin on the floor is on the tools' plane by definition, so its measured
+// diameter against its true one IS that factor. Nothing here reads state and
+// nothing moves until the person asks for the rescale.
+
+// Least-squares circle through outline points (Kasa's algebraic fit): the
+// (cx, cy, r) minimising the residual of x² + y² + a x + b y + c. Returns
+// { cx, cy, r, rms } or null for fewer than three points or a degenerate set.
+export function fitCircle(pts) {
+  if (!Array.isArray(pts) || pts.length < 3) return null;
+  // Centred coordinates keep the normal equations well conditioned.
+  let mx = 0, my = 0;
+  for (const p of pts) { mx += p.x; my += p.y; }
+  mx /= pts.length; my /= pts.length;
+  let sxx = 0, sxy = 0, syy = 0, sxz = 0, syz = 0, sz = 0, sx = 0, sy = 0;
+  for (const p of pts) {
+    const x = p.x - mx, y = p.y - my, z = x * x + y * y;
+    sxx += x * x; sxy += x * y; syy += y * y; sxz += x * z; syz += y * z; sz += z; sx += x; sy += y;
+  }
+  const n = pts.length;
+  // Solve [sxx sxy sx; sxy syy sy; sx sy n] [a b c]' = -[sxz syz sz]'.
+  const M = [[sxx, sxy, sx], [sxy, syy, sy], [sx, sy, n]];
+  const v = [-sxz, -syz, -sz];
+  const sol = solve3(M, v);
+  if (!sol) return null;
+  const [a, b, c] = sol;
+  const cx = -a / 2, cy = -b / 2;
+  const r2 = cx * cx + cy * cy - c;
+  if (!(r2 > 0)) return null;
+  const r = Math.sqrt(r2);
+  let ss = 0;
+  for (const p of pts) { const d = Math.hypot(p.x - mx - cx, p.y - my - cy) - r; ss += d * d; }
+  return { cx: cx + mx, cy: cy + my, r, rms: Math.sqrt(ss / n) };
+}
+
+function solve3(M, v) {
+  const A = M.map((row, i) => [...row, v[i]]);
+  for (let col = 0; col < 3; col++) {
+    let piv = col;
+    for (let r = col + 1; r < 3; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+    if (Math.abs(A[piv][col]) < 1e-12) return null;
+    [A[col], A[piv]] = [A[piv], A[col]];
+    for (let r = 0; r < 3; r++) {
+      if (r === col) continue;
+      const f = A[r][col] / A[col][col];
+      for (let k = col; k < 4; k++) A[r][k] -= f * A[col][k];
+    }
+  }
+  return [A[0][3] / A[0][0], A[1][3] / A[1][1], A[2][3] / A[2][2]];
+}
+
+// The candidate that is a coin: round, and about the coin's size. A rim-
+// cornered drawer shrinks the coin along with the tools, so the size window
+// is wide (a quarter either way covers a drawer 200 mm deep from 800 mm), and
+// roundness decides between two candidates in it. Returns { index, circle }
+// or null when nothing in the drawer looks like the coin.
+export function findCoinCandidate(parts, nominalD, opts = {}) {
+  const o = { sizeTol: 0.25, maxRmsFrac: 0.06, minFill: 0.7, ...opts };
+  if (!Array.isArray(parts) || !(nominalD > 0)) return null;
+  let best = null;
+  parts.forEach((part, index) => {
+    if (!part || !part.outer || part.outer.length < 8 || !part.bbox) return;
+    const bb = part.bbox;
+    const D = (bb.w + bb.h) / 2;
+    if (Math.abs(D - nominalD) > o.sizeTol * nominalD) return;
+    if (Math.abs(bb.w - bb.h) > 0.15 * D) return;
+    // How much of the circle's disc the outline fills, and how far its
+    // vertices sit from the fitted circle: a square bolt head passes the box
+    // test and fails both of these. The raw-boundary fit when the part has
+    // one (see partFromMask); the refined outline otherwise.
+    const circle = part.disc || fitCircle(part.outer);
+    if (!circle || !(circle.r > 0)) return;
+    const fill = part.area / (Math.PI * circle.r * circle.r);
+    if (fill < o.minFill || fill > 1.15) return;
+    const rmsFrac = circle.rms / circle.r;
+    if (rmsFrac > o.maxRmsFrac) return;
+    const score = rmsFrac + Math.abs(1 - fill);
+    if (!best || score < best.score) best = { index, circle, score };
+  });
+  return best ? { index: best.index, circle: best.circle } : null;
+}
+
+// The verdict. factor is what every scanned outline must be multiplied by for
+// the coin to measure true; percent is how far the tools are reading from
+// true, negative when small. warn is set past warnPercent either way.
+export function coinScaleCheck(measuredD, nominalD, warnPercent = 2) {
+  if (!(measuredD > 0) || !(nominalD > 0)) return null;
+  const factor = nominalD / measuredD;
+  const percent = (measuredD / nominalD - 1) * 100;
+  return {
+    measuredMm: measuredD, nominalMm: nominalD, factor, percent,
+    warn: Math.abs(percent) > warnPercent,
+  };
+}
+
+// Every part scaled by factor about a centre, fresh arrays throughout, with
+// bbox and area recomputed. The centre is the drawer's own: the rim-versus-
+// floor magnification is radial from the camera's foot, which is the drawer's
+// centre when it was shot from above the middle, so sizes AND positions scale
+// about it and a tool near a wall comes back to the wall.
+export function rescaleParts(parts, factor, centre) {
+  const k = Number(factor);
+  if (!Array.isArray(parts) || !(k > 0)) return parts;
+  const c = centre || { x: 0, y: 0 };
+  const sc = pts => pts.map(p => ({ x: c.x + (p.x - c.x) * k, y: c.y + (p.y - c.y) * k }));
+  return parts.map(part => {
+    const outer = sc(part.outer);
+    const disc = part.disc ? {
+      cx: c.x + (part.disc.cx - c.x) * k, cy: c.y + (part.disc.cy - c.y) * k,
+      r: part.disc.r * k, rms: part.disc.rms * k,
+    } : part.disc;
+    return {
+      ...part, outer, holes: (part.holes || []).map(sc),
+      area: part.area * k * k, bbox: bboxOfPts(outer), disc,
+    };
+  });
 }

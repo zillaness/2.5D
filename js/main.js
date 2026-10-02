@@ -10,7 +10,7 @@ import { refineCorners } from './edgeFit.js';
 import { checkPaperAspect } from './paperAspect.js';
 import { readFocalLength, focalPixels } from './exif.js';
 import { computeDiffMap, otsuThreshold, segmentObject, segmentObjects } from './segment.js';
-import { scanParts, SCAN_DEFAULTS } from './scan.js';
+import { scanParts, SCAN_DEFAULTS, fitCircle, findCoinCandidate, coinScaleCheck, rescaleParts } from './scan.js';
 import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
@@ -79,7 +79,7 @@ const state = {
   // a project written before it loads with the flag off and behaves exactly as
   // it did. `on` is the capture mode; `active` means a review is in progress
   // and is what stops goStep(2) retracing over it.
-  scan: { on: false, active: false, parts: [] },
+  scan: { on: false, active: false, parts: [], coin: null, rescale: null },
   labels: [],     // emboss/deboss text on a face
   coin: { size: DEFAULT_COIN, customD: 24.26 },
   lens: { k1: 0, k2: 0 }, // radial lens-distortion correction (rectangle path)
@@ -205,6 +205,9 @@ const traceEditor = new TraceEditor($('traceCanvas'), {
     positionHoleTag();
   },
   onScanPick: mm => scanPickAt(mm),
+  onScanPress: (mm, sp) => scanCoinPress(mm, sp),
+  onScanDrag: mm => scanCoinDrag(mm),
+  onScanDragEnd: () => scanCoinDragEnd(),
   onHolePlaced: () => {
     syncHolePanel();
     positionHoleTag();
@@ -4069,6 +4072,7 @@ function scanDrawOverlay(ctx, vp) {
     ctx.strokeText(part.name, a.x, a.y - 3);
     ctx.fillText(part.name, a.x, a.y - 3);
   }
+  scanCoinDrawOverlay(ctx, vp, toS);
   ctx.restore();
 }
 
@@ -4081,6 +4085,10 @@ function scanPickAt(mm) {
     .sort((a, b) => parts[a].area - parts[b].area);
   for (const i of order) {
     if (pointInPolygon(mm, parts[i].outer)) {
+      if (parts[i].isCoin) {
+        toast('That is the coin. It checks the scale and is not placed.');
+        return;
+      }
       state.scan.sel = i;
       parts[i].picked = parts[i].picked === false;
       scanSyncPanel();
@@ -4107,8 +4115,9 @@ function scanSyncPanel() {
       (i === state.scan.sel ? 'background:var(--bg2)' : '');
     const box = document.createElement('input');
     box.type = 'checkbox';
-    box.checked = part.picked !== false;
-    box.title = 'Place this tool in the drawer';
+    box.checked = part.picked !== false && !part.isCoin;
+    box.disabled = !!part.isCoin;
+    box.title = part.isCoin ? 'The coin checks the scale and is not placed' : 'Place this tool in the drawer';
     box.addEventListener('change', () => {
       part.picked = box.checked;
       scanSyncPanel();
@@ -4130,7 +4139,9 @@ function scanSyncPanel() {
     const area = document.createElement('span');
     area.className = 'hint';
     area.style.cssText = 'margin:0; font-size:11px; white-space:nowrap';
-    area.textContent = `${Math.round(part.bbox.w)} × ${Math.round(part.bbox.h)} mm`;
+    area.textContent = part.isCoin
+      ? `coin, ⌀ ${fmtDim((part.bbox.w + part.bbox.h) / 2)} mm`
+      : `${Math.round(part.bbox.w)} × ${Math.round(part.bbox.h)} mm`;
     row.append(box, name, area);
     row.addEventListener('click', e => {
       if (e.target === box || e.target === name) return;
@@ -4149,6 +4160,7 @@ function scanSyncPanel() {
   $('scanPlaceBtn').disabled = !on;
   $('scanPlaceBtn').textContent = on === 1
     ? 'Place this tool \u25b8' : `Place these ${on} tools \u25b8`;
+  scanCoinSync();
 }
 
 // Enter the review. Everything the single-trace editor was showing goes, and
@@ -4162,6 +4174,8 @@ function scanEnterReview(parts) {
   state.scan.active = true;
   state.scan.parts = parts;
   state.scan.sel = -1;
+  state.scan.coin = null;
+  state.scan.rescale = null;
   // A previous tool's sections draw in cyan over the drawer and are
   // click-draggable, and traceEditor.sections IS state.regions, the same array.
   state.regions.length = 0;
@@ -4192,6 +4206,8 @@ function scanExitReview() {
   state.scan.active = false;
   state.scan.parts = [];
   state.scan.sel = -1;
+  state.scan.coin = null;
+  state.scan.rescale = null;
   $('scanPanel').hidden = true;
   $('traceControls').hidden = false;
   $('panel2Title').textContent = 'Trace & holes';
@@ -4236,6 +4252,10 @@ $('scanRedoBtn').addEventListener('click', () => {
   if (!parts.length) { toast('Still nothing. Try a lower detection threshold.'); return; }
   state.scan.parts = parts;
   state.scan.sel = -1;
+  // Fresh candidates are unscaled and the coin among them is unflagged, so
+  // the check starts over rather than describing shapes that no longer exist.
+  state.scan.coin = null;
+  state.scan.rescale = null;
   scanSyncPanel();
   traceEditor.draw();
   toast(`Found ${parts.length} shape${parts.length === 1 ? '' : 's'}.`);
@@ -4268,6 +4288,231 @@ function scanPlaceReviewed() {
   toast(`${bits.join('. ')}.`, 8000);
   return res;
 }
+
+// ---------- the coin check (calibration_and_backlog_prd_v1.2, Part B.1) ----------
+//
+// The drawer scan's scale is the typed width and depth laid over four dragged
+// corners, and corners dragged to the rim, where they are easiest to see, put
+// that scale one drawer-depth nearer the camera than the tools. A coin on the
+// floor is on the tools' plane, so its measured diameter against its true one
+// is the rim-to-floor factor. The check warns past 2 percent and offers one
+// click that rescales every candidate about the drawer's centre; it never
+// rescales on its own, and the typed numbers stay the default.
+
+const SCAN_COIN_WARN_PERCENT = 2;
+
+function scanCoinNominalMm() {
+  if (state.coin.size === 'coin_custom') return state.coin.customD;
+  return (COIN_SIZES[state.coin.size] || COIN_SIZES[DEFAULT_COIN]).d;
+}
+
+const scanRescaleFactor = () =>
+  (state.scan && state.scan.rescale && state.scan.rescale.applied) ? state.scan.rescale.factor : null;
+
+// The drawer's centre in drawer millimetres: where the rim-versus-floor
+// magnification is radial from when the photo was taken from above the middle.
+function scanCentreMm() {
+  const { w, h } = currentPaper();
+  return { x: w / 2, y: h / 2 };
+}
+
+// Find the coin among the candidates, or put a circle out for dragging.
+function scanCoinFind() {
+  if (!scanActive()) return null;
+  const parts = state.scan.parts || [];
+  for (const p of parts) if (p.isCoin) { p.isCoin = false; p.picked = true; }
+  const nominal = scanCoinNominalMm();
+  const found = findCoinCandidate(parts, nominal);
+  if (found) {
+    const part = parts[found.index];
+    part.isCoin = true;
+    part.picked = false;
+    state.scan.coin = {
+      cx: found.circle.cx, cy: found.circle.cy, d: 2 * found.circle.r,
+      auto: true, part: found.index,
+    };
+  } else {
+    const c = scanCentreMm();
+    state.scan.coin = { cx: c.x, cy: c.y, d: nominal, auto: false, part: -1 };
+    toast('No shape in the drawer looks like that coin. Drag the circle onto it, ' +
+      'centre on the coin and the rim handle to its edge.', 7000);
+  }
+  scanCoinMeasure();
+  scanSyncPanel();
+  traceEditor.draw();
+  return state.scan.coinCheck;
+}
+
+function scanCoinMeasure() {
+  const coin = state.scan && state.scan.coin;
+  state.scan.coinCheck = coin ? coinScaleCheck(coin.d, scanCoinNominalMm(), SCAN_COIN_WARN_PERCENT) : null;
+  return state.scan.coinCheck;
+}
+
+function scanCoinClear() {
+  if (!state.scan) return;
+  for (const p of state.scan.parts || []) if (p.isCoin) { p.isCoin = false; p.picked = true; }
+  state.scan.coin = null;
+  state.scan.coinCheck = null;
+  scanSyncPanel();
+  traceEditor.draw();
+}
+
+// Apply the factor the coin says, or undo the one applied. Undo divides by the
+// total applied so far, so refining the circle and applying again compounds
+// and one undo still returns to the scan as it was found.
+function scanCoinApply() {
+  if (!scanActive() || !state.scan.coin) return null;
+  const centre = scanCentreMm();
+  const applyFactor = k => {
+    state.scan.parts = rescaleParts(state.scan.parts, k, centre);
+    const c = state.scan.coin;
+    c.cx = centre.x + (c.cx - centre.x) * k;
+    c.cy = centre.y + (c.cy - centre.y) * k;
+    c.d *= k;
+  };
+  if (state.scan.rescale && state.scan.rescale.applied) {
+    applyFactor(1 / state.scan.rescale.factor);
+    state.scan.rescale = null;
+    toast('Rescale undone. The tools are as the scan found them.');
+  } else {
+    const chk = scanCoinMeasure();
+    if (!chk) return null;
+    applyFactor(chk.factor);
+    state.scan.rescale = { factor: chk.factor, applied: true, percent: chk.percent };
+    toast(`Every shape rescaled by ${(chk.factor * 100).toFixed(1)} percent about the drawer's centre. ` +
+      'Pins and places follow it; nothing is placed yet.', 6000);
+  }
+  scanCoinMeasure();
+  scanSyncPanel();
+  traceEditor.draw();
+  return state.scan.rescale;
+}
+
+function scanCoinSync() {
+  const block = $('scanCoinBlock');
+  if (!block) return;
+  const coin = state.scan && state.scan.coin;
+  const chk = coin ? scanCoinMeasure() : null;
+  const applied = state.scan && state.scan.rescale && state.scan.rescale.applied;
+  const info = $('scanCoinInfo'), apply = $('scanCoinApplyBtn');
+  $('scanCoinClearBtn').hidden = !coin;
+  $('scanCoinFindBtn').textContent = coin ? '◯ Find the coin again' : '◯ Find the coin';
+  if (!chk) {
+    info.hidden = true; info.textContent = ''; info.className = 'hint';
+    apply.hidden = true;
+    return;
+  }
+  const pct = Math.abs(chk.percent).toFixed(1);
+  const how = coin.auto ? 'found in the drawer' : 'from the circle you placed';
+  let text;
+  if (applied) {
+    text = `Rescaled by ${((state.scan.rescale.factor - 1) * 100).toFixed(1)} percent about the drawer's centre. ` +
+      `The coin now measures ${fmtDim(chk.measuredMm)} mm against ${fmtDim(chk.nominalMm)} mm` +
+      (chk.warn ? `, still ${pct} percent ${chk.percent < 0 ? 'small' : 'large'}; refine the circle and apply again, or undo.` : '.');
+    info.className = chk.warn ? 'warn' : 'hint';
+    apply.textContent = 'Undo the rescale';
+    apply.hidden = false;
+  } else if (chk.warn) {
+    text = `The coin (${how}) measures ${fmtDim(chk.measuredMm)} mm; it is ${fmtDim(chk.nominalMm)} mm. ` +
+      `Tools are reading ${pct} percent ${chk.percent < 0 ? 'small' : 'large'}. ` +
+      (chk.percent < 0 ? 'The corners were probably marked at the rim, not where the floor meets the walls.'
+        : 'Check the typed width and depth, and that the coin is lying flat on the floor.');
+    info.className = 'warn';
+    apply.textContent = `Rescale every shape by ${(chk.factor * 100).toFixed(1)} percent`;
+    apply.hidden = false;
+  } else {
+    text = `The coin (${how}) measures ${fmtDim(chk.measuredMm)} mm against ${fmtDim(chk.nominalMm)} mm, ` +
+      `${pct} percent off: the typed drawer size holds.`;
+    info.className = 'hint';
+    apply.hidden = true;
+  }
+  info.textContent = text;
+  info.hidden = false;
+}
+
+// The circle handle, dragged in the review: the centre moves it, the rim
+// handle sizes it. Screen-space hit tests, so the targets stay finger-sized
+// at any zoom.
+let scanCoinDragState = null;
+function scanCoinScreen(vp) {
+  const coin = state.scan && state.scan.coin;
+  if (!coin || !state.rect) return null;
+  const ppm = state.rect.pxPerMm;
+  const c = vp.toScreen({ x: coin.cx * ppm, y: coin.cy * ppm });
+  return { c, r: (coin.d / 2) * ppm * vp.scale };
+}
+function scanCoinPress(mm, sp) {
+  if (!scanActive() || !state.scan.coin) return false;
+  const geo = scanCoinScreen(traceEditor.vp);
+  if (!geo) return false;
+  const dist = Math.hypot(sp.x - geo.c.x, sp.y - geo.c.y);
+  const grab = 10 * (window.devicePixelRatio || 1);
+  if (Math.abs(dist - geo.r) <= grab) { scanCoinDragState = { what: 'radius' }; return true; }
+  if (dist < geo.r) {
+    scanCoinDragState = { what: 'centre', dx: state.scan.coin.cx - mm.x, dy: state.scan.coin.cy - mm.y };
+    return true;
+  }
+  return false;
+}
+function scanCoinDrag(mm) {
+  const coin = state.scan && state.scan.coin;
+  if (!coin || !scanCoinDragState) return;
+  if (scanCoinDragState.what === 'centre') {
+    coin.cx = mm.x + scanCoinDragState.dx; coin.cy = mm.y + scanCoinDragState.dy;
+  } else {
+    coin.d = Math.max(2, 2 * Math.hypot(mm.x - coin.cx, mm.y - coin.cy));
+  }
+}
+function scanCoinDragEnd() {
+  if (!scanCoinDragState) return;
+  scanCoinDragState = null;
+  if (state.scan.coin) state.scan.coin.auto = false;
+  scanCoinMeasure();
+  scanSyncPanel();
+}
+function scanCoinDrawOverlay(ctx, vp, toS) {
+  const coin = state.scan && state.scan.coin;
+  if (!coin) return;
+  const parts = state.scan.parts || [];
+  const part = parts[coin.part];
+  if (part && part.isCoin) {
+    ctx.beginPath();
+    part.outer.forEach((p, k) => { const q = toS(p); if (k) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); });
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,210,87,0.18)';
+    ctx.fill();
+  }
+  const geo = scanCoinScreen(vp);
+  if (!geo) return;
+  const chk = state.scan.coinCheck;
+  const colour = chk && chk.warn && !scanRescaleFactor() ? '#ff7d5c' : '#ffd257';
+  ctx.beginPath();
+  ctx.arc(geo.c.x, geo.c.y, geo.r, 0, Math.PI * 2);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = colour;
+  ctx.setLineDash([]);
+  ctx.stroke();
+  const dot = (x, y, r) => {
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = colour; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.stroke();
+  };
+  dot(geo.c.x, geo.c.y, 4);
+  dot(geo.c.x + geo.r * Math.SQRT1_2, geo.c.y - geo.r * Math.SQRT1_2, 6);
+  ctx.font = '600 12px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const label = `coin ⌀ ${fmtDim(coin.d)} mm`;
+  ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+  ctx.strokeText(label, geo.c.x, geo.c.y + geo.r + 4);
+  ctx.fillStyle = colour;
+  ctx.fillText(label, geo.c.x, geo.c.y + geo.r + 4);
+}
+
+$('scanCoinFindBtn').addEventListener('click', () => { scanCoinFind(); });
+$('scanCoinClearBtn').addEventListener('click', () => { scanCoinClear(); });
+$('scanCoinApplyBtn').addEventListener('click', () => { scanCoinApply(); });
 
 // ---------- editing one placed tool in Step 2 (drawer scan, plan step 6) ----------
 //
@@ -4545,8 +4790,9 @@ function scanPlaceParts(parts, dims) {
       name: part.name, outer: part.outer, holes: part.holes, circles: [],
       thumb: part.thumb,
       // Provenance, and the only way to tell six weeks later which tools got
-      // the human pass in Step 2 and which got a glance in the review.
-      source: { kind: 'scan' },
+      // the human pass in Step 2 and which got a glance in the review. The
+      // coin rescale rides with it, so a project says what was applied.
+      source: scanRescaleFactor() ? { kind: 'scan', scale: scanRescaleFactor() } : { kind: 'scan' },
     });
     // Pinned, because the photograph is the layout. Without this the first
     // press of Nest would throw away the positions the scan just measured,
@@ -5237,6 +5483,33 @@ $('coinCustomDia').addEventListener('change', e => {
   if (mm > 1) state.coin.customD = mm;
   e.target.value = fmtDim(state.coin.customD);
   state.rectDirty = true;
+  scanCoinSelSync();
+});
+// The review's coin select is the same choice as Step 1's coin reference,
+// which coin you own, so the two stay in step.
+const scanCoinSel = $('scanCoinSize');
+populateRefSelect(scanCoinSel, COIN_SIZES);
+function scanCoinSelSync() {
+  scanCoinSel.value = state.coin.size;
+  $('scanCoinCustomRow').hidden = state.coin.size !== 'coin_custom';
+  $('scanCoinCustomDia').value = fmtDim(state.coin.customD);
+  if (scanActive() && state.scan.coin) { scanCoinMeasure(); scanCoinSync(); traceEditor.draw(); }
+}
+scanCoinSelSync();
+coinSel.addEventListener('change', scanCoinSelSync);
+scanCoinSel.addEventListener('change', () => {
+  state.coin.size = scanCoinSel.value;
+  coinSel.value = state.coin.size;
+  $('coinCustomRow').hidden = state.coin.size !== 'coin_custom';
+  state.rectDirty = true;
+  scanCoinSelSync();
+});
+$('scanCoinCustomDia').addEventListener('change', e => {
+  const mm = parseDim(e.target.value);
+  if (mm > 1) state.coin.customD = mm;
+  $('coinCustomDia').value = fmtDim(state.coin.customD);
+  state.rectDirty = true;
+  scanCoinSelSync();
 });
 
 // What a drawer scan is about to do, in the numbers the user just typed. It
@@ -7458,6 +7731,15 @@ window.__app = {
     get active() { return scanActive(); },
     get parts() { return (state.scan && state.scan.parts) || []; },
     get state() { return state.scan; },
+    coinFind: () => scanCoinFind(),
+    coinApply: () => scanCoinApply(),
+    coinClear: () => scanCoinClear(),
+    coinPress: (mm, sp) => scanCoinPress(mm, sp),
+    coinDrag: mm => scanCoinDrag(mm),
+    coinDragEnd: () => scanCoinDragEnd(),
+    get coin() { return state.scan && state.scan.coin; },
+    get coinCheck() { return state.scan && state.scan.coinCheck; },
+    get rescale() { return state.scan && state.scan.rescale; },
   },
   // The autosave slot: its clock, so a test can hold it still, and the three
   // acts that touch it.

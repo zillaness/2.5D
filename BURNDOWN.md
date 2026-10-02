@@ -319,8 +319,25 @@ real-photo checkpoint. Building in the PRD's suggested order.
     chosen for size; it also means the real set measures the app at the
     resolution a phone held back for a large part gives, which is the
     harder case and the right one to pin.
-- ▶ NEXT: B.1, the coin drawer check with its one-click rescale; then B.2
-  thumbnails and merge, B.4, the rest of Part A phase 1, B.3.
+- ✅ Part B.1, the coin drawer check. `js/scan.js` gains `fitCircle`,
+  `findCoinCandidate`, `coinScaleCheck` and `rescaleParts`, all pure; the
+  review panel gains a coin block (`index.html`), the trace editor a handle
+  drag in scan mode (`onScanPress` / `onScanDrag` / `onScanDragEnd`), and
+  `js/main.js` the find, the verdict, the one-click rescale with undo, and
+  `source.scale` on every placed tool. Tested on a camera-rendered drawer,
+  60 mm deep from 800 mm with rim corners: the coin reports 8.1 percent small
+  against a true 7.5, one click brings a 120 mm bar to 120.9 mm at (39, 39)
+  from (40, 40), undo is exact, the factor round-trips a project, and floor
+  corners read 0.5 percent with no offer. 726 checks, all passing, no
+  console errors; dist rebuilt and smoke-tested — v1.29.0.
+  - ⚠ **The refine pass shrinks round shapes.** Simplify then Chaikin keeps a
+    rectangle's bounding box but cuts inside a convex curve: the refined
+    outline of a 24 mm disc measured 0.3 mm under, which would have put the
+    coin check 1.3 points off on its own. The check fits the raw boundary
+    trace instead (`part.disc`). Round tools in a scan, sockets say, carry
+    the same bias in their pockets; worth a measured look when B.3's quality
+    gate is built, since the same pass runs under retrace.
+- ▶ NEXT: B.2 thumbnails and merge; then B.4, the rest of Part A phase 1, B.3.
 
 ### Handoff to a fresh session, 2026-10-02
 

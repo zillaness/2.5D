@@ -255,6 +255,26 @@
           <button id="scanRedoBtn" class="btn small" title="Segment the drawer again at the current settings">↻ Find again</button>
         </div>
         <div id="scanList" style="max-height:260px; overflow:auto; margin:6px 0"></div>
+        <!-- The coin check (calibration_and_backlog_prd_v1.2, Part B.1). A coin
+             on the drawer's floor is on the tools' plane; corners marked at
+             the rim are not, and this is how that shows. -->
+        <div id="scanCoinBlock" style="margin:8px 0 6px; padding-top:8px; border-top:1px solid var(--border)">
+          <p class="hint" style="margin:0 0 4px" title="Corners marked on the drawer's rim put the scale one drawer-depth nearer the camera than the tools, so every tool reads small. A coin lying on the floor shows by how much.">Check the scale with a coin lying on the drawer's floor.</p>
+          <div class="field">
+            <label for="scanCoinSize">Coin</label>
+            <select id="scanCoinSize"></select>
+          </div>
+          <div class="field" id="scanCoinCustomRow" hidden>
+            <label for="scanCoinCustomDia">Diameter (mm)</label>
+            <input type="text" inputmode="decimal" id="scanCoinCustomDia" value="24.26">
+          </div>
+          <div class="btn-row">
+            <button id="scanCoinFindBtn" class="btn small" title="Looks for the coin among the shapes found; if it is not among them, a circle appears for you to drag onto it">◯ Find the coin</button>
+            <button id="scanCoinClearBtn" class="btn small" hidden>Remove the check</button>
+          </div>
+          <p class="hint" id="scanCoinInfo" style="margin:4px 0" hidden></p>
+          <button id="scanCoinApplyBtn" class="btn small" hidden></button>
+        </div>
         <button id="scanPlaceBtn" class="btn primary big">Place these tools ▸</button>
         <button id="scanCancelBtn" class="btn small">Cancel the scan</button>
       </div>

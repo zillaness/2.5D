@@ -14580,6 +14580,209 @@ check('auto mode follows live system changes', autoLight.cls && !autoDark.cls,
   `light cls/mq ${autoLight.cls}/${autoLight.mq}, dark cls/mq ${autoDark.cls}/${autoDark.mq}`);
 await page.evaluate(() => document.getElementById('themeToggle').click()); // back to dark
 
+// ---------- The coin drawer check (Part B.1 of calibration_and_backlog_prd_v1.2) ----------
+//
+// A drawer scan with its corners marked at the rim reads every tool small by
+// (H - d) / H, silently. A coin on the floor is on the tools' plane, so its
+// measured diameter says by how much. Camera-rendered, because the error IS
+// the camera: a centred pinhole 800 mm above the floor of a 400 x 300 mm
+// drawer 60 mm deep, the rim one drawer-depth nearer, so the floor and
+// everything on it reads 0.925 of true when the rim's corners set the scale.
+
+console.log('\nThe coin drawer check');
+
+const coinCheck = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const { fitCircle, findCoinCandidate, coinScaleCheck } = await import('/js/scan.js');
+
+  const W = 2400, H = 1800, f = 1.2 * Math.hypot(W, H);   // a 2x lens, 52 mm equivalent
+  const DW = 400, DH = 300, FLOOR = 800, DEPTH = 60;
+  const project = (xmm, ymm, Z) => ({ x: W / 2 + f * (xmm - DW / 2) / Z, y: H / 2 + f * (ymm - DH / 2) / Z });
+  const quadAt = Z => [[0, 0], [DW, 0], [DW, DH], [0, DH]].map(([x, y]) => project(x, y, Z));
+  const rim = quadAt(FLOOR - DEPTH), floor = quadAt(FLOOR);
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#39352f'; ctx.fillRect(0, 0, W, H);
+  const path = pts => { ctx.beginPath(); pts.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.closePath(); };
+  // Walls and liner the same grey: a drawer with a uniform liner, so the only
+  // thing under test is the scale and not how a wall band segments.
+  path(rim); ctx.fillStyle = '#b0b0b0'; ctx.fill();
+  path(floor); ctx.fill();
+  const onFloor = (x, y, w, h) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(([a, b]) => project(a, b, FLOOR));
+  const tools = [[40, 40, 120, 20], [40, 100, 200, 30], [260, 200, 60, 60]];
+  ctx.fillStyle = '#2c2c2c';
+  for (const t of tools) { path(onFloor(...t)); ctx.fill(); }
+  // A US quarter lying flat at (330, 60) on the floor, darker than the liner.
+  const COIN = 24.26, coinAt = [330, 60];
+  const ring = [];
+  for (let k = 0; k < 72; k++) {
+    const a = k / 72 * Math.PI * 2;
+    ring.push(project(coinAt[0] + COIN / 2 * Math.cos(a), coinAt[1] + COIN / 2 * Math.sin(a), FLOOR));
+  }
+  path(ring); ctx.fillStyle = '#6a6e74'; ctx.fill();
+
+  const before = {
+    reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] },
+    seg: { ...st.seg }, items: structuredClone(st.layout.items), container: structuredClone(st.layout.container),
+    coin: { ...st.coin },
+  };
+  const drive = corners => {
+    if (app.scan.active) app.scan.exit();
+    st.image = c;
+    st.reference = 'rect';
+    st.scan = { on: true, active: false, parts: [], coin: null, rescale: null };
+    st.paper = { ...st.paper, size: 'custom', customW: DW, customH: DH, orientation: 'landscape' };
+    st.seg.autoThreshold = false; st.seg.threshold = 40;
+    st.lens.k1 = 0; st.lens.k2 = 0;
+    // Truth in rectify's convention: half a pixel under the drawn vertex.
+    st.corners = corners.map(q => ({ x: q.x - 0.5, y: q.y - 0.5 }));
+    st.rectDirty = true;
+    if (!app.doRectify()) return false;
+    return app.scan.maybeReview();
+  };
+  const bar = () => app.scan.parts.find(p => !p.isCoin && Math.abs(p.bbox.h - p.bbox.w * 20 / 120) < 3 && p.bbox.w > 80 && p.bbox.w < 140);
+  const snap = () => { const b = bar(); return b ? { w: b.bbox.w, h: b.bbox.h, minX: b.bbox.minX, minY: b.bbox.minY } : null; };
+
+  // Rim corners: the common mistake.
+  st.coin.size = 'us_quarter';
+  const entered = drive(rim);
+  await wait(100);
+  const found = app.scan.parts.length;
+  const asFound = snap();
+  const chk = app.scan.coinFind();
+  await wait(50);
+  const coinPart = app.scan.parts.find(p => p.isCoin);
+  const afterFind = snap();
+  const panel = {
+    info: $('scanCoinInfo').textContent, infoShown: !$('scanCoinInfo').hidden,
+    infoClass: $('scanCoinInfo').className,
+    apply: $('scanCoinApplyBtn').textContent, applyShown: !$('scanCoinApplyBtn').hidden,
+    placeLabel: $('scanPlaceBtn').textContent,
+    coinRowBox: (() => { const rows = $('scanList').querySelectorAll('.scan-row'); const i = app.scan.parts.indexOf(coinPart); const b = rows[i] && rows[i].querySelector('input[type=checkbox]'); return b ? { checked: b.checked, disabled: b.disabled } : null; })(),
+  };
+  // A press on the coin's candidate does not tick it.
+  const picksBefore = app.scan.parts.filter(p => p.picked !== false).length;
+  if (coinPart) app.scan.pick({ x: app.scan.coin.cx, y: app.scan.coin.cy });
+  const picksAfterCoinPress = app.scan.parts.filter(p => p.picked !== false).length;
+
+  // The handle: a press on its rim starts a radius drag, on bare liner nothing.
+  const te = app.traceEditor, ppm = st.rect.pxPerMm;
+  const toS = p => te.vp.toScreen({ x: p.x * ppm, y: p.y * ppm });
+  const coin0 = { ...app.scan.coin };
+  const rimPt = { x: coin0.cx + coin0.d / 2, y: coin0.cy };
+  const onRim = app.scan.coinPress(rimPt, toS(rimPt));
+  app.scan.coinDrag({ x: coin0.cx + coin0.d / 2 + 1, y: coin0.cy });
+  app.scan.coinDragEnd();
+  const dragged = { onRim, d: app.scan.coin.d, auto: app.scan.coin.auto, percent: app.scan.coinCheck.percent };
+  const linerPt = { x: 200, y: 280 };
+  const onLiner = app.scan.coinPress(linerPt, toS(linerPt));
+  // Back to the fitted circle for the rescale.
+  app.scan.coinFind();
+  await wait(50);
+
+  // One click. Sizes and positions scale about the drawer's centre.
+  const rescale = app.scan.coinApply();
+  await wait(50);
+  const afterApply = { bar: snap(), coinD: app.scan.coin.d, info: $('scanCoinInfo').textContent, apply: $('scanCoinApplyBtn').textContent, check: { ...app.scan.coinCheck } };
+  // Undo puts it back; apply again for the placing.
+  app.scan.coinApply();
+  const afterUndo = { bar: snap(), rescale: app.scan.rescale };
+  app.scan.coinApply();
+
+  // Place, then round-trip the project: the factor rides with every tool.
+  const realConfirm = window.confirm;
+  window.confirm = () => true;
+  const placed = app.scan.accept();
+  window.confirm = realConfirm;
+  await wait(100);
+  const items = st.layout.items.map(it => ({ name: it.name, source: it.source, w: (() => { let a = Infinity, b = -Infinity; for (const p of it.outer) { a = Math.min(a, p.x); b = Math.max(b, p.x); } return b - a; })() }));
+  $('projectBtn').click();
+  const text = $('projText').value;
+  $('projCloseBtn').click();
+  const saved = JSON.parse(text);
+  st.layout.items.length = 0;
+  $('projectBtn').click();
+  $('projText').value = text;
+  $('projLoadTextBtn').click();
+  await wait(300);
+  $('projCloseBtn').click();
+  const reloaded = st.layout.items.map(it => it.source);
+
+  // Floor corners: the right way, and no warning.
+  const enteredFloor = drive(floor);
+  await wait(100);
+  const chkFloor = app.scan.coinFind();
+  await wait(50);
+  const floorPanel = { applyShown: !$('scanCoinApplyBtn').hidden, info: $('scanCoinInfo').textContent, infoClass: $('scanCoinInfo').className, bar: snap() };
+
+  // The pure pieces.
+  const pts = []; for (let k = 0; k < 40; k++) { const a = k / 40 * Math.PI * 2; pts.push({ x: 10 + 12.13 * Math.cos(a), y: 7 + 12.13 * Math.sin(a) }); }
+  const fit = fitCircle(pts);
+  const square = { outer: [{ x: 0, y: 0 }, { x: 24, y: 0 }, { x: 24, y: 24 }, { x: 0, y: 24 }, { x: 12, y: 24 }, { x: 0, y: 12 }, { x: 12, y: 0 }, { x: 24, y: 12 }], area: 576, bbox: { minX: 0, minY: 0, maxX: 24, maxY: 24, w: 24, h: 24 } };
+  const disc = { outer: pts, area: Math.PI * 12.13 * 12.13, bbox: { minX: -2.13, minY: -5.13, maxX: 22.13, maxY: 19.13, w: 24.26, h: 24.26 } };
+  const pure = {
+    fit, squareRejected: findCoinCandidate([square], 24.26) === null,
+    discFound: (findCoinCandidate([square, disc], 24.26) || {}).index,
+    check: coinScaleCheck(22.44, 24.26), quiet: coinScaleCheck(24.1, 24.26),
+  };
+
+  // Leave the page as it was found.
+  if (app.scan.active) app.scan.exit();
+  st.layout.items = before.items; st.layout.container = before.container;
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.seg = before.seg;
+  st.coin = before.coin;
+  app.syncRefControls();
+  return { entered, found, asFound, chk, coinFound: !!coinPart, coinAuto: app.scan.coin ? null : chk && true, afterFind, panel,
+    picksBefore, picksAfterCoinPress, dragged, onLiner, rescale, afterApply, afterUndo, placed, items, saved: saved.layout.items.map(it => it.source), reloaded,
+    enteredFloor, chkFloor, floorPanel, pure, trueFactor: FLOOR / (FLOOR - DEPTH) };
+});
+
+{
+  const r = coinCheck;
+  const nearPct = (a, b, t) => Math.abs(a - b) <= t;
+  check('a rim-cornered drawer scans and the coin among its shapes is found, unticked, and shown as the coin',
+    r.entered && r.coinFound && r.chk && r.panel.coinRowBox && !r.panel.coinRowBox.checked && r.panel.coinRowBox.disabled &&
+    r.picksAfterCoinPress === r.picksBefore && !/4 tools/.test(r.panel.placeLabel),
+    `${r.found} shapes; coin row ${JSON.stringify(r.panel.coinRowBox)}; "${r.panel.placeLabel}"`);
+  check('the coin reports the rim-to-floor discrepancy within 1 percentage point of the true 7.5',
+    r.chk && nearPct(r.chk.percent, (1 / r.trueFactor - 1) * 100, 1) && r.chk.warn,
+    r.chk ? `${r.chk.percent.toFixed(2)} percent, coin measured ${r.chk.measuredMm.toFixed(2)} mm` : 'no check');
+  check('the warning names the size, the error and the rim, and offers one click; nothing has moved',
+    r.panel.infoShown && r.panel.infoClass === 'warn' && /small/.test(r.panel.info) && /rim/.test(r.panel.info) &&
+    r.panel.applyShown && /Rescale every shape/.test(r.panel.apply) &&
+    r.asFound && r.afterFind && r.asFound.w === r.afterFind.w && r.asFound.minX === r.afterFind.minX &&
+    nearPct(r.asFound.w, 120 / r.trueFactor, 1.5),
+    `"${r.panel.info}" / "${r.panel.apply}"; the 120 mm bar reads ${r.asFound ? r.asFound.w.toFixed(1) : '?'} mm`);
+  check('the circle handle takes a press on its rim, a drag resizes it and re-measures, and bare liner is left to the pick',
+    r.dragged.onRim && r.dragged.d > r.chk.measuredMm + 1.5 && r.dragged.auto === false &&
+    r.dragged.percent > r.chk.percent && r.onLiner === false,
+    `rim press ${r.dragged.onRim}, ⌀ ${r.dragged.d.toFixed(2)} after drag, ${r.dragged.percent.toFixed(2)} percent; liner press ${r.onLiner}`);
+  check('one click rescales every shape about the drawer\'s centre to within 1 percent of true, and the coin then measures true',
+    r.rescale && r.rescale.applied && r.afterApply.bar && nearPct(r.afterApply.bar.w, 120, 1.2) && nearPct(r.afterApply.bar.h, 20, 1) &&
+    nearPct(r.afterApply.bar.minX, 40, 1.5) && nearPct(r.afterApply.bar.minY, 40, 1.5) &&
+    !r.afterApply.check.warn && /Undo/.test(r.afterApply.apply) && /Rescaled by/.test(r.afterApply.info),
+    r.afterApply.bar ? `bar ${r.afterApply.bar.w.toFixed(1)} × ${r.afterApply.bar.h.toFixed(1)} at (${r.afterApply.bar.minX.toFixed(1)}, ${r.afterApply.bar.minY.toFixed(1)}); coin ${r.afterApply.coinD.toFixed(2)} mm; "${r.afterApply.info}"` : 'no bar');
+  check('undo restores the shapes as the scan found them',
+    r.afterUndo.bar && r.afterUndo.rescale === null && nearPct(r.afterUndo.bar.w, r.asFound.w, 0.01) && nearPct(r.afterUndo.bar.minX, r.asFound.minX, 0.01),
+    r.afterUndo.bar ? `${r.afterUndo.bar.w.toFixed(2)} mm, was ${r.asFound.w.toFixed(2)}` : 'no bar');
+  check('placing lands the rescaled tools without the coin, each carrying the factor, and the project round-trips it',
+    r.placed && r.placed.placed === 3 && r.items.length === 3 && r.items.every(it => it.source && it.source.kind === 'scan' && nearPct(it.source.scale, r.trueFactor, 0.012)) &&
+    r.items.some(it => nearPct(it.w, 120, 1.2)) &&
+    r.saved.every(s => s && nearPct(s.scale, r.trueFactor, 0.012)) && r.reloaded.length === 3 && r.reloaded.every(s => s && nearPct(s.scale, r.trueFactor, 0.012)),
+    `${r.items.length} placed, factors ${r.items.map(it => it.source && it.source.scale && it.source.scale.toFixed(4)).join(', ')}; reloaded ${r.reloaded.map(s => s && s.scale && s.scale.toFixed(4)).join(', ')}`);
+  check('with the corners on the floor the coin agrees and no rescale is offered',
+    r.enteredFloor && r.chkFloor && !r.chkFloor.warn && Math.abs(r.chkFloor.percent) < 1 && !r.floorPanel.applyShown &&
+    r.floorPanel.infoClass === 'hint' && /holds/.test(r.floorPanel.info) && r.floorPanel.bar && nearPct(r.floorPanel.bar.w, 120, 1.2),
+    r.chkFloor ? `${r.chkFloor.percent.toFixed(2)} percent; "${r.floorPanel.info}"` : 'no check');
+  check('fitCircle recovers a circle, a square of the coin\'s size is not a coin, and the check thresholds at 2 percent',
+    r.pure.fit && near(r.pure.fit.cx, 10, 1e-6) && near(r.pure.fit.cy, 7, 1e-6) && near(r.pure.fit.r, 12.13, 1e-6) &&
+    r.pure.squareRejected && r.pure.discFound === 1 &&
+    r.pure.check.warn && near(r.pure.check.percent, -7.5, 0.1) && near(r.pure.check.factor, 24.26 / 22.44, 1e-9) && !r.pure.quiet.warn,
+    `fit (${r.pure.fit && r.pure.fit.cx.toFixed(3)}, ${r.pure.fit && r.pure.fit.cy.toFixed(3)}) r ${r.pure.fit && r.pure.fit.r.toFixed(3)}; check ${r.pure.check.percent.toFixed(2)} percent`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

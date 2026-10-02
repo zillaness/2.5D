@@ -920,7 +920,7 @@ rim sit one drawer-depth nearer the camera, so everything comes back small by
 that ratio: a 60 mm drawer shot from 800 mm reads about 7 percent under, which
 turns a 300 mm wrench into 277 mm. They are not detected for you either. Paper
 detection looks for a bright dominant region, and a drawer full of tools is
-neither.
+neither. A coin lying on the floor catches the rim mistake; see below.
 
 **Two things about the photo.** Leave a clear band of liner all round, roughly
 4 percent of the drawer's short side, because the colour of that border is what
@@ -933,6 +933,20 @@ the panel lists them. Click a tool on the photo to tick or untick it, rename
 anything you will want engraved, and **Find again** re-runs the segmentation if
 you change the detection threshold. **Place these N tools** puts them in the
 drawer and opens Step 4.
+
+**Checking the scale with a coin.** Lay a coin on the drawer's floor before the
+photo. In the review, pick the coin and press **Find the coin**: the app looks
+for it among the shapes found, fits a circle to it, and compares the diameter
+it measures with the coin's true one. The coin is on the tools' plane, so the
+difference is exactly the rim-versus-floor error. Within 2 percent it says the
+typed size holds. Past that it says by how much the tools are reading small,
+names the rim as the likely cause, and offers one click that rescales every
+shape about the drawer's centre, sizes and positions both, so a tool
+photographed against a wall comes back to the wall. Nothing moves until that
+click, and **Undo** puts the shapes back as the scan found them. If the coin
+is not among the shapes (a shiny coin on a pale liner), a circle appears for
+you to drag onto it. The coin itself is never placed, and every placed tool
+carries the factor that was applied, so a saved project says so.
 
 **What you get.** Each tool lands exactly where it was photographed, in a
 container already set to the drawer's typed dimensions, and **pinned**. The
@@ -951,9 +965,9 @@ it is why scanned tools are badged, why the escape hatch above exists, and why
 an export warns when tools are still carrying the names the scan gave them
 rather than engraving "Tool 4" into your foam.
 
-**Not in v1.** Tools that touch are not separated. There is no reference-object
-cross-check against the typed dimensions, so the rim caution above is the only
-defence against a mis-measured drawer.
+**Not in v1.** Tools that touch are not separated. The coin check reads the
+rim-versus-floor error and offers the fix; a mis-typed width or depth it can
+only report as a disagreement, since it cannot tell which number is wrong.
 
 ## Tests
 
@@ -1055,10 +1069,9 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   parallax for thick parts. Plain paper gets more precise corners and a
   wrong-size warning first, with no printing needed. **Awaiting sign-off**
   (phase 1).
-- **Drawer scale** — the drawer scan's reference cross-check. Corners marked at
-  a drawer's rim make every tool read several percent small, and nothing
-  catches it today. A coin on the drawer floor can catch it now, and a
-  calibration sheet will later, each with a one-click rescale.
+- **Drawer scale from a calibration sheet** — the coin check shipped in
+  v1.29.0; a calibration sheet on the drawer floor, recognised on its own,
+  will do the same without a coin in Part A phase 2.
 - **Drawer scan review** — thumbnails in the review list, and merging two
   candidates that are really one tool, for example a two-colour handle the
   segmenter split. Tools that touch still arrive as one shape and are not

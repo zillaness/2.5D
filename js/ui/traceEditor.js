@@ -1004,8 +1004,17 @@ export class TraceEditor {
     // start of a pan and fires onSelect: the review would look like it worked
     // and silently swallow every tick.
     if (this.mode === 'scan') {
-      if (e.button === 0 && this.cb.onScanPick) this.cb.onScanPick(this._screenToMm(sp), e);
-      else this.panning = true;
+      if (e.button === 0) {
+        // A handle the review owns (the coin circle) takes the press first;
+        // anything else is a pick.
+        if (this.cb.onScanPress && this.cb.onScanPress(this._screenToMm(sp), sp)) {
+          this._scanDrag = true;
+          return;
+        }
+        if (this.cb.onScanPick) this.cb.onScanPick(this._screenToMm(sp), e);
+      } else {
+        this.panning = true;
+      }
       return;
     }
 
@@ -1282,6 +1291,11 @@ export class TraceEditor {
       this.draw();
       return;
     }
+    if (this._scanDrag) {
+      if (this.cb.onScanDrag) this.cb.onScanDrag(this._screenToMm(sp));
+      this.draw();
+      return;
+    }
     // Label move / rotate
     if (this.dragging && this._labelDrag) {
       const d = this._labelDrag;
@@ -1387,6 +1401,12 @@ export class TraceEditor {
   }
 
   _up() {
+    if (this._scanDrag) {
+      this._scanDrag = false;
+      if (this.cb.onScanDragEnd) this.cb.onScanDragEnd();
+      this.draw();
+      return;
+    }
     if (this._brush) {
       const path = this._brush;
       this._brush = null;

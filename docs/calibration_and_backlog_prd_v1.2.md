@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.2
+version: 1.2.3
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -855,6 +855,11 @@ Known gaps, and the drawer scan PRD, checked against the code on 2026-09-29.
 
 ## B.1 Drawer scale
 
+*Shipped in v1.29.0, 2026-10-02. The coin is found among the candidates on a
+circle fitted to the raw boundary trace (the refine pass cuts about 0.3 mm
+inside a convex curve), or placed by hand; the rescale is about the drawer's
+centre, sizes and positions; placed tools carry the factor in `source.scale`.*
+
 **Problem.** Drawer scan step 7 never shipped (`docs/drawer_scan_prd_v1.0.md`,
 status line). A drawer scan takes its scale from the drawer's corners and the
 typed width and depth. Corners marked at the rim, which is where they are
@@ -1104,6 +1109,8 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.3 (2026-10-02): B.1 shipped in v1.29.0; its status note records the
+  raw-boundary circle fit and the centre-anchored rescale.
 - v1.2.2 (2026-10-02): Criterion 14 revised after building step 1b: without a
   focal length a one-axis tilt leaves the true proportions undetermined, so the
   promise without EXIF is no false flags and straight-down catches, and the
