@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.15
+version: 1.2.16
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -13,9 +13,12 @@ ai_update: Update last_updated and version. Rename file to match. Append changel
 Status: **Part A phase 1 BUILT, v1.28.0 to v1.30.10, 2026-10-02, all
 thirteen steps including the two droppable ones; its real-photo checkpoint
 (step 10) waits on Sam's prints. Part B items B.1, B.2 and B.4 SHIPPED
-(v1.29.0 to v1.29.3); B.3 next.** Signed off 2026-10-02 with open questions 1
-to 15 on their recommendations. Part A phases 2 and 3 wait for their own
-sign-off after phase 1's checkpoint. Two criteria were revised while building
+(v1.29.0 to v1.29.3); B.3 SHIPPED (v1.30.11 to v1.31.1). Part A phases 2 and
+3 SIGNED OFF 2026-10-02, build in progress.** Signed off 2026-10-02 with open
+questions 1 to 15 on their recommendations. Sam signed off phases 2 and 3 on
+2026-10-02 before phase 1's real-photo checkpoint, which this document had
+staged first; the checkpoint still stands and anything it shows wrong on real
+paper will have been built on. Two criteria were revised while building
 and are marked where they stand: 14 (the wrong-paper check without a focal
 length) and 12 (the single-colour model's tolerance). · 2026-09-29 · target
 branch `claude/2.5d-photo-stl-s3-y0oodn`
@@ -856,7 +859,7 @@ checkpoint that needs a person.
     position from the edges when visible and from the print check otherwise.*
 13. **README** and this PRD's status line. *Shipped v1.30.10, 2026-10-02.*
 
-### Phase 2: several sheets (sign-off after phase 1's checkpoint)
+### Phase 2: several sheets (signed off 2026-10-02, before phase 1's checkpoint)
 
 14. **Finding several sheets.** Every bright sheet-sized component as a seed;
     the whole-photo line search as the fallback. Tests: one to eight sheets at
@@ -871,7 +874,7 @@ checkpoint that needs a person.
     real drawer with a sheet on its floor.
 18. **README.**
 
-### Phase 3: parallax (sign-off after phase 1's checkpoint)
+### Phase 3: parallax (signed off 2026-10-02, before phase 1's checkpoint)
 
 19. **EXIF and camera position.** Read the focal length from the JPEG's EXIF;
     decompose the homography into the camera's height, tilt and the point
@@ -1168,6 +1171,9 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.16 (2026-10-02): Sam signed off Part A phases 2 and 3 ("Continue I'm
+  signing off of the next build work"), before phase 1's real-photo
+  checkpoint; recorded as such. Build starts at plan step 14.
 - v1.2.15 (2026-10-02): B.3 shipped in v1.30.11 to v1.31.1, with its diagnosis corrected in the status note.
 - v1.2.14 (2026-10-02): Part A step 12 shipped in v1.30.9.
 - v1.2.13 (2026-10-02): Part A step 11 shipped in v1.30.8, with criterion 12's premise corrected.

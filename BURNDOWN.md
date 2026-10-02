@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.24
+version: 1.25
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -657,8 +657,13 @@ real-photo checkpoint. Building in the PRD's suggested order.
     taken out again rather than left as clutter. Access's 0.3 ms per test
     on the overfull drawer is not the notch: it is the partial overlaps of
     a full drawer, which the grid cannot prove and Clipper must.
-- ▶ NEXT: nothing queued from the signed-off scope. Part A phases 2 and 3
-  wait on the checkpoint and their own sign-off; see the handoff below.
+- ✅ Sign-off for Part A phases 2 and 3, 2026-10-02. Sam's words: "Continue
+  I'm signing off of the next build work". The PRD had staged this sign-off
+  after phase 1's real-photo checkpoint; Sam gave it before, and was told
+  once that anything phase 1 gets wrong on real paper will be built on. By
+  Sam's decision, build proceeds in the plan's order: steps 14 to 18, then
+  19 to 22. PRD at v1.2.16.
+- ▶ NEXT: Part A step 14, finding several sheets.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1019,6 +1024,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.25 (2026-10-02): Phases 2 and 3 of the calibration PRD signed off by Sam before the real-photo checkpoint; build resumes at step 14.
 - v1.24 (2026-10-02): Steps 1a and 1b shipped as v1.28.0 and v1.28.1; criterion 14 revised; handoff to a fresh session written.
 - v1.23 (2026-10-02): Calibration and backlog PRD signed off for Part A phase 1 and Part B items B.1 to B.4; build started.
 - v1.22 (2026-09-29): Calibration PRD widened to docs/calibration_and_backlog_prd_v1.2.md with the twelve approved suggestions and the backlog; README Next up corrected.
