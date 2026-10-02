@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.19
+version: 1.2.20
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -251,6 +251,7 @@ distance, or a correction, reduces the size error.
     rim, tools read 7.5 percent small. A sheet on the floor reports the
     discrepancy within half a percentage point, one click rescales every tool
     to within 0.5 percent of true, and nothing changes before the click.
+    *Met, v1.32.3: -7.49 percent reported, 0.05 percent after the click.*
 
 ### Phase 3: parallax
 
@@ -914,7 +915,18 @@ checkpoint that needs a person.
 17. **Drawer scale from a sheet.** Recognition inside a drawer scan, the
     sheet masked out, the discrepancy report and the one-click rescale.
     Criterion 23. **Checkpoint:** a real large part with four sheets, and a
-    real drawer with a sheet on its floor.
+    real drawer with a sheet on its floor. *Shipped v1.32.3, 2026-10-02.*
+    The finder runs on a drawer photo too; `scanSheetCheck` takes the
+    best-read sheet's frame through its own fit into the photo and through
+    rectify's construction into the drawer, measures it against the frame's
+    outside size times the print scale (the sheet's own verdict), and the
+    scan masks the sheet's paper out of the diff map before segmenting.
+    The rescale and its undo share the coin's state. The recogniser's paper
+    edge is now found against the desk's own level rather than the
+    paper-to-ink midpoint, so a mid-grey liner has an edge. Measured on the
+    synthetic drawer of criterion 23: -7.49 percent against a true -7.50,
+    the bar 110.95 → 119.94 for 120, the sheet absent from the shapes. The
+    checkpoint waits on Sam's prints with the rest.
 18. **README.**
 
 ### Phase 3: parallax (signed off 2026-10-02, before phase 1's checkpoint)
@@ -1214,6 +1226,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.20 (2026-10-02): Part A step 17 shipped in v1.32.3; criterion 23 met.
 - v1.2.19 (2026-10-02): Part A step 16 shipped in v1.32.2; criterion 20's
   status recorded at the criterion.
 - v1.2.18 (2026-10-02): Part A step 15 shipped in v1.32.1; criterion 20's

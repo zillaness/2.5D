@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.28
+version: 1.29
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -759,7 +759,34 @@ real-photo checkpoint. Building in the PRD's suggested order.
     neither), which is what the band warning is for.
   - ⚠ The lens slider is not an override in set mode: the joint fit's term
     is used and the slider shows it.
-- ▶ NEXT: Part A step 17, drawer scale from a sheet.
+- ✅ Part A step 17, drawer scale from a sheet. The finder now runs on a
+  drawer photo too (the single-sheet corner path still does not), and Step 1
+  says the sheet is there for the drawer's scale. `scanSheetCheck` takes the
+  best-read sheet's frame corners through its own fit into the photo and
+  through rectify's own construction (the rim corners, undistorted, to the
+  drawer rect) into the rectified drawer, measures the frame there against
+  its outside size times the print scale from the sheet's own verdict, and
+  reports the factor and the percent; `scanRun` masks the sheet's paper
+  (grown 2 mm) out of the diff map before segmenting, so it never arrives
+  as a tool; the apply rescales every shape about the drawer's centre into
+  the same `state.scan.rescale` the coin uses, and either button's undo
+  returns the scan as found. The test is the coin test's drawer rendered
+  through `renderTablePhoto` (the floor as the table, the rim as the floor's
+  corners raised one drawer depth through the camera's `project`): 600 × 450
+  mm, 60 mm deep, 800 mm up on a 40 mm equivalent. Measured: the bar reads
+  110.95 for 120 at the rim; the sheet reports −7.49 percent against a true
+  −7.50; the click gives 119.94 × 20.02; three shapes, the sheet not among
+  them. 836 checks, all passing, no console errors; dist rebuilt and
+  smoke-tested — v1.32.3.
+  - ⚠ The recogniser's paper edge was found against the paper-to-ink
+    midpoint, so a mid-grey liner (176 against paper 246) read as paper and
+    the sheet's edges went unmeasured, leaving the print scale "assumed
+    1:1". The edge is now sought against the desk's own level, read over
+    the profile's first 3 mm; a desk as bright as the paper still has no
+    edge, and phase 1's tests are unchanged.
+  - ⚠ The coin's apply returned early without a coin, so its undo could not
+    reach a sheet's rescale; the undo now comes first and is shared.
+- ▶ NEXT: Part A step 18, README.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1120,6 +1147,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.29 (2026-10-02): Part A step 17 shipped as v1.32.3.
 - v1.28 (2026-10-02): Part A step 16 shipped as v1.32.2.
 - v1.27 (2026-10-02): Part A step 15 shipped as v1.32.1.
 - v1.26 (2026-10-02): Part A step 14 shipped as v1.32.0.

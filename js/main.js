@@ -9,7 +9,7 @@ import { detectPaperCorners } from './detectPaper.js';
 import { refineCorners } from './edgeFit.js';
 import { checkPaperAspect } from './paperAspect.js';
 import { readFocalLength, focalPixels } from './exif.js';
-import { computeDiffMap, otsuThreshold, segmentObject, segmentObjects } from './segment.js';
+import { rowRanges as segRowRanges, computeDiffMap, otsuThreshold, segmentObject, segmentObjects } from './segment.js';
 import { scanParts, SCAN_DEFAULTS, fitCircle, findCoinCandidate, coinScaleCheck, rescaleParts, mergeParts } from './scan.js';
 import { sheetSetSVG, printPageHTML, drawJob, jobHex, paperLabel as calibPaperLabel, LAYOUT_VERSION as CALIB_LAYOUT } from './calibSheet.js';
 import { recogniseSheet } from './calibDetect.js';
@@ -581,7 +581,7 @@ function sheetFindSchedule() {
 function sheetFindAll() {
   if (sheetFindTimer) { clearTimeout(sheetFindTimer); sheetFindTimer = null; }
   state.sheets = null;
-  const applicable = state.image && state.reference === 'rect' && !scanOn() && state.sheetFit;
+  const applicable = state.image && state.reference === 'rect' && state.sheetFit;
   if (!applicable) { sheetSyncPanel(); cornerEditor.draw(); return null; }
   const pickedStock = PAPER_SIZES[state.paper.size];
   const roughPaper = pickedStock && pickedStock.group === 'Paper' ? state.paper.size : 'letter';
@@ -862,6 +862,14 @@ function sheetSyncPanel() {
     return;
   }
   if (!s && state.sheetFit && !state.sheets) { el.hidden = true; return; }
+  if (scanOn()) {
+    // A drawer scan: the sheet is on the floor to check the drawer's scale,
+    // which Step 2 does; nothing here moves the corners.
+    if (!state.sheets) { el.hidden = true; return; }
+    el.textContent = describeFound(state.sheets) + ' Step 2 measures it against the drawer to check the scale of the tools.';
+    el.hidden = false;
+    return;
+  }
   const text = document.createElement('span');
   if (s) {
     const id = s.identity;
@@ -4496,6 +4504,10 @@ function scanRun() {
   if (!state.rect) return [];
   const ppm = state.rect.pxPerMm;
   const dm = state.diffMap || computeDiffMap(state.rect.canvas);
+  // A calibration sheet on the floor is measured for the scale check and
+  // masked out of the scan, so it never arrives as a tool.
+  const sheet = scanSheetCheck();
+  if (sheet) scanMaskPolygon(dm, sheet.paperPx, Math.round(2 * ppm));
   // A tenth of a percent of the drawer, floored at 30 square millimetres. The
   // percentage wins on a big drawer and the floor on a small one, and either
   // way a loose bolt at about 20 square millimetres is not a tool that gets a
@@ -4537,6 +4549,135 @@ function scanAttachThumb(part) {
   return part;
 }
 
+// ---------- drawer scale from a calibration sheet (calibration_and_backlog_prd_v1.2, Part A phase 2, step 17) ----------
+//
+// A drawer scan rectifies from the drawer's corners and its typed size.
+// Corners marked at the rim sit one drawer depth nearer the camera than the
+// tools, so every tool reads small by (H - d) / H. A sheet laid on the floor
+// is on the tools' plane: its frame's outside size, measured in the drawer's
+// own rectification against what the print scale says it is, is exactly the
+// rim-to-floor factor. The typed size holds until the click.
+function scanSheetCheck() {
+  const all = state.sheets;
+  if (!state.scan) return null;
+  if (!scanOn() || !state.rect || !state.rect.paperRect || !all || !all.sheets.length || !state.corners) { state.scan.sheet = null; return null; }
+  const s = all.sheets.slice().sort((a, b) => (b.words - a.words) || (a.rmsMm - b.rmsMm))[0];
+  const res = state.rect;
+  const iw = state.image.naturalWidth || state.image.width, ih = state.image.naturalHeight || state.image.height;
+  const lp = calibLensParams(iw, ih), k1 = state.lens.k1, k2 = state.lens.k2;
+  const und = p => ((k1 || k2) ? calibUndistort(p, k1, k2, lp) : p);
+  const R = res.paperRect;
+  const dst = [{ x: R.x, y: R.y }, { x: R.x + R.w, y: R.y }, { x: R.x + R.w, y: R.y + R.h }, { x: R.x, y: R.y + R.h }];
+  const Hinv = calibHomography(state.corners.map(und), dst);
+  if (!Hinv) { state.scan.sheet = null; return null; }
+  const toRect = p => { const q = und(s.fit.designToPhoto(p)); return calibApplyH(Hinv, q.x, q.y); };
+  const ppm = res.pxPerMm;
+  const g = s.fit.geom.frame.outer;
+  const framePx = [[g.x, g.y], [g.x + g.w, g.y], [g.x + g.w, g.y + g.h], [g.x, g.y + g.h]].map(([x, y]) => toRect({ x, y }));
+  if (!framePx.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))) { state.scan.sheet = null; return null; }
+  const mm = framePx.map(p => ({ x: p.x / ppm, y: p.y / ppm }));
+  const side = (a, b) => Math.hypot(mm[a].x - mm[b].x, mm[a].y - mm[b].y);
+  const measured = { w: (side(0, 1) + side(2, 3)) / 2, h: (side(1, 2) + side(3, 0)) / 2 };
+  const f = frameOutsideMm(s.identity.paper);
+  const v = s.verdict || null;
+  const scale = (v && v.scale) || { x: 1, y: 1 };
+  const nominal = { w: f.w * scale.x, h: f.h * scale.y };
+  const factor = (nominal.w / measured.w + nominal.h / measured.h) / 2;
+  const percent = (1 / factor - 1) * 100;
+  const stock = PAPER_SIZES[s.identity.paper];
+  const dW = Math.min(stock.w, stock.h), dH = Math.max(stock.w, stock.h);
+  const pc = (v && v.rect && v.rect.corners) || [{ x: 0, y: 0 }, { x: dW, y: 0 }, { x: dW, y: dH }, { x: 0, y: dH }];
+  const paperPx = pc.map(toRect);
+  state.scan.sheet = {
+    identity: s.identity, measured, nominal, scaleSource: v ? v.source : 'design', scale,
+    factor, percent, warn: Math.abs(percent) > SCAN_COIN_WARN_PERCENT,
+    framePx, paperPx, paperMm: paperPx.map(p => ({ x: p.x / ppm, y: p.y / ppm })),
+  };
+  return state.scan.sheet;
+}
+
+// Zero the diff map inside a convex polygon grown by pad px about its centre.
+function scanMaskPolygon(dm, poly, pad) {
+  if (!dm || !poly || poly.length < 3) return;
+  const cx = poly.reduce((a, p) => a + p.x, 0) / poly.length, cy = poly.reduce((a, p) => a + p.y, 0) / poly.length;
+  const grown = poly.map(p => { const d = Math.hypot(p.x - cx, p.y - cy) || 1; return { x: p.x + (p.x - cx) / d * pad, y: p.y + (p.y - cy) / d * pad }; });
+  const rr = segRowRanges(grown, dm.w, dm.h);
+  for (let y = Math.max(0, rr.top); y >= 0 && y <= rr.bot; y++) {
+    const lo = rr.rr[2 * y], hi = rr.rr[2 * y + 1];
+    if (lo >= 0) dm.diff.fill(0, y * dm.w + lo, y * dm.w + hi + 1);
+  }
+}
+
+// Apply the factor the sheet says, or undo the one applied (the coin's and
+// the sheet's rescale are one state: whichever applied it, undo returns to
+// the scan as it was found).
+function scanRescaleUndo() {
+  if (!scanActive() || !state.scan.rescale || !state.scan.rescale.applied) return null;
+  const centre = scanCentreMm();
+  const k = 1 / state.scan.rescale.factor;
+  state.scan.parts = rescaleParts(state.scan.parts, k, centre);
+  const c = state.scan.coin;
+  if (c) { c.cx = centre.x + (c.cx - centre.x) * k; c.cy = centre.y + (c.cy - centre.y) * k; c.d *= k; }
+  state.scan.rescale = null;
+  toast('Rescale undone. The tools are as the scan found them.');
+  scanCoinMeasure();
+  scanSyncPanel();
+  traceEditor.draw();
+  return null;
+}
+function scanSheetApply() {
+  if (!scanActive()) return null;
+  if (state.scan.rescale && state.scan.rescale.applied) return scanRescaleUndo();
+  const sh = state.scan.sheet;
+  if (!sh) return null;
+  const centre = scanCentreMm();
+  state.scan.parts = rescaleParts(state.scan.parts, sh.factor, centre);
+  const c = state.scan.coin;
+  if (c) { c.cx = centre.x + (c.cx - centre.x) * sh.factor; c.cy = centre.y + (c.cy - centre.y) * sh.factor; c.d *= sh.factor; }
+  state.scan.rescale = { factor: sh.factor, applied: true, percent: sh.percent, source: 'sheet' };
+  toast(`Every shape rescaled by ${(sh.factor * 100).toFixed(1)} percent about the drawer's centre, from the calibration sheet. ` +
+    'Pins and places follow it; nothing is placed yet.', 6000);
+  scanCoinMeasure();
+  scanSyncPanel();
+  traceEditor.draw();
+  return state.scan.rescale;
+}
+function scanSheetSync() {
+  const block = $('scanSheetBlock');
+  if (!block) return;
+  const sh = state.scan && state.scan.sheet;
+  if (!sh || !scanActive()) { block.hidden = true; return; }
+  const info = $('scanSheetInfo'), apply = $('scanSheetApplyBtn');
+  const applied = state.scan.rescale && state.scan.rescale.applied;
+  const id = sh.identity;
+  const pct = Math.abs(sh.percent).toFixed(1);
+  const from = sh.scaleSource === 'edges' ? 'print scale from its edges' : sh.scaleSource === 'ruler' ? 'print scale from your ruler' : sh.scaleSource === 'record' ? 'print scale from your print check' : 'a 1:1 print assumed';
+  const measuredText = `Calibration sheet ${id.sheet} of set ${jobHex(id.job)} lies on the floor: its frame measures ${fmtDim(sh.measured.w)} × ${fmtDim(sh.measured.h)} mm ` +
+    `against ${fmtDim(sh.nominal.w)} × ${fmtDim(sh.nominal.h)} mm (${from}).`;
+  let text;
+  if (applied) {
+    text = `Rescaled by ${((state.scan.rescale.factor - 1) * 100).toFixed(1)} percent about the drawer's centre${state.scan.rescale.source === 'sheet' ? ', from the calibration sheet' : ', from the coin'}. ` +
+      `The sheet is masked out of the scan.`;
+    info.className = 'hint';
+    apply.textContent = 'Undo the rescale';
+    apply.hidden = false;
+  } else if (sh.warn) {
+    text = `${measuredText} Tools are reading ${pct} percent ${sh.percent < 0 ? 'small' : 'large'}. ` +
+      (sh.percent < 0 ? 'The corners were probably marked at the rim, not where the floor meets the walls.' : 'Check the typed width and depth.') +
+      ' The sheet is masked out of the scan.';
+    info.className = 'warn';
+    apply.textContent = `Rescale every shape by ${(sh.factor * 100).toFixed(1)} percent`;
+    apply.hidden = false;
+  } else {
+    text = `${measuredText} ${pct} percent off: the typed drawer size holds. The sheet is masked out of the scan.`;
+    info.className = 'hint';
+    apply.hidden = true;
+  }
+  info.textContent = text;
+  block.hidden = false;
+}
+$('scanSheetApplyBtn').addEventListener('click', () => scanSheetApply());
+
 // The candidates, drawn over the photo in the trace editor's own draw pass.
 // Screen space at device pixel ratio, with the world transform already
 // restored, so millimetres go through pxPerMm and then vp.toScreen().
@@ -4546,6 +4687,23 @@ function scanDrawOverlay(ctx, vp) {
   const parts = state.scan.parts || [];
   const toS = p => vp.toScreen({ x: p.x * ppm, y: p.y * ppm });
   ctx.save();
+  if (state.scan.sheet) {
+    // The calibration sheet on the floor: masked out of the scan, drawn so.
+    const sh = state.scan.sheet;
+    ctx.beginPath();
+    sh.paperPx.forEach((p, k) => { const q = vp.toScreen(p); if (k === 0) ctx.moveTo(q.x, q.y); else ctx.lineTo(q.x, q.y); });
+    ctx.closePath();
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = sh.warn ? '#ffd257' : 'rgba(255,210,87,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const c = vp.toScreen({ x: sh.paperPx.reduce((a, p) => a + p.x, 0) / 4, y: sh.paperPx.reduce((a, p) => a + p.y, 0) / 4 });
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillStyle = '#ffd257';
+    ctx.textAlign = 'center';
+    ctx.fillText(`calibration sheet ${sh.identity.sheet}, masked`, c.x, c.y);
+  }
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     const path = loop => {
@@ -4694,6 +4852,7 @@ function scanSyncPanel() {
   $('scanPlaceBtn').textContent = on === 1
     ? 'Place this tool \u25b8' : `Place these ${on} tools \u25b8`;
   scanCoinSync();
+  scanSheetSync();
 }
 
 // Enter the review. Everything the single-trace editor was showing goes, and
@@ -4990,7 +5149,9 @@ function scanCoinClear() {
 // total applied so far, so refining the circle and applying again compounds
 // and one undo still returns to the scan as it was found.
 function scanCoinApply() {
-  if (!scanActive() || !state.scan.coin) return null;
+  if (!scanActive()) return null;
+  if (state.scan.rescale && state.scan.rescale.applied) return scanRescaleUndo();
+  if (!state.scan.coin) return null;
   const centre = scanCentreMm();
   const applyFactor = k => {
     state.scan.parts = rescaleParts(state.scan.parts, k, centre);
@@ -5000,9 +5161,7 @@ function scanCoinApply() {
     c.d *= k;
   };
   if (state.scan.rescale && state.scan.rescale.applied) {
-    applyFactor(1 / state.scan.rescale.factor);
-    state.scan.rescale = null;
-    toast('Rescale undone. The tools are as the scan found them.');
+    return scanRescaleUndo();
   } else {
     const chk = scanCoinMeasure();
     if (!chk) return null;
@@ -8497,6 +8656,9 @@ window.__app = {
     get coin() { return state.scan && state.scan.coin; },
     get coinCheck() { return state.scan && state.scan.coinCheck; },
     get rescale() { return state.scan && state.scan.rescale; },
+    sheetCheck: () => scanSheetCheck(),
+    sheetApply: () => scanSheetApply(),
+    get sheet() { return state.scan && state.scan.sheet; },
   },
   // The sheet in Step 1: recognise now, read what was found, the print
   // checks on record, and the switch.

@@ -1,6 +1,6 @@
 ---
 file: drawer_scan_prd_v1.0.md
-version: 1.4
+version: 1.5
 author: Sam Cao
 created: 2026-09-19
 last_updated: 2026-10-02
@@ -13,7 +13,8 @@ ai_update: Update last_updated and version. Rename file to match. Append changel
 Status: **Steps 1 to 6 and 8 SHIPPED in v1.27.0, 2026-09-19. Step 7, the coin
 cross-check with the one-click rescale of open question 6, SHIPPED in v1.29.0,
 2026-10-02, as Part B.1 of `docs/calibration_and_backlog_prd_v1.2.md`; the
-sheet-based version is that document's Part A phase 2. Merge and thumbnails
+sheet-based version, that document's Part A phase 2 step 17, SHIPPED in
+v1.32.3, 2026-10-02. Merge and thumbnails
 from step 5 SHIPPED in v1.29.1 and v1.29.2, 2026-10-02, as its Part B.2.**
 · 2026-09-19 · target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
@@ -523,6 +524,7 @@ the rest are defaults.
 
 ## CHANGELOG
 - v1.4 (2026-10-02): Step 5's merge and thumbnails shipped in v1.29.1 and v1.29.2 (calibration_and_backlog_prd_v1.2.md, Part B.2).
+- v1.5 (2026-10-02): The sheet-based scale check shipped in v1.32.3 (calibration_and_backlog_prd_v1.2.md, Part A step 17); status line updated.
 - v1.3 (2026-10-02): Step 7 shipped in v1.29.0 as the coin check (calibration_and_backlog_prd_v1.2.md, Part B.1). Status and the "Not built" paragraph updated.
 - v1.2 (2026-09-29): Status line points at `docs/calibration_and_backlog_prd_v1.2.md`, which now carries step 7 and the unbuilt merge and thumbnails. Filename kept at _v1.0 because `js/main.js` and `js/scan.js` cite it by name.
 - v1.1 (2026-09-19): Steps 1 to 6 and 8 shipped in v1.27.0. Records the three corrections building it forced (the paperDims transposition, the goStep(2) retrace that would have destroyed a scan, and the two TraceEditor edits the "no new capability" framing hid), the three paper-tuned constants the scan does not inherit, and what remains: step 7's cross-check, merge, and thumbnails.

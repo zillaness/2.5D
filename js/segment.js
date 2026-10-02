@@ -129,7 +129,7 @@ export function computeDiffMap(canvas, opts = {}) {
 // Per-row x-ranges of a convex polygon in canvas px: [lo, hi] per row,
 // -1 where the row misses it. Shared by the one-window model above and the
 // set model below.
-function rowRanges(poly, w, h) {
+export function rowRanges(poly, w, h) {
   const rr = new Int32Array(h * 2).fill(-1);
   let top = -1, bot = -1;
   for (let y = 0; y < h; y++) {

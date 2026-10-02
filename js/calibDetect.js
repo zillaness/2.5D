@@ -103,22 +103,30 @@ function analyseProfile(L, d0, step, pxPerMm, o) {
   const hi = percentile(vals, 0.9), lo = percentile(vals, 0.01);
   if (hi - lo < o.minContrast) return null;
   const thr = (hi + lo) / 2;
-  // The paper edge: the first upward crossing of thr that holds for 1 mm
-  // and follows at least minDeskMm of dark. The frame's own inner edge is
-  // an upward crossing too, but only 2 mm of ink precede it; the desk runs
-  // from the profile's start.
+  // The paper edge: the first upward crossing that holds for 1 mm and
+  // follows at least minDeskMm of desk. The frame's own inner edge is an
+  // upward crossing too, but only 2 mm of ink precede it; the desk runs
+  // from the profile's start. The crossing is taken halfway between the
+  // desk's own level, read over the profile's first millimetres, and the
+  // paper's, so a mid-grey liner, brighter than the paper-to-ink midpoint
+  // but well below the paper, still has an edge; a desk as bright as the
+  // paper has none, as before.
   const holdN = Math.max(2, Math.round(pxPerMm / step));
   const deskN = Math.max(2, Math.round(o.minDeskMm * pxPerMm / step));
+  const lead = [];
+  for (let i = 0; i < Math.min(n, deskN); i++) if (!Number.isNaN(L[i])) lead.push(L[i]);
+  const deskLevel = lead.length ? median(lead) : NaN;
+  const edgeThr = Number.isFinite(deskLevel) && deskLevel < hi - o.minContrast / 2 ? Math.max(thr, (deskLevel + hi) / 2) : thr;
   let edgeI = -1, dark = 0;
   for (let i = 0; i < n - holdN - 1; i++) {
     if (Number.isNaN(L[i]) || Number.isNaN(L[i + 1])) { dark = 0; continue; }
-    if (L[i] < thr) dark++;
-    if (L[i] < thr && L[i + 1] >= thr) {
+    if (L[i] < edgeThr) dark++;
+    if (L[i] < edgeThr && L[i + 1] >= edgeThr) {
       let holds = dark >= deskN;
-      for (let j = i + 1; holds && j <= i + holdN; j++) if (!(L[j] >= thr)) holds = false;
+      for (let j = i + 1; holds && j <= i + holdN; j++) if (!(L[j] >= edgeThr)) holds = false;
       if (holds) { edgeI = i; break; }
       dark = 0;
-    } else if (!(L[i] < thr)) {
+    } else if (!(L[i] < edgeThr)) {
       dark = 0;
     }
   }

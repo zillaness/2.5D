@@ -16607,6 +16607,111 @@ const setTest = await page.evaluate(async () => {
     `set ${r.single.set}, paper ${r.single.paperW.toFixed(1)} × ${r.single.paperH.toFixed(1)} mm`);
 }
 
+// ---------- Drawer scale from a calibration sheet (Part A phase 2, step 17 of calibration_and_backlog_prd_v1.2) ----------
+//
+// Criterion 23: a drawer 60 mm deep photographed from 800 mm with its
+// corners marked at the rim reads its tools 7.5 percent small. A sheet
+// lying on the floor, recognised in the scan photo and measured against the
+// drawer's own rectification, reports the discrepancy within half a
+// percentage point; one click rescales every tool to within 0.5 percent of
+// true; nothing changes before the click; the sheet never arrives as a tool.
+
+console.log('\nDrawer scale from a calibration sheet');
+
+const sheetDrawer = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderTablePhoto } = await import('./test/sheetPhoto.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  // The floor is the table: 600 x 450 mm under a 2400 px camera 800 mm up on
+  // a 40 mm equivalent lens, the liner and the walls one grey, three tools
+  // and a Letter sheet (printed at 1:1) in the free corner.
+  const DW = 600, DH = 450, DEPTH = 60;
+  const tools = [[40, 40, 120, 20], [40, 100, 200, 30], [60, 300, 60, 60]];
+  const tb = await renderTablePhoto({
+    table: { w: DW, h: DH }, W: 2400, H: 1800, supersample: 1, pose: { height: 800, f35: 40 }, desk: '#b0b0b0', noise: 2,
+    sheets: [{ x: 460, y: 300, rot: 0, sheet: 2, count: 4, job: 0x5a, paper: 'letter' }],
+    objects: tools.map(([x, y, w, h]) => ({ x, y, w, h, color: '#2c2c2c' })),
+  });
+  // The rim: the floor's corners one drawer depth nearer the camera.
+  const rim = [[0, 0], [DW, 0], [DW, DH], [0, DH]].map(([x, y]) => tb.truth.project(x, y, DEPTH));
+  const before = {
+    reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] },
+    seg: { ...st.seg }, items: structuredClone(st.layout.items), container: structuredClone(st.layout.container), lens: { ...st.lens },
+  };
+  if (app.scan.active) app.scan.exit();
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  st.image = tb.canvas;
+  st.reference = 'rect';
+  st.scan = { on: true, active: false, parts: [], coin: null, rescale: null, multi: [], undo: [] };
+  st.paper = { ...st.paper, size: 'custom', customW: DW, customH: DH, orientation: 'landscape' };
+  st.seg.autoThreshold = false; st.seg.threshold = 40;
+  st.lens.k1 = 0; st.lens.k2 = 0;
+  st.corners = rim.map(q => ({ x: q.x - 0.5, y: q.y - 0.5 }));
+  st.rectDirty = true;
+  app.syncRefControls();
+  // The finder, as the load would run it: the sheet on the floor is found.
+  const found = app.sheet.findAll();
+  const out = { found: found ? found.sheets.map(s => ({ sheet: s.identity.sheet, job: s.identity.job, words: s.words, verdict: s.verdict && s.verdict.source })) : [], panel: $('sheetPanel').textContent, panelHidden: $('sheetPanel').hidden };
+  if (!app.doRectify()) return { ...out, error: 'rectify failed' };
+  const entered = app.scan.maybeReview();
+  await wait(100);
+  const bar = () => app.scan.parts.find(p => Math.abs(p.bbox.h - p.bbox.w * 20 / 120) < 3 && p.bbox.w > 90 && p.bbox.w < 140);
+  const snap = () => { const b = bar(); return b ? { w: b.bbox.w, h: b.bbox.h, minX: b.bbox.minX } : null; };
+  const sh = app.scan.sheet;
+  out.entered = entered;
+  out.parts = app.scan.parts.length;
+  out.partSizes = app.scan.parts.map(p => `${p.bbox.w.toFixed(1)}×${p.bbox.h.toFixed(1)}`);
+  out.asFound = snap();
+  out.sheet = sh && { identity: sh.identity, measured: sh.measured, nominal: sh.nominal, scaleSource: sh.scaleSource, factor: sh.factor, percent: sh.percent, warn: sh.warn };
+  out.info = { text: $('scanSheetInfo').textContent, cls: $('scanSheetInfo').className, blockShown: !$('scanSheetBlock').hidden, apply: $('scanSheetApplyBtn').textContent, applyShown: !$('scanSheetApplyBtn').hidden };
+  // Nothing changed before the click.
+  out.beforeClick = { bar: snap(), rescale: app.scan.rescale };
+  // One click.
+  const rescale = app.scan.sheetApply();
+  await wait(50);
+  out.afterApply = { bar: snap(), rescale: rescale && { factor: rescale.factor, source: rescale.source, applied: rescale.applied }, info: $('scanSheetInfo').textContent, apply: $('scanSheetApplyBtn').textContent, coinInfoShown: !$('scanCoinInfo').hidden };
+  // Undo through the same button.
+  app.scan.sheetApply();
+  await wait(50);
+  out.afterUndo = { bar: snap(), rescale: app.scan.rescale };
+  // The coin's button also undoes a sheet rescale: apply again, then the coin path.
+  app.scan.sheetApply();
+  await wait(30);
+  const viaCoin = app.scan.coinApply();
+  await wait(30);
+  out.coinUndo = { bar: snap(), rescale: app.scan.rescale, result: viaCoin };
+  // Leave.
+  app.scan.exit();
+  st.scan = before.scan; st.reference = before.reference; st.paper = before.paper; st.seg = before.seg; st.lens = before.lens;
+  st.layout.items = before.items; st.layout.container = before.container;
+  st.sheets = null;
+  app.syncRefControls();
+  return out;
+});
+{
+  const r = sheetDrawer;
+  const truth = { w: 120, h: 20 }, expect = 800 / (800 + 0) ; // the rim is nearer: tools read (800 - 60) / 800 of true
+  const small = (800 - 60) / 800;
+  check('the sheet on the drawer floor is found by the finder in scan mode, with its print scale from its edges, and Step 1 says what it is for',
+    r.found.length === 1 && r.found[0].sheet === 2 && r.found[0].job === 0x5a && r.found[0].verdict === 'edges' && !r.panelHidden && /Step 2 measures it against the drawer/.test(r.panel),
+    `${JSON.stringify(r.found)}; "${r.panel}"`);
+  check('with the corners at the rim the tools read 7.5 percent small, the sheet is masked out of the scan, and nothing changes before the click (criterion 23)',
+    r.entered && r.parts === 3 && r.asFound && Math.abs(r.asFound.w - truth.w * small) < 0.6 && Math.abs(r.asFound.h - truth.h * small) < 0.6 &&
+    r.beforeClick.bar.w === r.asFound.w && !r.beforeClick.rescale,
+    `${r.parts} shapes (${r.partSizes.join(', ')}); the bar reads ${r.asFound && r.asFound.w.toFixed(2)} × ${r.asFound && r.asFound.h.toFixed(2)} mm for 120 × 20 (expected ${(truth.w * small).toFixed(1)})`);
+  check('the sheet reports the discrepancy within half a percentage point, and the panel says so with the one-click rescale (criterion 23)',
+    r.sheet && Math.abs(r.sheet.percent - (small - 1) * 100) < 0.5 && r.sheet.warn && r.sheet.scaleSource === 'edges' && r.info.blockShown && r.info.cls === 'warn' &&
+    /sheet 2 of set 5A lies on the floor/.test(r.info.text) && /reading 7\.\d percent small/.test(r.info.text) && /marked at the rim/.test(r.info.text) && r.info.applyShown && /Rescale every shape by 108\.\d percent/.test(r.info.apply),
+    `${r.sheet && r.sheet.percent.toFixed(2)} percent (true ${((small - 1) * 100).toFixed(2)}); frame ${r.sheet && r.sheet.measured.w.toFixed(1)} × ${r.sheet && r.sheet.measured.h.toFixed(1)} against ${r.sheet && r.sheet.nominal.w.toFixed(1)} × ${r.sheet && r.sheet.nominal.h.toFixed(1)}; "${r.info.text}"`);
+  check('one click rescales every tool to within 0.5 percent of true, and the undo returns the scan as found, from either button (criterion 23)',
+    r.afterApply.bar && Math.abs(r.afterApply.bar.w / truth.w - 1) < 0.005 && Math.abs(r.afterApply.bar.h / truth.h - 1) < 0.005 && r.afterApply.rescale && r.afterApply.rescale.source === 'sheet' &&
+    /Rescaled by 8\.\d percent/.test(r.afterApply.info) && r.afterApply.apply === 'Undo the rescale' &&
+    r.afterUndo.bar && Math.abs(r.afterUndo.bar.w - r.asFound.w) < 1e-6 && !r.afterUndo.rescale && r.coinUndo.bar && Math.abs(r.coinUndo.bar.w - r.asFound.w) < 1e-6 && !r.coinUndo.rescale,
+    `after the click ${r.afterApply.bar && r.afterApply.bar.w.toFixed(2)} × ${r.afterApply.bar && r.afterApply.bar.h.toFixed(2)} mm; after undo ${r.afterUndo.bar && r.afterUndo.bar.w.toFixed(2)}; via the coin's button ${r.coinUndo.bar && r.coinUndo.bar.w.toFixed(2)}`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

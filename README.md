@@ -655,8 +655,7 @@ sheet's band is called out, since a part that close reads larger toward the
 sheet. Untick **Use the sheet fit** to go back to the one sheet under the
 corners.
 
-**Not yet.** A sheet on a drawer's floor for the drawer scan, and parallax
-correction for thick parts, are the rest of phases 2 and 3
+**Not yet.** Parallax correction for thick parts is phase 3
 (`docs/calibration_and_backlog_prd_v1.2.md`). A photo whose code is too
 blurred to read at all is treated as plain paper rather than fitted from the
 frame lines alone.
@@ -1050,6 +1049,20 @@ is not among the shapes (a shiny coin on a pale liner), a circle appears for
 you to drag onto it. The coin itself is never placed, and every placed tool
 carries the factor that was applied, so a saved project says so.
 
+**Checking the scale with a calibration sheet.** A printed calibration sheet
+(see "Calibration sheets" under Step 1) laid in a free corner of the drawer's
+floor does the same check without a coin, and more precisely. It is found on
+the photo as it loads; in the review, the panel says what it measured: "its
+frame measures 181.2 × 240.0 mm against 195.9 × 259.4 mm (print scale from
+its edges). Tools are reading 7.5 percent small." The frame is on the tools'
+plane and its true size is known from the print, so the ratio is exactly the
+rim-versus-floor factor, to a tenth of a percent on the synthetic drawer.
+The same one click rescales every shape, the same **Undo** puts them back,
+and the sheet itself is masked out of the scan, so it never arrives as a
+tool. A liner darker than the paper is enough for the sheet's edges to be
+measured; on a white liner the print scale comes from a print check on
+record, or a 1:1 print is assumed and the panel says so.
+
 **What you get.** Each tool lands exactly where it was photographed, in a
 container already set to the drawer's typed dimensions, and **pinned**. The
 photograph *is* the layout, so Nest will not move them until you untick a pin.
@@ -1176,10 +1189,11 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   correction for thick parts. Phase 1 (one sheet) shipped in v1.30.x and waits
   on its real-photo checkpoint; phases 2 and 3 were signed off on 2026-10-02
   and are being built: finding several sheets shipped in v1.32.0, the
-  joint fit in v1.32.1, rectification and segmentation for a set in v1.32.2.
+  joint fit in v1.32.1, rectification and segmentation for a set in v1.32.2,
+  the drawer scale from a sheet in v1.32.3.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
-  v1.29.0; a calibration sheet on the drawer floor, recognised on its own,
-  will do the same without a coin in Part A phase 2.
+  v1.29.0 and the sheet on the drawer floor in v1.32.3; see "Checking the
+  scale with a calibration sheet" under the drawer scan.
 
 ### Horizon
 
