@@ -15800,6 +15800,158 @@ const guidanceTest = await page.evaluate(async () => {
     r.pure.none === 0 && r.pure.all.join() === 'resolution,code,fit' && r.pure.unknown === 0, JSON.stringify(r.pure));
 }
 
+// ---------- Calibration sheet: segmentation and integration (Part A step 10 of calibration_and_backlog_prd_v1.2) ----------
+//
+// The window masked out of segmentation, the window-edge warning, the sheet
+// read on a photo that comes through the file input as the queue's do, the
+// project's additive sheet block, and criterion 18: saved corners are never
+// re-fitted and the other references are untouched.
+
+console.log('\nCalibration sheet: segmentation and integration');
+
+const integ = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderSheetPhoto } = await import('./test/sheetPhoto.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens }, captureFrac: st.captureFrac };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  st.captureFrac = 0;
+  app.syncRefControls();
+  const sel = $('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  const load = async r => { await new Promise(res => app.loadImageFromURL(r.canvas.toDataURL('image/png'), res)); await wait(50); };
+  const bboxOf = pts => { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const p of pts) { a = Math.min(a, p.x); c = Math.max(c, p.x); b = Math.min(b, p.y); d = Math.max(d, p.y); } return { w: c - a, h: d - b, minX: a, minY: b }; };
+  const base = { paper: 'letter', sheet: 2, count: 4, job: 0x7f, W: 2400, H: 1800, pose: { height: 330, tilt: 6, axis: 20, spin: 3 } };
+  const out = {};
+
+  // An object hard against the window's left edge, 0.5 mm in.
+  const near = await renderSheetPhoto({ ...base, objects: [{ x: 19, y: 120, w: 40, h: 30, r: 3, color: '#23364a' }] });
+  await load(near);
+  app.goStep(2);
+  await wait(100);
+  {
+    const win = app.sheet.window;
+    // The diff map at a frame point, through the same mapping the window took.
+    const { diff, w } = st.diffMap;
+    const at = p => diff[Math.round(p.y) * w + Math.round(p.x)];
+    // The window's left edge midpoint, and a point 6 mm outside it on the track.
+    const px = win.px, ppm = st.rect.pxPerMm;
+    const mid = { x: (px[0].x + px[3].x) / 2, y: (px[0].y + px[3].y) / 2 };
+    // The paper probe sits above the object, which is at mid-height.
+    const onTrack = { x: mid.x - 4.5 * ppm, y: mid.y }, onFrame = { x: mid.x - 7.5 * ppm, y: mid.y }, inWin = { x: px[0].x + 2 * ppm, y: px[0].y + 10 * ppm };
+    const t = app.traceEditor.getTrace();
+    out.near = { win: !!win, winMm: win && win.mm.map(p => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2) })), onTrack: at(onTrack), onFrame: at(onFrame), inWin: at(inWin),
+      bbox: bboxOf(t.outer), warn: app.sheet.warn, info: $('traceInfo').textContent, paperColour: st.diffMap.paperColor };
+  }
+  app.goStep(1);
+  // The same object in the middle: no warning, and the same size.
+  const mid = await renderSheetPhoto({ ...base, objects: [{ x: 80, y: 120, w: 40, h: 30, r: 3, color: '#23364a' }] });
+  await load(mid);
+  app.goStep(2);
+  await wait(100);
+  out.mid = { bbox: bboxOf(app.traceEditor.getTrace().outer), warn: app.sheet.warn, info: $('traceInfo').textContent };
+  app.goStep(1);
+
+  // Criterion 18: a project saved with its corners loads with them as they
+  // are, sheet or no sheet in the photo, and carries the sheet block.
+  const plain = await renderSheetPhoto(base);
+  await load(plain);
+  const fitted = st.corners.map(c => ({ ...c }));
+  $('projIncludePhoto').checked = true;
+  $('projectBtn').click();
+  const text = $('projText').value;
+  $('projCloseBtn').click();
+  const proj = JSON.parse(text);
+  const savedSheet = proj.sheet;
+  // Corners moved by hand in the file, as a person's edit would leave them.
+  proj.corners = proj.corners.map(c => ({ x: c.x + 3, y: c.y - 2 }));
+  $('projectBtn').click();
+  $('projText').value = JSON.stringify(proj);
+  $('projLoadTextBtn').click();
+  for (let i = 0; i < 60 && !(st.image && st.rect); i++) await wait(50);
+  await wait(100);
+  $('projCloseBtn').click();
+  const afterLoad = {
+    corners: st.corners.map((c, i) => Math.hypot(c.x - (fitted[i].x + 3), c.y - (fitted[i].y - 2))),
+    sheet: !!st.sheet, saved: app.sheet.saved && { sheet: app.sheet.saved.identity.sheet, job: app.sheet.saved.identity.job, source: app.sheet.saved.verdict.source },
+    panel: $('sheetPanel').textContent, shown: !$('sheetPanel').hidden, lensK1: st.lens.k1,
+  };
+  // The same project without the block loads too (a project saved before the sheet existed).
+  delete proj.sheet;
+  $('projectBtn').click();
+  $('projText').value = JSON.stringify(proj);
+  $('projLoadTextBtn').click();
+  for (let i = 0; i < 60 && !(st.image && st.rect); i++) await wait(50);
+  await wait(100);
+  $('projCloseBtn').click();
+  const older = { saved: app.sheet.saved, sheet: !!st.sheet, corners: st.corners.map((c, i) => Math.hypot(c.x - (fitted[i].x + 3), c.y - (fitted[i].y - 2))) };
+  // Resaving keeps a saved block even with no live sheet.
+  $('projectBtn').click();
+  const resaved = JSON.parse($('projText').value).sheet;
+  $('projCloseBtn').click();
+
+  // The other references are untouched: coin and scan leave no sheet.
+  await load(plain);
+  const withSheet = !!st.sheet;
+  $('refType').value = 'coin'; $('refType').dispatchEvent(new Event('change'));
+  const onCoin = { sheet: !!st.sheet, panel: $('sheetPanel').hidden };
+  $('refType').value = 'rect'; $('refType').dispatchEvent(new Event('change'));
+  st.scan = { ...st.scan, on: true };
+  app.sheet.recognise();
+  const onScan = { sheet: !!st.sheet };
+  st.scan = { ...st.scan, on: false };
+
+  const bytes = plain.canvas.toDataURL('image/png').split(',')[1];
+  app.sheet.clearChecks();
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens; st.captureFrac = before.captureFrac;
+  app.syncRefControls();
+  return { ...out, savedSheet: savedSheet && { sheet: savedSheet.identity.sheet, source: savedSheet.verdict.source, scale: savedSheet.verdict.scale, k1: savedSheet.fit.k1 },
+    afterLoad, older, resaved: !!resaved, withSheet, onCoin, onScan, bytes };
+});
+{
+  const r = integ;
+  check('the sheet\'s window is carried into the rectified image and everything outside it is background to the segmenter',
+    r.near.win && r.near.onTrack === 0 && r.near.onFrame === 0 && r.near.inWin === 0 &&
+    Math.abs(r.near.winMm[0].x - 18.5) < 0.3 && Math.abs(r.near.winMm[0].y - 18.5) < 0.3 && Math.abs(r.near.winMm[2].x - (215.9 - 18.5)) < 0.3 && Math.abs(r.near.winMm[2].y - (279.4 - 34.5)) < 0.3,
+    `diff on the track ${r.near.onTrack}, on the frame ${r.near.onFrame}, on paper inside ${r.near.inWin}; window ${JSON.stringify(r.near.winMm)}`);
+  check('an object 0.5 mm from the window\'s edge is traced as itself, not with the band, and the trace warns about the band',
+    Math.abs(r.near.bbox.w - 40) < 0.4 && Math.abs(r.near.bbox.h - 30) < 0.4 && r.near.warn && r.near.warn.distMm < 1 && /printed band/.test(r.near.info),
+    `${r.near.bbox.w.toFixed(2)} × ${r.near.bbox.h.toFixed(2)} mm at x ${r.near.bbox.minX.toFixed(2)}; warn ${JSON.stringify(r.near.warn)}; "${r.near.info.replace(/\n/g, ' / ')}"`);
+  check('the same object in the middle of the window traces the same and gets no warning',
+    Math.abs(r.mid.bbox.w - 40) < 0.4 && Math.abs(r.mid.bbox.h - 30) < 0.4 && !r.mid.warn && !/printed band/.test(r.mid.info),
+    `${r.mid.bbox.w.toFixed(2)} × ${r.mid.bbox.h.toFixed(2)} mm; warn ${JSON.stringify(r.mid.warn)}`);
+  check('a project saves an additive sheet block naming the sheet, the verdict and the fit',
+    r.savedSheet && r.savedSheet.sheet === 2 && r.savedSheet.source === 'edges' && Math.abs(r.savedSheet.scale.x - 1) < 0.002 && Number.isFinite(r.savedSheet.k1),
+    JSON.stringify(r.savedSheet));
+  check('a loaded project keeps its stored corners exactly, is not re-fitted, and names the sheet it was saved with (criterion 18)',
+    r.afterLoad.corners.every(d => d < 1e-6) && !r.afterLoad.sheet && r.afterLoad.saved && r.afterLoad.saved.sheet === 2 && r.afterLoad.shown && /saved with calibration sheet 2 of set 7F/.test(r.afterLoad.panel),
+    `corner drift ${Math.max(...r.afterLoad.corners).toExponential(1)} px; live sheet ${r.afterLoad.sheet}; "${r.afterLoad.panel}"`);
+  check('a project without the block loads as before, and a resave of a loaded project keeps the block it came with',
+    r.older.saved === null && !r.older.sheet && r.older.corners.every(d => d < 1e-6) && r.resaved === false,
+    `older: saved ${r.older.saved}, sheet ${r.older.sheet}; resaved block ${r.resaved}`);
+  check('the coin reference and the drawer scan leave no sheet behind',
+    r.withSheet && !r.onCoin.sheet && r.onCoin.panel && !r.onScan.sheet, `coin ${JSON.stringify(r.onCoin)}, scan ${JSON.stringify(r.onScan)}`);
+}
+// A photo through the file input, the path the queue takes, reads its sheet,
+// with the picker left on a drawer's custom size as the scan tests leave it.
+await page.evaluate(() => {
+  const st = window.__app.state; st.reference = 'rect'; st.scan.on = false;
+  st.paper = { ...st.paper, size: 'custom', customW: 120, customH: 100 };
+  document.getElementById('paperSize').value = 'custom';
+  window.__app.syncRefControls(); window.__app.goStep(1);
+});
+await page.setInputFiles('#fileInput', { name: 'sheet-2.png', mimeType: 'image/png', buffer: Buffer.from(integ.bytes, 'base64') });
+await page.waitForFunction(() => window.__app.state.sheet, null, { timeout: 15000 }).catch(() => {});
+const viaInput = await page.evaluate(() => {
+  const s = window.__app.state.sheet;
+  return s ? { sheet: s.identity.sheet, job: s.identity.job, source: s.verdict.source } : null;
+});
+check('a sheet photo through the file input, as the queue loads them, is recognised on load',
+  viaInput && viaInput.sheet === 2 && viaInput.job === 0x7f && viaInput.source === 'edges', JSON.stringify(viaInput));
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

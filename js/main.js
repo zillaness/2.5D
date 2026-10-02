@@ -15,6 +15,8 @@ import { sheetSetSVG, printPageHTML, drawJob, jobHex, paperLabel as calibPaperLa
 import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
 import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance } from './calibVerdict.js';
+import { lensParams as calibLensParams, undistortPixel as calibUndistort } from './lens.js';
+import { computeHomography as calibHomography, applyHomography as calibApplyH } from './homography.js';
 import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
@@ -91,6 +93,9 @@ const state = {
   // is re-derived from the photo, and a project's corners rule on reload).
   sheet: null,
   sheetFit: true,         // the sheet fit snaps the corners; off, a person's own corners rule
+  sheetSaved: null,       // the sheet block a loaded project was saved with, for the panel
+  sheetWindow: null,      // the sheet's clean window in the rectified image, px and mm
+  sheetWindowWarn: null,  // { distMm } when the traced outline runs within 1 mm of the printed band
   rect: null,             // { canvas, pxPerMm }
   rectDirty: true,
   diffMap: null,
@@ -459,6 +464,7 @@ function loadFile(file, onFail, onLoad) {
     return false;
   }
   readPhotoFocal(file);
+  state.sheetSaved = null;
   state.fileName = (file.name || 'object').replace(/\.[^.]+$/, '');
   const url = URL.createObjectURL(file);
   // onLoad runs once the photo is actually on screen, which is the moment a
@@ -592,9 +598,14 @@ function sheetRecognise() {
   if (!applicable || !state.sheetFit) { sheetSyncPanel(); cornerEditor.draw(); return null; }
   const iw = state.image.naturalWidth || state.image.width;
   const ih = state.image.naturalHeight || state.image.height;
+  // The rough paper size only scales recognition's profile geometry, so a
+  // picker left on a drawer's custom size or a bank note must not steer it:
+  // a plain paper stock is used as picked, anything else reads as Letter.
+  const pickedStock = PAPER_SIZES[state.paper.size];
+  const roughPaper = pickedStock && pickedStock.group === 'Paper' ? currentPaper() : paperDims('letter', state.paper.orientation);
   let rec = null, fit = null;
   try {
-    rec = recogniseSheet(state.image, state.corners, currentPaper(), { k1: 0 });
+    rec = recogniseSheet(state.image, state.corners, roughPaper, { k1: 0 });
     if (rec && rec.ok) fit = fitSheet(rec, iw, ih);
   } catch (err) {
     console.error('sheet recognition failed', err);
@@ -670,6 +681,13 @@ function sheetSyncPanel() {
   if (!el) return;
   el.textContent = '';
   const s = state.sheet;
+  if (!s && state.sheetFit && state.sheetSaved) {
+    const sv = state.sheetSaved;
+    el.textContent = `This project was saved with calibration sheet ${sv.identity ? `${sv.identity.sheet} of set ${jobHex(sv.identity.job)}` : ''}` +
+      `${sv.verdict && sv.verdict.message ? `: ${sv.verdict.message}` : '.'} Its saved corners are used as they are.`;
+    el.hidden = false;
+    return;
+  }
   if (!s && state.sheetFit) { el.hidden = true; return; }
   const text = document.createElement('span');
   if (s) {
@@ -896,9 +914,19 @@ function doRectify() {
   }
   state.rect = res;
   state.rectDirty = false;
+  // A calibration sheet's clean window, carried into the rectified image
+  // through the same construction rectify used: everything outside it, the
+  // printed band and the desk, is background to the segmenter, and the
+  // paper colour is sampled just inside it.
+  const win = sheetWindowPx(res);
+  state.sheetWindow = win ? { px: win, mm: win.map(p => ({ x: p.x / res.pxPerMm, y: p.y / res.pxPerMm })) } : null;
+  state.sheetWindowWarn = null;
   // Beyond-paper: give the segmenter the paper rect so it treats both the paper
   // and the surrounding surface as background.
-  state.diffMap = computeDiffMap(res.canvas, marginMm > 0 ? { paperRect: res.paperRect } : {});
+  state.diffMap = computeDiffMap(res.canvas, {
+    ...(marginMm > 0 ? { paperRect: res.paperRect } : {}),
+    ...(win ? { window: win } : {}),
+  });
   if (state.seg.autoThreshold) {
     state.seg.threshold = otsuThreshold(state.diffMap.diff);
     $('threshSlider').value = state.seg.threshold;
@@ -2176,8 +2204,47 @@ function retrace() {
   }
 
   traceEditor.setTrace(outer, holes);
+  state.sheetWindowWarn = sheetWindowProximity(outer);
   updateTraceInfo();
   updateStepButtons();
+}
+
+// The sheet's window as a polygon in the rectified image, or null when the
+// photo has no sheet, the fit is off, or the reference is not plain paper.
+function sheetWindowPx(res) {
+  const s = state.sheet;
+  if (!s || !state.sheetFit || state.reference !== 'rect' || scanOn() || !res || !res.paperRect || !state.corners) return null;
+  const win = s.geom.window;
+  const design = [{ x: win.x, y: win.y }, { x: win.x + win.w, y: win.y }, { x: win.x + win.w, y: win.y + win.h }, { x: win.x, y: win.y + win.h }];
+  const iw = state.image.naturalWidth || state.image.width, ih = state.image.naturalHeight || state.image.height;
+  const lp = calibLensParams(iw, ih), k1 = state.lens.k1, k2 = state.lens.k2;
+  const und = p => ((k1 || k2) ? calibUndistort(p, k1, k2, lp) : p);
+  const R = res.paperRect;
+  const dst = [{ x: R.x, y: R.y }, { x: R.x + R.w, y: R.y }, { x: R.x + R.w, y: R.y + R.h }, { x: R.x, y: R.y + R.h }];
+  const Hinv = calibHomography(state.corners.map(und), dst);
+  if (!Hinv) return null;
+  const pts = design.map(p => { const q = und(s.designToPhoto(p)); return calibApplyH(Hinv, q.x, q.y); });
+  return pts.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)) ? pts : null;
+}
+
+// How close the outline runs to the window's edge, when there is a window:
+// { distMm } under 1 mm, else null. The band beyond the window is masked
+// out, so an object across it would be cut off there without a word.
+function sheetWindowProximity(outer) {
+  const w = state.sheetWindow;
+  if (!w || !outer || outer.length < 3) return null;
+  const poly = w.mm;
+  let best = Infinity;
+  for (const p of outer) {
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2));
+      const d = Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+      if (d < best) best = d;
+    }
+  }
+  return best < 1 ? { distMm: best } : null;
 }
 
 function buildMaskOverlay(mask, w, h) {
@@ -2209,7 +2276,10 @@ function updateTraceInfo(msg) {
   }
   el.textContent =
     `Outline: ${outer.length} pts, ${fmtDim(maxX - minX)} × ${fmtDimL(maxY - minY)}\n` +
-    `Holes: ${holes.length} traced + ${circles.length} circles`;
+    `Holes: ${holes.length} traced + ${circles.length} circles` +
+    (state.sheetWindowWarn
+      ? `\nWithin ${fmtDim(state.sheetWindowWarn.distMm)} mm of the sheet's printed band: the object may run into it. Keep it inside the window's corner ticks.`
+      : '');
 }
 
 // ---------- on-canvas hole tag (type the ⌀ right next to the hole) ----------
@@ -7091,6 +7161,13 @@ function serializeProject(includePhoto) {
     lines: traceEditor.lines,
     holeTemplate: traceEditor.holeTemplate,
     pxPerMm: state.rect ? state.rect.pxPerMm : null,
+    // The calibration sheet this was traced on, additive and informational:
+    // the corners above are what rectify used and are restored as they are.
+    sheet: state.sheet ? {
+      identity: state.sheet.identity, rotation: state.sheet.rotation, pxPerMm: state.sheet.pxPerMm,
+      verdict: { source: state.sheet.verdict.source, stock: state.sheet.verdict.stock, scale: state.sheet.verdict.scale, message: state.sheet.verdict.message },
+      fit: { rmsMm: state.sheet.fit.rmsMm, k1: state.sheet.fit.k1, points: state.sheet.fit.points, lines: state.sheet.fit.lines },
+    } : (state.sheetSaved || null),
     // The JPEG a project was loaded with is written back as it came, so a
     // re-edit that only touches the trace does not re-encode the photo and
     // cost it a generation. A rectification that changed (doRectify, a 90
@@ -7135,6 +7212,14 @@ function loadProject(p, opts = {}) {
   state.scan = {
     on: !!(p.scan && p.scan.on), active: false, parts: [],
   };
+  // A project's corners rule: no sheet is fitted over them on load. What it
+  // was saved with is kept for the panel.
+  state.sheet = null;
+  state.sheetWindow = null;
+  state.sheetWindowWarn = null;
+  state.sheetSaved = p.sheet && typeof p.sheet === 'object' ? p.sheet : null;
+  cornerEditor.overlay = null;
+  sheetSyncPanel();
   if (p.paper) {
     state.paper = { ...state.paper, ...p.paper };
     sizeSel.value = state.paper.size;
@@ -8192,6 +8277,9 @@ window.__app = {
     get fitOn() { return state.sheetFit; },
     set fitOn(v) { state.sheetFit = !!v; },
     checks: () => calibChecks(),
+    get window() { return state.sheetWindow; },
+    get warn() { return state.sheetWindowWarn; },
+    get saved() { return state.sheetSaved; },
     clearChecks: () => { try { localStorage.removeItem(CALIB_CHECKS_KEY); } catch { /* blocked */ } },
     check: (job, sheet) => calibCheckRecord(job, sheet),
   },

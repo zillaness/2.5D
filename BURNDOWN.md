@@ -539,9 +539,37 @@ real-photo checkpoint. Building in the PRD's suggested order.
     `js/paperAspect.js` already makes, sharp with EXIF and ambiguous when
     tilted without it. Worth building on that module in step 10 or later; the
     blur that defeats the code is well past where the guidance fires.
-- ▶ NEXT: Part A step 10, segmentation and integration (the window mask,
-  the window-edge warning, the project's sheet block, criterion 18); then
-  11 to 13; B.3 at any point.
+- ✅ Part A step 10, segmentation and integration. The sheet's clean window
+  is carried into the rectified image through the construction rectify used
+  (`sheetWindowPx`), and `computeDiffMap` takes it as a polygon rasterised
+  to one x-range per row: the paper colour is sampled just inside it and
+  everything outside, the printed band and the desk, is background outright.
+  `retrace` measures the outline's distance to the window and the trace
+  info says when it runs within 1 mm of the band. A project gains an
+  additive `sheet` block (identity, verdict, fit figure, lens term) and a
+  loaded project's corners are never re-fitted; the panel names the sheet
+  it was saved with. Coin, scan and the queue path checked. On the renderer:
+  the diff map reads 0 on the track and the frame, an object 0.5 mm from the
+  window's edge traces as itself at 39.99 x 29.90 mm with the warning, the
+  same object mid-window traces 40.12 x 29.86 with none, saved corners
+  reload with zero drift, a project without the block loads as before, and
+  a sheet photo through the file input is read on load. 801 checks,
+  all passing, no console errors; dist rebuilt and smoke-tested — v1.30.7.
+  - ⚠ Recognition took the paper picker's size as its rough geometry, and a
+    picker left on a drawer's custom 120 x 100 mm, as the scan tests leave
+    it, made a Letter sheet unreadable in the full run while the block alone
+    passed. A plain paper stock is used as picked; anything else reads as
+    Letter, since the rough size only scales the profile spacing.
+  - ▶ **Checkpoint for Sam:** phase 1's real-photo checkpoint. Print a set
+    (Step 1, "Print calibration sheets", Actual size), photograph one sheet
+    at 1:1 and one printed with Fit to page on, one under a lamp, each with a
+    steel rule on it, and add them with `test/mark-photo.html`. The suite
+    records their baselines; the ledger's figures for the sheet so far are
+    all synthetic, and the PRD's constraints say exactly why that is not
+    enough: a rendered paper edge has no curl, shadow or pale desk.
+- ▶ NEXT: Part A step 11, the lighting model (droppable); step 12, ruler
+  verification (droppable); step 13, README and the PRD's status line; B.3
+  at any point.
 
 ### Handoff to a fresh session, 2026-10-02
 

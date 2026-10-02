@@ -14,7 +14,35 @@ export function computeDiffMap(canvas, opts = {}) {
   // unchanged.
   const borderPct = typeof opts === 'number' ? opts : (opts.borderPct || 0.04);
   const paperRect = typeof opts === 'object' ? opts.paperRect : null;
+  // opts.window: a convex polygon in canvas px (a calibration sheet's clean
+  // window). The paper colour is sampled just inside it and everything
+  // outside it, the printed band and the desk, is background outright. The
+  // polygon is rasterised to one x-range per row so the test per pixel is a
+  // comparison, not a point-in-polygon.
+  const win = typeof opts === 'object' && Array.isArray(opts.window) && opts.window.length >= 3 ? opts.window : null;
   const w = canvas.width, h = canvas.height;
+  let rowRange = null, winTop = -1, winBot = -1;
+  if (win) {
+    rowRange = new Int32Array(h * 2).fill(-1);
+    for (let y = 0; y < h; y++) {
+      const yc = y + 0.5;
+      let lo = Infinity, hi = -Infinity;
+      for (let i = 0; i < win.length; i++) {
+        const a = win[i], b = win[(i + 1) % win.length];
+        if ((a.y <= yc && b.y > yc) || (b.y <= yc && a.y > yc)) {
+          const x = a.x + (yc - a.y) / (b.y - a.y) * (b.x - a.x);
+          if (x < lo) lo = x;
+          if (x > hi) hi = x;
+        }
+      }
+      if (lo <= hi) {
+        rowRange[2 * y] = Math.max(0, Math.ceil(lo)); rowRange[2 * y + 1] = Math.min(w - 1, Math.floor(hi));
+        if (winTop < 0) winTop = y;
+        winBot = y;
+      }
+    }
+  }
+  const inWin = (x, y) => !rowRange || (rowRange[2 * y] >= 0 && x >= rowRange[2 * y] && x <= rowRange[2 * y + 1]);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const { data } = ctx.getImageData(0, 0, w, h);
   const band = Math.max(2, Math.round(Math.min(w, h) * borderPct));
@@ -36,7 +64,18 @@ export function computeDiffMap(canvas, opts = {}) {
   };
 
   let paper, bg = null;
-  if (paperRect) {
+  if (win) {
+    // A ring just inside the window: clean paper all the way round the part.
+    paper = sampleColor((x, y) => inWin(x, y) &&
+      (x < rowRange[2 * y] + band || x > rowRange[2 * y + 1] - band || y < winTop + band || y > winBot - band));
+    if (paperRect) {
+      const R = paperRect;
+      const inside = (x, y) => x >= R.x && x < R.x + R.w && y >= R.y && y < R.y + R.h;
+      bg = sampleColor((x, y) => !inside(x, y) &&
+        x >= R.x - band * 3 && x < R.x + R.w + band * 3 &&
+        y >= R.y - band * 3 && y < R.y + R.h + band * 3);
+    }
+  } else if (paperRect) {
     const R = paperRect;
     const inside = (x, y) => x >= R.x && x < R.x + R.w && y >= R.y && y < R.y + R.h;
     // Ring just inside the paper edges = paper colour.
@@ -62,11 +101,12 @@ export function computeDiffMap(canvas, opts = {}) {
   const diff = new Uint8ClampedArray(w * h);
   for (let i = 0, p = 0; i < w * h; i++, p += 4) {
     if (data[p + 3] < 128) { diff[i] = 0; continue; } // no-data → background
+    if (rowRange && !inWin(i % w, (i / w) | 0)) { diff[i] = 0; continue; } // the printed band and beyond
     let d = score(p, paper);
     if (bg) d = Math.min(d, score(p, bg));            // background if near either
     diff[i] = Math.min(255, d);
   }
-  return { diff, w, h, paperColor: paper, bgColor: bg };
+  return { diff, w, h, paperColor: paper, bgColor: bg, window: win || null };
 }
 
 export function otsuThreshold(diff) {

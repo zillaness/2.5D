@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.11
+version: 1.2.12
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -834,7 +834,10 @@ checkpoint that needs a person.
     additive `sheet` block in projects. Tests: criterion 18; an object traced
     at 96 percent measures true. **Checkpoint:** real photos of printed
     sheets, one printed with Fit to page on, one under a lamp, added to the
-    fixture set.
+    fixture set. *Shipped v1.30.7, 2026-10-02, checkpoint pending: the
+    window is carried into the rectified image through the same construction
+    rectify used and `computeDiffMap` takes it as a polygon, sampling the
+    paper just inside it and making everything outside it background.*
 11. **Lighting model.** Criterion 12. Droppable.
 12. **Ruler verification.** Droppable.
 13. **README** and this PRD's status line.
@@ -1140,6 +1143,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.12 (2026-10-02): Part A step 10 shipped in v1.30.7; the real-photo checkpoint waits on Sam's prints.
 - v1.2.11 (2026-10-02): Part A step 9 shipped in v1.30.6.
 - v1.2.10 (2026-10-02): Part A step 8 shipped in v1.30.5.
 - v1.2.9 (2026-10-02): Part A step 7 shipped in v1.30.4.
