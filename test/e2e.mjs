@@ -16121,6 +16121,50 @@ check('the nest reports where its tests go: screening and settling add up to the
   nestSplit.placed === 8 && nestSplit.screen + nestSplit.settle === nestSplit.tests && nestSplit.screen > 0 && nestSplit.settle > 0,
   `${nestSplit.tests} tests: ${nestSplit.screen} screening, ${nestSplit.settle} settling`);
 
+// ---------- Nest speed: the exact reject before Clipper (Part B.3, exact change) ----------
+//
+// The occupancy grid may only ever say no where Clipper would have said no.
+// Proven here by packing the bench's kind of drawer with the grid and
+// without it: the placements, the test count and the area must be the same.
+
+const nestExact = await page.evaluate(async () => {
+  const { nestLayout, packProfileValues, roundedRect } = await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const ell = (w, h, t) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: t }, { x: t, y: t }, { x: t, y: h }, { x: 0, y: h }];
+  const mk = (name, outer) => {
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    for (const q of outer) { minX = Math.min(minX, q.x); maxX = Math.max(maxX, q.x); minY = Math.min(minY, q.y); maxY = Math.max(maxY, q.y); }
+    return { name, outer, holes: [], circles: [], x: 0, y: 0, rot: 0, thickness: 6, notch: { dia: 20, x: (minX + maxX) / 2, y: (minY + maxY) / 2 } };
+  };
+  const items = [];
+  for (let k = 0; k < 18; k++) {
+    const j = k % 12;
+    items.push(j % 3 === 0 ? mk('L' + k, ell(50 + j, 30 + j, 12)) : j % 3 === 1 ? mk('r' + k, rect(60 - j, 18 + j)) : mk('s' + k, rect(24 + j, 24 + j)));
+  }
+  const drawer = roundedRect(250, 180, 500, 360, 12);
+  const out = {};
+  for (const prof of ['Dense', 'Access']) {
+    const v = packProfileValues(prof);
+    const t0 = performance.now();
+    const withGrid = nestLayout(drawer, items, v);
+    const t1 = performance.now();
+    const without = nestLayout(drawer, items, { ...v, occupancyGrid: false });
+    const t2 = performance.now();
+    out[prof] = {
+      same: JSON.stringify(withGrid.placements) === JSON.stringify(without.placements) && JSON.stringify(withGrid.unplaced) === JSON.stringify(without.unplaced),
+      tests: [withGrid.stats.tests, without.stats.tests], area: [withGrid.stats.area, without.stats.area],
+      placed: withGrid.placements.length, ms: [Math.round(t1 - t0), Math.round(t2 - t1)],
+    };
+  }
+  return out;
+});
+for (const prof of ['Dense', 'Access']) {
+  const r = nestExact[prof];
+  check(`the occupancy grid changes nothing about a ${prof} pack: same placements, same test count, same area`,
+    r.same && r.tests[0] === r.tests[1] && r.area[0] === r.area[1] && r.placed > 0,
+    `${r.placed} placed, ${r.tests[0]} tests either way, area ${Math.round(r.area[0])}; ${r.ms[0]} ms with the grid, ${r.ms[1]} without`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

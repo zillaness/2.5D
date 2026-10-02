@@ -1150,9 +1150,9 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0; a calibration sheet on the drawer floor, recognised on its own,
   will do the same without a coin in Part A phase 2.
-- **Nest speed** — the cheap-reject pass shipped in v1.27.5. What is left is
-  Dense trying 24 rotations per tool against Access's two, and an overfull
-  drawer the time budget never stops. See Known gaps.
+- **Nest speed** — an exact reject before Clipper shipped in v1.31.0 and
+  took a 30-tool Dense pack from 3.5 s to 0.5 s with the pack unchanged. What
+  is left is a bound on the overfull drawer; see Known gaps.
 
 ### Horizon
 
@@ -1182,17 +1182,14 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   only; it has not been checked against real photographs of real graph paper.
 - Puzzle-tab kerf compensation (the `fit` field) is verified in tests but has
   not been cut on a real laser.
-- Nesting is slower than criterion 6 of `docs/nesting_prd_v1.1.md` claims. It
-  yields to the event loop and reports progress, so it is watchable and
-  cancellable, but a full drawer is seconds rather than the 1.3 to 1.5 s the
-  PRD records. `test/nest-bench.mjs` measures it; run it before believing any
-  figure here, including this one, because two things make nest timings easy to
-  get wrong. The first pack on a fresh page pays for JIT compilation of the
-  whole geometry path and can read five times slow, so a cold number is not the
-  steady-state one. And the profiles differ in how many positions they try, not
-  in what a position costs: on a 30-tool bench the two come out at the same
-  0.06 ms per test, and Dense is the slower profile overall only because
-  `rotationStep: 15` with free rotation gives it six times as many candidates
-  to test as Access's 90 degrees.
+- Nest timings are easy to get wrong, so `test/nest-bench.mjs` is the only
+  figure to believe: it warms the page first (a cold pack pays for JIT
+  compilation of the whole geometry path and can read five times slow) and
+  reports the minimum of five runs. On its 30-tool drawer, Dense places
+  everything in about 0.5 s and Access in about 0.2 s, almost all of it
+  screening candidates in top-left order until three pass; an occupancy grid
+  of what is already placed rejects the overlapping ones before Clipper, and
+  `--gate` checks that any change to the nest still places as many tools
+  within 1 percent of the recorded packed area.
 - The overfull drawer has no bound. The time budget disarms itself while any
   tool is still unplaced, which is the case a user most wants to escape.

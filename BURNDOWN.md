@@ -626,8 +626,23 @@ real-photo checkpoint. Building in the PRD's suggested order.
     touch the bench; the exact change to make is a cheap exact reject in
     screening, before Clipper. The overfull drawer with distinct shapes is
     where restarts still matter.
-- ▶ NEXT: B.3, the exact reject in screening; then coarse-to-fine rotation
-  and the early stop behind the gate; then the overfull drawer.
+- ✅ Part B.3, the exact reject. An occupancy grid of the placed inflated
+  loops at 1 mm, a cell marked only when wholly inside a loop (the loop
+  eroded by 0.85 mm, half a cell's diagonal plus a margin for Clipper's arc
+  approximation, and the cell centre inside that), and per-variant probe
+  points at least 0.85 mm inside the candidate's own inflated loop: a probe
+  on a marked cell proves at least a quarter disc of overlap, 0.57 mm²
+  against validAt's 0.05 mm² tolerance, so validAt says no before Clipper.
+  It never says yes. Measured warm and quiet, the gate passing with every
+  test count and area identical: Dense 3546 to 477 ms, Access 595 to 211,
+  the rest in proportion. Criterion "Dense places 30 tools in under 2 s"
+  met by a change that alters nothing. `occupancyGrid: false` exists only
+  so the suite can prove that: with and without, same placements, same
+  tests, same area. 811 checks, all passing, no console errors;
+  dist rebuilt and smoke-tested — v1.31.0.
+- ▶ NEXT: B.3, the overfull drawer: measure 40 distinct shapes where 30 fit,
+  then the early stop on restarts behind the gate; coarse-to-fine rotation
+  only if a bound still needs it.
 
 ### Handoff to a fresh session, 2026-10-02
 

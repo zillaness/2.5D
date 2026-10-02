@@ -13,7 +13,7 @@ import {
   buildSolid, circleToPolygon, glyphIslands,
   MeshBuilder, zipRings, addCap, circleRing, emitBand, emitDisk,
 } from './mesh.js';
-import { signedArea } from './contour.js';
+import { signedArea, pointInPolygon } from './contour.js';
 import { labelLoops, labelBounds } from './text.js';
 
 const CL = () => window.ClipperLib;
@@ -603,7 +603,74 @@ export const NEST_DEFAULTS = {
   settleRounds: 6,     // slide up / slide left alternations
   settleTol: 0.25,     // mm, the binary-search floor for a slide
   keepTop: 3,          // best-scoring valid candidates that get settled
+  occupancyGrid: true, // the exact reject before Clipper (occGrid); off only to prove it exact
 };
+
+// ---------- the occupancy grid: an exact reject before Clipper (B.3) ----------
+//
+// Screening is where a Dense pack spends its time: candidates are tried in
+// top-left order until three pass, and most of the ones tried overlap
+// something already placed and pay for a Clipper intersection to find out.
+// This answers the common case without Clipper and without changing a single
+// answer. Every placed inflated loop is drawn into a 1 mm grid, a cell marked
+// only when it lies wholly inside the loop (the loop eroded by 0.85 mm, half
+// a cell's diagonal plus a margin for Clipper's arc approximation, and the
+// cell's centre inside that). Each variant carries probe points that sit at
+// least 0.85 mm inside its own inflated loop. A probe that lands on a marked
+// cell proves the two loops share at least a quarter disc of radius 0.85 mm,
+// 0.57 mm², which is past the 0.05 mm² tolerance validAt uses, so validAt can
+// say no at once. It never says yes: a candidate the grid cannot reject goes
+// on to Clipper exactly as before. Placement for placement, the pack is the
+// one it was.
+const OCC_CELL = 1;
+const OCC_ERODE = 0.85;
+const OCC_PROBE_STEP = 2;
+
+function occGrid(bb) {
+  const x0 = bb.minX - OCC_CELL, y0 = bb.minY - OCC_CELL;
+  const w = Math.ceil((bb.maxX - x0) / OCC_CELL) + 2, h = Math.ceil((bb.maxY - y0) / OCC_CELL) + 2;
+  return { x0, y0, w, h, cells: new Uint8Array(w * h) };
+}
+
+// Cell centres inside the eroded loop, in grid units, each with its mm point.
+function occInside(loop, step, origin) {
+  const out = [];
+  for (const L of offsetLoop(loop, -OCC_ERODE)) {
+    if (!L || L.length < 3) continue;
+    const bb = bboxOf(L);
+    const xs = Math.floor((bb.minX - origin.x) / step), xe = Math.ceil((bb.maxX - origin.x) / step);
+    const ys = Math.floor((bb.minY - origin.y) / step), ye = Math.ceil((bb.maxY - origin.y) / step);
+    for (let gy = ys; gy <= ye; gy++) {
+      for (let gx = xs; gx <= xe; gx++) {
+        const p = { x: origin.x + (gx + 0.5) * step, y: origin.y + (gy + 0.5) * step };
+        if (pointInPolygon(p, L)) out.push({ gx, gy, x: p.x, y: p.y });
+      }
+    }
+  }
+  return out;
+}
+
+function occMark(grid, loop) {
+  for (const c of occInside(loop, OCC_CELL, { x: grid.x0, y: grid.y0 })) {
+    if (c.gx >= 0 && c.gy >= 0 && c.gx < grid.w && c.gy < grid.h) grid.cells[c.gy * grid.w + c.gx] = 1;
+  }
+}
+
+// A variant's probes, in its own frame (item origin at 0, 0).
+function occProbes(loops) {
+  const out = [];
+  for (const L of loops) for (const c of occInside(L, OCC_PROBE_STEP, { x: 0, y: 0 })) out.push({ x: c.x, y: c.y });
+  return out;
+}
+
+function occHit(grid, probes, X, Y) {
+  const { x0, y0, w, h, cells } = grid;
+  for (let i = 0; i < probes.length; i++) {
+    const gx = Math.floor((probes[i].x + X - x0) / OCC_CELL), gy = Math.floor((probes[i].y + Y - y0) / OCC_CELL);
+    if (gx >= 0 && gy >= 0 && gx < w && gy < h && cells[gy * w + gx]) return true;
+  }
+  return false;
+}
 
 const NEST_EPS = 1e-6;
 const NEST_TOL = 0.05; // mm^2 — layoutConflicts' own tolerance, deliberately
@@ -992,11 +1059,18 @@ function* nestCore(containerOuter, items, opts = {}) {
   }
 
   // Is the variant placeable with its item origin at (X, Y)?
+  let occ = null;
   function validAt(v, X, Y, placed) {
     tests++;
     if (phase === 'settle') settleTests++; else screenTests++;
     const bb = bbShift(v.bb, X, Y);
     if (!bbIn(bb, limitBB)) return false;
+    // The exact reject: a probe of this variant on a cell wholly inside a
+    // placed loop is an overlap Clipper would find; see occGrid.
+    if (occ) {
+      if (v.probes === undefined) v.probes = occProbes(loopsAt(v, 0, 0));
+      if (occHit(occ, v.probes, X, Y)) return false;
+    }
     let loops = null;
     if (!limitIsRect && !(limitIn && bbIn(bb, limitIn))) {
       loops = loopsAt(v, X, Y);
@@ -1162,6 +1236,8 @@ function* nestCore(containerOuter, items, opts = {}) {
 
   function* runPass(order, pass) {
     const placed = pinBase.concat(obsBase);
+    occ = o.occupancyGrid === false ? null : occGrid(limitBB);
+    if (occ) for (const p of placed) for (const L of p.loops) occMark(occ, L);
     const missed = [];
     let done = 0;
     for (const i of order) {
@@ -1221,8 +1297,11 @@ function* nestCore(containerOuter, items, opts = {}) {
         }
       }
       phase = 'screen';
-      placed.push(record(i, bestC.v, bestC.X, bestC.Y, false));
+      const rec = record(i, bestC.v, bestC.X, bestC.Y, false);
+      placed.push(rec);
+      if (occ) for (const L of rec.loops) occMark(occ, L);
     }
+    occ = null;
     let bb = null;
     for (const p of placed) {
       // A corridor is foam kept clear, not something packed, so it has no
