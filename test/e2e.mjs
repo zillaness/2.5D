@@ -16107,6 +16107,20 @@ const rulerTest = await page.evaluate(async () => {
     `${sc(r.forgotten)}; implausible ${JSON.stringify(r.implausible.scale)}`);
 }
 
+// ---------- Nest speed: where the tests go (Part B.3 of calibration_and_backlog_prd_v1.2, measurement) ----------
+
+const nestSplit = await page.evaluate(async () => {
+  const { nestLayout, packProfileValues } = await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const items = [];
+  for (let k = 0; k < 8; k++) items.push({ name: 't' + k, outer: rect(40 + 3 * k, 20 + 2 * k), holes: [], circles: [], x: 0, y: 0, rot: 0, thickness: 6 });
+  const res = nestLayout(rect(300, 200), items, packProfileValues('Dense'));
+  return { tests: res.stats.tests, screen: res.stats.screenTests, settle: res.stats.settleTests, placed: res.placements.length };
+});
+check('the nest reports where its tests go: screening and settling add up to the total, and both are counted',
+  nestSplit.placed === 8 && nestSplit.screen + nestSplit.settle === nestSplit.tests && nestSplit.screen > 0 && nestSplit.settle > 0,
+  `${nestSplit.tests} tests: ${nestSplit.screen} screening, ${nestSplit.settle} settling`);
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

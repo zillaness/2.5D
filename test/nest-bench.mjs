@@ -4,6 +4,10 @@
 // does not assert, and its timings are machine-dependent.
 //
 //   node test/nest-bench.mjs [path-to-chromium]
+//   node test/nest-bench.mjs --record     write test/fixtures/nest_baseline.json
+//   node test/nest-bench.mjs --gate       fail if any config places fewer tools
+//                                         than the baseline or packs more than
+//                                         1 percent larger (B.3's quality gate)
 
 import { createRequire } from 'module';
 import http from 'http';
@@ -31,7 +35,10 @@ const server = await new Promise(res => {
   s.listen(0, '127.0.0.1', () => res(s));
 });
 
-const exe = process.argv[2] || process.env.CHROMIUM_PATH || (() => {
+const args = process.argv.slice(2);
+const record = args.includes('--record'), gate = args.includes('--gate');
+const BASELINE = path.join(root, 'test', 'fixtures', 'nest_baseline.json');
+const exe = args.find(a => !a.startsWith('--')) || process.env.CHROMIUM_PATH || (() => {
   // Same search the suite does: a pinned playwright build sits in its own
   // versioned directory, so glob the parent rather than hard-coding a version.
   const base = '/opt/pw-browsers';
@@ -113,14 +120,34 @@ const out = await page.evaluate(async () => {
     }
     rows.push({ profile: label, ms: Math.round(best),
       placed: res.placements.length, of: items.length,
-      tests: res.stats && res.stats.tests });
+      tests: res.stats && res.stats.tests, screen: res.stats && res.stats.screenTests, settle: res.stats && res.stats.settleTests,
+      passes: res.stats && res.stats.passes, area: res.stats && res.stats.area });
   }
   return rows;
 });
 
 for (const r of out) {
   console.log(`${r.profile.padEnd(11)} ${String(r.ms).padStart(6)} ms   ` +
-    `${r.placed}/${r.of} placed   ${r.tests} tests`);
+    `${r.placed}/${r.of} placed   ${r.tests} tests (${r.screen} screening, ${r.settle} settling)   ${r.passes} passes   area ${Math.round(r.area)}`);
+}
+// The quality gate: a speedup may change packs, but never place fewer tools
+// than the recorded pack did, nor pack more than 1 percent larger.
+if (record) {
+  const base = {};
+  for (const r of out) base[r.profile] = { placed: r.placed, of: r.of, area: Math.round(r.area), tests: r.tests };
+  fs.writeFileSync(BASELINE, JSON.stringify(base, null, 2) + '\n');
+  console.log(`recorded ${path.relative(root, BASELINE)}`);
+} else if (gate) {
+  const base = JSON.parse(fs.readFileSync(BASELINE, 'utf8'));
+  let bad = 0;
+  for (const r of out) {
+    const b = base[r.profile];
+    if (!b) continue;
+    const fewer = r.placed < b.placed, larger = r.area > b.area * 1.01;
+    if (fewer || larger) { bad++; console.log(`GATE ${r.profile}: ${fewer ? `placed ${r.placed} of ${b.placed}` : ''} ${larger ? `area ${Math.round(r.area)} against ${b.area} (+${((r.area / b.area - 1) * 100).toFixed(2)} percent)` : ''}`); }
+  }
+  console.log(bad ? `${bad} config(s) fail the gate` : 'gate: every config places as many as before within 1 percent of its area');
+  if (bad) process.exitCode = 1;
 }
 
 await browser.close();

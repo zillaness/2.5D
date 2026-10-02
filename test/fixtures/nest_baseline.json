@@ -1,0 +1,38 @@
+{
+  "Dense": {
+    "placed": 30,
+    "of": 30,
+    "area": 71874,
+    "tests": 42280
+  },
+  "Access": {
+    "placed": 30,
+    "of": 30,
+    "area": 105280,
+    "tests": 6949
+  },
+  "Acc -label": {
+    "placed": 30,
+    "of": 30,
+    "area": 82947,
+    "tests": 6675
+  },
+  "Acc -notch": {
+    "placed": 30,
+    "of": 30,
+    "area": 105280,
+    "tests": 6949
+  },
+  "Acc rect": {
+    "placed": 30,
+    "of": 30,
+    "area": 106263,
+    "tests": 5189
+  },
+  "Acc bare": {
+    "placed": 30,
+    "of": 30,
+    "area": 82947,
+    "tests": 4963
+  }
+}

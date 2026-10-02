@@ -950,6 +950,11 @@ function* nestCore(containerOuter, items, opts = {}) {
   };
 
   let tests = 0;
+  // Where the tests go (calibration_and_backlog_prd_v1.2, B.3): screening is
+  // the candidates tried in sorted order until keepTop pass, settling is the
+  // binary-search slides of each kept candidate. Reported in stats, so a
+  // change can be aimed at the half that costs.
+  let screenTests = 0, settleTests = 0, phase = 'screen';
 
   // Every loop a variant occupies at (X, Y): the inflated pocket, and the
   // reserved label box when the profile asks for one. A tool and its name are
@@ -989,6 +994,7 @@ function* nestCore(containerOuter, items, opts = {}) {
   // Is the variant placeable with its item origin at (X, Y)?
   function validAt(v, X, Y, placed) {
     tests++;
+    if (phase === 'settle') settleTests++; else screenTests++;
     const bb = bbShift(v.bb, X, Y);
     if (!bbIn(bb, limitBB)) return false;
     let loops = null;
@@ -1201,6 +1207,7 @@ function* nestCore(containerOuter, items, opts = {}) {
       }
       if (!keep.length) { missed.push(i); continue; }
       let bestC = null;
+      phase = 'settle';
       for (const c of keep) {
         const s = settle(c.v, c.X, c.Y, placed);
         const crowd = crowding(s.bb, placed);
@@ -1213,6 +1220,7 @@ function* nestCore(containerOuter, items, opts = {}) {
           bestC = cand;
         }
       }
+      phase = 'screen';
       placed.push(record(i, bestC.v, bestC.X, bestC.Y, false));
     }
     let bb = null;
@@ -1324,6 +1332,8 @@ function* nestCore(containerOuter, items, opts = {}) {
       passes: seen.size,
       budgetHit,
       tests,
+      screenTests,
+      settleTests,
       bbox: best.bbox,
       labelled: best.placed.filter(p => !p.obstacle && p.label).length,
       corridors: obsBase.length,

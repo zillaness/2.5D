@@ -604,8 +604,30 @@ real-photo checkpoint. Building in the PRD's suggested order.
   checkpoint pending and names the two criteria revised while building.
   808 checks, all passing, no console errors; dist rebuilt and
   smoke-tested — v1.30.10.
-- ▶ NEXT: B.3, nest speed and the overfull drawer: measure first on
-  `test/nest-bench.mjs`, then exact changes, then the quality-gated ones.
+- ✅ Part B.3, the measurement. `stats.screenTests` and `stats.settleTests`
+  split the nest's test count into the candidates tried until keepTop pass
+  and the binary-search slides of the kept ones; the bench prints the split,
+  the passes and the packed area, and gains `--record` and `--gate`:
+  `test/fixtures/nest_baseline.json` holds today's placed count and area per
+  config, and the gate fails any change that places fewer tools or packs more
+  than 1 percent larger (open question 14's quality gate). Measured warm and
+  quiet on this machine: Dense 3546 ms, 42,280 tests, of which 39,853 are
+  SCREENING and 2,427 settling, in ONE pass; Access 595 ms, 6,949 tests
+  (4,381 screening). 809 checks, all passing, no console errors; dist
+  rebuilt and smoke-tested — v1.30.11.
+  - ⚠ **The diagnosis in the PRD was wrong in two ways.** Dense does not
+    "run all 20 restarts to completion": on the bench's thirty tools of
+    twelve shapes every reshuffle within an equal-area group dedupes to the
+    same shape key, so one pass runs and the 42,280 tests are that one
+    pass. And settling is not where the time goes: 94 percent of Dense's
+    tests are screening, candidates tried in top-left order until three
+    pass, most of them overlapping something already placed and paying for
+    a Clipper intersection to find out. An early stop on restarts cannot
+    touch the bench; the exact change to make is a cheap exact reject in
+    screening, before Clipper. The overfull drawer with distinct shapes is
+    where restarts still matter.
+- ▶ NEXT: B.3, the exact reject in screening; then coarse-to-fine rotation
+  and the early stop behind the gate; then the overfull drawer.
 
 ### Handoff to a fresh session, 2026-10-02
 
