@@ -15256,6 +15256,120 @@ check('Download writes one SVG file per sheet under one recorded job, and the pa
   printPanel.download.records === 3 && printPanel.download.newest === printPanel.download.job && printPanel.closed,
   `${printPanel.download.clicks} files: ${printPanel.download.names.join(', ')}`);
 
+// ---------- Calibration sheet: SVG-rendered synthetic photos (Part A step 5 of calibration_and_backlog_prd_v1.2) ----------
+//
+// The renderer the remaining steps test against (test/sheetPhoto.js). The
+// photo is rasterised from the SVG the print page produces, through a print
+// scale and a camera, and every stage hands back its truth. Checked here by
+// sampling the photo where the truth says ink and paper must be.
+
+console.log('\nCalibration sheet: SVG-rendered synthetic photos');
+
+const sheetRender = await page.evaluate(async () => {
+  const { renderSheetPhoto, photoSampler, printAffine, stockDims } = await import('./test/sheetPhoto.js');
+  const t0 = performance.now();
+  const flat = await renderSheetPhoto({ paper: 'letter', sheet: 2, count: 4, job: 0x7f, W: 2000, H: 1500, pose: { height: 420 } });
+  const ms = performance.now() - t0;
+  const at = photoSampler(flat.canvas);
+  const T = flat.truth;
+  // Every black cell's centre is dark and a white clock cell's centre is
+  // bright, through the truth mapping. Two cells per word keeps it quick.
+  let dark = 0, bright = 0, nd = 0, nb = 0;
+  for (const s of T.geom.sides) {
+    for (const w of s.list) {
+      for (const c of w.cells) {
+        if (c.row !== 0) continue;
+        const q = T.designToPhoto({ x: c.x + c.w / 2, y: c.y + c.h / 2 });
+        const v = at(q.x, q.y);
+        if (c.clock) { nd++; if (v < 90) dark++; } else if (c.k === 1 || c.k === 17) { nb++; if (v > 180) bright++; }
+      }
+    }
+  }
+  // The frame line's centreline is dark, the gap beside it is paper.
+  const fcen = T.geom.frame.centre;
+  const frameDark = [], gapBright = [];
+  for (let i = 0; i < 20; i++) {
+    const x = fcen.x + (i + 0.5) / 20 * fcen.w;
+    frameDark.push(at(...Object.values(T.designToPhoto({ x, y: fcen.y }))));
+    gapBright.push(at(...Object.values(T.designToPhoto({ x, y: fcen.y + 1.5 }))));
+  }
+  // Outside the paper is desk.
+  const desk = at(10, 10);
+  // Paper corners sit where the camera put them: just inside is paper, just outside desk.
+  const q0 = T.quad[0];
+  const cornerIn = at(q0.x + 3, q0.y + 3), cornerOut = at(q0.x - 3, q0.y - 3);
+
+  // A 96 percent print about the centre: the frame line moves inward by
+  // 2 percent of the half-size on each side, and the renderer's truth says so.
+  const scaled = await renderSheetPhoto({ paper: 'letter', sheet: 1, count: 1, job: 1, W: 1600, H: 1200, pose: { height: 420 }, scale: 0.96 });
+  const atS = photoSampler(scaled.canvas);
+  const aff = printAffine({ design: stockDims('letter'), stock: stockDims('letter'), scale: 0.96 });
+  const mid = aff.map({ x: 11, y: 139.7 });                   // left frame centreline, mid-height
+  const atIntended = atS(...Object.values(scaled.truth.paperToPhoto(mid)));
+  const atUnscaled = atS(...Object.values(scaled.truth.paperToPhoto({ x: 11, y: 139.7 })));
+
+  // Letter layout on A4 paper, anchored top-left with an offset and skew: the
+  // paper is A4-shaped and the ink lands where the affine says.
+  const onA4 = await renderSheetPhoto({ paper: 'letter', stock: 'A4', sheet: 1, count: 1, job: 2, W: 1600, H: 1200, pose: { height: 420 },
+    scale: 0.94, anchor: 'topleft', offset: { x: 1, y: 1 }, skewDeg: 0.5 });
+  const atA = photoSampler(onA4.canvas);
+  const a4 = onA4.truth;
+  const a4Aspect = Math.hypot(a4.quad[1].x - a4.quad[0].x, a4.quad[1].y - a4.quad[0].y) / Math.hypot(a4.quad[3].x - a4.quad[0].x, a4.quad[3].y - a4.quad[0].y);
+  const topFrame = atA(...Object.values(a4.designToPhoto({ x: 100, y: 11 })));
+  const a4Cells = a4.cells.black.slice(0, 40).map(c => atA(...Object.values(a4.designToPhoto({ x: c.x + c.w / 2, y: c.y + c.h / 2 }))));
+
+  // The lost bottom side: a 20 mm printer margin swallows the bottom frame.
+  const clipped = await renderSheetPhoto({ paper: 'A4', sheet: 1, count: 1, job: 3, W: 1600, H: 1200, pose: { height: 420 }, bottomMargin: 20 });
+  const atC = photoSampler(clipped.canvas);
+  const botFrame = atC(...Object.values(clipped.truth.designToPhoto({ x: 100, y: 297 - 11 })));
+  const topFrameC = atC(...Object.values(clipped.truth.designToPhoto({ x: 100, y: 11 })));
+
+  // Lens, blur and noise each do what they say.
+  const lensed = await renderSheetPhoto({ paper: 'A4', sheet: 1, count: 1, job: 4, W: 1600, H: 1200, pose: { height: 420 }, k1: 0.12 });
+  const atL = photoSampler(lensed.canvas);
+  const edgePt = { x: 11, y: 40 };
+  const distortedAt = atL(...Object.values(lensed.truth.designToPhoto(edgePt)));
+  const { applyHomography } = await import('./js/homography.js');
+  const straight = applyHomography(lensed.truth.Hp, edgePt.x, edgePt.y);
+  const undistortedAt = atL(straight.x, straight.y);
+  const blurred = await renderSheetPhoto({ paper: 'A4', sheet: 1, count: 1, job: 5, W: 800, H: 600, pose: { height: 420 }, blur: 2 });
+  const atB = photoSampler(blurred.canvas);
+  const sharp = await renderSheetPhoto({ paper: 'A4', sheet: 1, count: 1, job: 5, W: 800, H: 600, pose: { height: 420 } });
+  const atSh = photoSampler(sharp.canvas);
+  const slope = (f, tr) => { const a = tr.designToPhoto({ x: 100, y: 10.6 }), b = tr.designToPhoto({ x: 100, y: 9.4 }); return Math.abs(f(a.x, a.y) - f(b.x, b.y)); };
+  const noisy = await renderSheetPhoto({ paper: 'A4', sheet: 1, count: 1, job: 5, W: 800, H: 600, pose: { height: 420 }, noise: 12, seed: 7 });
+  const atN = photoSampler(noisy.canvas);
+  const paperPts = []; for (let i = 0; i < 50; i++) paperPts.push(noisy.truth.designToPhoto({ x: 60 + i, y: 120 }));
+  const sd = f => { const v = paperPts.map(p => f(p.x, p.y)); const m = v.reduce((a, b) => a + b, 0) / v.length; return Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / v.length); };
+  const same = (await renderSheetPhoto({ paper: 'A4', sheet: 1, count: 1, job: 5, W: 800, H: 600, pose: { height: 420 }, noise: 12, seed: 7 })).canvas.toDataURL() === noisy.canvas.toDataURL();
+
+  return {
+    ms, dark, nd, bright, nb, frameDark: Math.max(...frameDark), gapBright: Math.min(...gapBright), desk, cornerIn, cornerOut,
+    pxPerMm: T.pxPerMm, corner: T.corners[0], quad: T.quad[0],
+    scaled: { atIntended, atUnscaled }, a4: { aspect: a4Aspect, topFrame, cellsDark: a4Cells.filter(v => v < 90).length, n: a4Cells.length, stock: a4.stockDims },
+    clipped: { botFrame, topFrame: topFrameC }, lens: { distortedAt, undistortedAt },
+    blur: { sharpSlope: slope(atSh, sharp.truth), blurSlope: slope(atB, blurred.truth) }, noise: { clean: sd(atSh), noisy: sd(atN), same },
+  };
+});
+{
+  const r = sheetRender;
+  check('a sheet photographed from the print page\'s SVG has ink where the truth says, paper beside it, and desk outside',
+    r.dark === r.nd && r.bright === r.nb && r.nd > 200 && r.frameDark < 90 && r.gapBright > 180 && r.desk < 90 && r.cornerIn > 180 && r.cornerOut < 90,
+    `${r.dark} of ${r.nd} clock cells dark, ${r.bright} of ${r.nb} white cells bright; frame ${r.frameDark.toFixed(0)}, gap ${r.gapBright.toFixed(0)}, desk ${r.desk.toFixed(0)}; ${r.pxPerMm.toFixed(1)} px/mm in ${r.ms.toFixed(0)} ms`);
+  check('the truth corner is half a pixel under the camera\'s continuous corner, in rectify\'s convention',
+    near(r.corner.x, r.quad.x - 0.5, 1e-9) && near(r.corner.y, r.quad.y - 0.5, 1e-9), `${r.corner.x.toFixed(2)} vs ${r.quad.x.toFixed(2)}`);
+  check('a 96 percent print about the centre puts the frame where the print affine says and not where a 1:1 print would',
+    r.scaled.atIntended < 90 && r.scaled.atUnscaled > 180, `at the scaled position ${r.scaled.atIntended.toFixed(0)}, at the 1:1 position ${r.scaled.atUnscaled.toFixed(0)}`);
+  check('a Letter layout printed on A4 at 94 percent from the top-left corner with offset and skew lands on A4-shaped paper where the affine says',
+    near(r.a4.aspect, 210 / 297, 0.01) && r.a4.topFrame < 90 && r.a4.cellsDark === r.a4.n && r.a4.stock.w === 210,
+    `paper aspect ${r.a4.aspect.toFixed(3)}, ${r.a4.cellsDark} of ${r.a4.n} cells dark`);
+  check('a printer margin swallows the bottom frame side and leaves the top one',
+    r.clipped.botFrame > 180 && r.clipped.topFrame < 90, `bottom ${r.clipped.botFrame.toFixed(0)}, top ${r.clipped.topFrame.toFixed(0)}`);
+  check('the lens bows the frame to its distorted position, blur softens the edge, noise is deterministic by seed',
+    r.lens.distortedAt < 90 && r.lens.undistortedAt > 150 && r.blur.blurSlope < 0.5 * r.blur.sharpSlope && r.noise.noisy > 3 * r.noise.clean && r.noise.same,
+    `lens: ${r.lens.distortedAt.toFixed(0)} at the bowed position, ${r.lens.undistortedAt.toFixed(0)} at the straight one; edge slope ${r.blur.sharpSlope.toFixed(0)} -> ${r.blur.blurSlope.toFixed(0)}; paper sd ${r.noise.clean.toFixed(1)} -> ${r.noise.noisy.toFixed(1)}`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

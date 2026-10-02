@@ -406,8 +406,21 @@ real-photo checkpoint. Building in the PRD's suggested order.
     first 15,000 lines: the block contained a `$\`` sequence, which a string
     replacement reads as "the text before the match". Restored from git;
     every splice now passes a function as the replacement.
-- ▶ NEXT: Part A step 5, SVG-rendered synthetic photos; then 6 to 13; B.3 at
-  any point.
+- ✅ Part A step 5, SVG-rendered synthetic photos: `test/sheetPhoto.js`, a
+  browser module the suite imports. The sheet's SVG is taken from the print
+  page's own HTML, rasterised flat at 8 px/mm onto the real stock through a
+  print affine (scale per axis, anchor at the centre or the top-left corner,
+  registration offset, feed skew, ink past a printer margin dropped), with
+  objects laid on it; then a centred pinhole camera or a given quad, the lens
+  (k1), blur, deterministic noise, and JPEG. Every stage returns its truth:
+  `designToPhoto`, the corners in rectify's convention, the cells, the print
+  affine. Checked by sampling the photo where the truth says ink and paper
+  are, for 1:1, 96 percent about the centre, a Letter layout on A4 at 94
+  percent from the corner with offset and skew, a swallowed bottom side, the
+  lens, blur and noise. 760 checks, all passing, no console errors;
+  dist rebuilt and smoke-tested — v1.30.2.
+- ▶ NEXT: Part A step 6, recognition (`js/calibDetect.js`, drafted); then 7
+  to 13; B.3 at any point.
 
 ### Handoff to a fresh session, 2026-10-02
 
