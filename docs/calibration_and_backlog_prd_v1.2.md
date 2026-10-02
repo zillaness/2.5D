@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.21
+version: 1.2.22
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -935,7 +935,16 @@ checkpoint that needs a person.
 19. **EXIF and camera position.** Read the focal length from the JPEG's EXIF;
     decompose the homography into the camera's height, tilt and the point
     below it; show them. Tests: synthetic renders with known camera positions,
-    tilted and straight down.
+    tilted and straight down. *Shipped v1.33.0, 2026-10-02.* `js/parallax.js`
+    decomposes K⁻¹H into a rotation and a translation (the two rotation
+    columns orthogonalised symmetrically), the plane in front of the camera,
+    the camera centre −Rᵀt. The homography is the sheet's own through its
+    print scale, or the set's table; plain paper's corners are not used, as
+    designed. Measured on synthetic photos (lens 0.04 to 0.08, noise, a 96
+    percent print): height within 0.02 percent, tilt within 0.01°, the point
+    below within 0.3 mm, straight down and at 6° and 15°, one sheet and a
+    set a metre up. The focal length reaches the camera through the file
+    input's EXIF read as a phone's photo would.
 20. **The correction.** Rectify at the base section's top plane, per-section
     correction for the rest, the readout. Tests: criteria 24, 26, 27.
 21. **The raised sheet.** Detection by magnified paper edges, the height
@@ -1227,6 +1236,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.22 (2026-10-02): Part A step 19 shipped in v1.33.0.
 - v1.2.21 (2026-10-02): Part A step 18 shipped in v1.32.4; phase 2 built, status line updated.
 - v1.2.20 (2026-10-02): Part A step 17 shipped in v1.32.3; criterion 23 met.
 - v1.2.19 (2026-10-02): Part A step 16 shipped in v1.32.2; criterion 20's

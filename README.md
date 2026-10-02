@@ -666,7 +666,23 @@ sheet fit** to go back to the one sheet under the corners. A sheet on a
 drawer's floor checks the drawer scan's scale instead; see "Checking the
 scale with a calibration sheet" under the drawer scan.
 
-**Not yet.** Parallax correction for thick parts is phase 3
+**Where the camera was.** A thick part shows its top face larger than its
+base, by its thickness over the camera's height, and no flat pattern can
+measure that height from a photo taken straight down: a near camera with a
+wide lens and a far one with a narrow lens take the same picture of a plane.
+One fact from outside the plane settles it. Phones write the lens's focal
+length into the photo; with it, a calibration sheet's exact mapping gives
+the camera's height above the sheet, its tilt and the point directly below
+it, and Step 1 says so ("Camera 398 mm above the sheet, tilted 6.0°, from
+the photo's focal length. A 5 mm part shows its top 1.3 percent large from
+here."). Step 2's readout names the parallax at the base section's
+thickness. Without a focal length, or on plain paper, it says parallax is
+uncorrected and why, with the advice that shooting from farther away with
+the 2× lens halves it. A photo the phone resized or cropped carries a focal
+length that no longer fits the picture, and it is refused rather than used.
+
+**Not yet.** Correcting the parallax, and a sheet raised to a known height
+in place of the focal length, are the rest of phase 3
 (`docs/calibration_and_backlog_prd_v1.2.md`). A photo whose code is too
 blurred to read at all is treated as plain paper rather than fitted from the
 frame lines alone.
@@ -1206,7 +1222,8 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   on its real-photo checkpoint; phases 2 and 3 were signed off on 2026-10-02
   and are being built: finding several sheets shipped in v1.32.0, the
   joint fit in v1.32.1, rectification and segmentation for a set in v1.32.2,
-  the drawer scale from a sheet in v1.32.3.
+  the drawer scale from a sheet in v1.32.3; phase 3's camera position from
+  the focal length in v1.33.0.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0 and the sheet on the drawer floor in v1.32.3; see "Checking the
   scale with a calibration sheet" under the drawer scan.

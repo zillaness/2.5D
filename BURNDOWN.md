@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.30
+version: 1.31
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -795,7 +795,30 @@ real-photo checkpoint. Building in the PRD's suggested order.
   sheets, a real drawer with a sheet on its floor) waiting on Sam's prints
   with phase 1's. 836 checks, all passing, no console errors; dist rebuilt
   and smoke-tested — v1.32.4.
-- ▶ NEXT: Part A phase 3, step 19, EXIF and the camera position.
+- ✅ Part A step 19, EXIF and the camera position. `js/parallax.js`:
+  `cameraFromHomography` takes K⁻¹H apart (the two rotation columns scaled
+  by their mean length and orthogonalised symmetrically, the sign chosen so
+  the plane is in front of the camera, the centre −Rᵀt), giving the height
+  above the plane, the tilt of the optical axis from the normal and the
+  point below the camera; `parallaxFactor`, `raisePoint`/`lowerPoint`,
+  `heightFromRaised` and the readout text sit beside it for step 20 and 21.
+  In the app, `parallaxUpdate` runs after the sheet, after the set and when
+  the EXIF read lands: the homography is the sheet's own through its print
+  scale (`state.sheet.H`, now kept) or the set's table, the focal length
+  `focalPixels` from EXIF (refused when the photo was resized or cropped),
+  plain paper's corners never used. Step 1's panel carries the camera line
+  and what the base thickness shows; Step 2's trace info carries the
+  readout, corrected or not, with the stand-back advice when not. Measured:
+  height within 0.02 percent, tilt within 0.01°, the point below within
+  0.3 mm, straight down, at 6° and 15°, through lens 0.06 and a 96 percent
+  print, one sheet at 400 mm and a set a metre up; the EXIF path proven
+  through the file input with a spliced focal length. 843 checks, all
+  passing, no console errors; dist rebuilt and smoke-tested — v1.33.0.
+  - ⚠ `state.sheet.fit` is the fit's figures, not the fit; the first draft
+    read `fit.H` off it, threw inside the load's callback chain, and the
+    scratch run hung on a load that never called back. The sheet now keeps
+    its `H`, and the scratch runner races every load against a timeout.
+- ▶ NEXT: Part A step 20, the correction.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1156,6 +1179,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.31 (2026-10-02): Part A step 19 shipped as v1.33.0.
 - v1.30 (2026-10-02): Part A step 18 shipped as v1.32.4; phase 2 complete.
 - v1.29 (2026-10-02): Part A step 17 shipped as v1.32.3.
 - v1.28 (2026-10-02): Part A step 16 shipped as v1.32.2.

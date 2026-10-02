@@ -147,8 +147,46 @@ async function flatSheet(o) {
   return { canvas: flat, aff, stock, design, R };
 }
 
+// A raised object's outline in plane mm: its pts, or its rectangle with
+// the corners rounded by r, sampled.
+function objectOutline(ob) {
+  if (ob.pts) return ob.pts;
+  const r = Math.min(ob.r || 0, ob.w / 2, ob.h / 2);
+  if (!(r > 0)) return [{ x: ob.x, y: ob.y }, { x: ob.x + ob.w, y: ob.y }, { x: ob.x + ob.w, y: ob.y + ob.h }, { x: ob.x, y: ob.y + ob.h }];
+  const pts = [];
+  const corner = (cx, cy, a0) => { for (let i = 0; i <= 8; i++) { const a = a0 + i / 8 * Math.PI / 2; pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) }); } };
+  corner(ob.x + ob.w - r, ob.y + r, -Math.PI / 2); corner(ob.x + ob.w - r, ob.y + ob.h - r, 0);
+  corner(ob.x + r, ob.y + ob.h - r, Math.PI / 2); corner(ob.x + r, ob.y + r, Math.PI);
+  return pts;
+}
+function hullOf(pts) {
+  const p = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lo = []; for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  const up = []; for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  lo.pop(); up.pop(); return lo.concat(up);
+}
+// Draw raised objects (those with z > 0) through the camera: the silhouette
+// is the hull of the base and the top face, both projected, the sides and
+// the top one colour. planeOf maps object mm to plane mm (identity for a
+// sheet, the sheet's placement for a table).
+function drawRaised(ctx, objects, projectDistorted, planeOf = p => p) {
+  for (const ob of objects || []) {
+    if (!(ob.z > 0)) continue;
+    const outline = objectOutline(ob).map(planeOf);
+    const base = outline.map(p => projectDistorted(p.x, p.y, 0));
+    const top = outline.map(p => projectDistorted(p.x, p.y, ob.z));
+    const sil = hullOf(base.concat(top));
+    ctx.fillStyle = ob.color || '#23364a';
+    ctx.beginPath();
+    sil.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+    ctx.closePath(); ctx.fill();
+  }
+}
+
 function drawObjects(fc, objects, R) {
   for (const ob of objects || []) {
+    if (ob.z > 0) continue;   // raised: drawn through the camera, see drawRaised
     fc.fillStyle = ob.color || '#23364a';
     const r = ob.r || 0;
     fc.beginPath();
@@ -236,6 +274,13 @@ async function photograph(flat, dims, R, o) {
     }
   }
   oc.putImageData(od, 0, 0);
+  // Things above the plane (phase 3): drawn through the camera at their
+  // height, after the plane and before the optics, so they blur and noise
+  // like everything else. Only a pinhole camera can place them.
+  if (o.overdraw && cam) {
+    const projectDistorted = (xmm, ymm, zmm) => { const q = cam.project(xmm, ymm, zmm); return o.k1 ? distortPixel(q, o.k1, 0, lp) : q; };
+    o.overdraw(oc, projectDistorted);
+  }
 
   let canvas = out;
   if (o.blur > 0) {
@@ -280,7 +325,7 @@ async function photograph(flat, dims, R, o) {
 export async function renderSheetPhoto(opts = {}) {
   const o = { ...SHEET_DEFAULTS, ...PHOTO_DEFAULTS, ...opts };
   const { canvas: flat, aff, stock, design, R } = await flatSheet(o);
-  const ph = await photograph(flat, stock, R, o);
+  const ph = await photograph(flat, stock, R, { ...o, overdraw: (ctx, pd) => drawRaised(ctx, o.objects, pd) });
   const { canvas, quad, Hp, Hinv, lp, cam } = ph;
 
   // Truth. designToPhoto takes a layout point through the print affine, the
@@ -336,7 +381,7 @@ export async function renderTablePhoto(opts = {}) {
     placed.push({ so, fs, paperToTable });
   }
   drawObjects(fc, o.objects, R);
-  const ph = await photograph(flat, table, R, o);
+  const ph = await photograph(flat, table, R, { ...o, overdraw: (ctx, pd) => drawRaised(ctx, o.objects, pd) });
   const { canvas, quad, Hp, Hinv, lp, cam } = ph;
   const sheets = placed.map(({ so, fs, paperToTable }) => {
     const paperToPhoto = p => ph.planeToPhoto(paperToTable(p));

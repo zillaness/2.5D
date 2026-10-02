@@ -16712,6 +16712,116 @@ const sheetDrawer = await page.evaluate(async () => {
     `after the click ${r.afterApply.bar && r.afterApply.bar.w.toFixed(2)} × ${r.afterApply.bar && r.afterApply.bar.h.toFixed(2)} mm; after undo ${r.afterUndo.bar && r.afterUndo.bar.w.toFixed(2)}; via the coin's button ${r.coinUndo.bar && r.coinUndo.bar.w.toFixed(2)}`);
 }
 
+// ---------- Parallax: EXIF and the camera position (Part A phase 3, step 19 of calibration_and_backlog_prd_v1.2) ----------
+//
+// With the photo's focal length and a sheet's exact homography, the camera's
+// height, tilt and the point below it follow; the readout says so, or says
+// why not. Synthetic renders with known camera positions, tilted and
+// straight down, one sheet and a set, and the focal length read from a
+// JPEG's EXIF through the file input.
+
+console.log('\nParallax: EXIF and the camera position');
+
+const camTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderSheetPhoto, renderTablePhoto } = await import('./test/sheetPhoto.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens }, captureFrac: st.captureFrac, thickness: st.regions[0].thickness };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  st.captureFrac = 0;
+  st.regions[0].thickness = 5;
+  app.syncRefControls();
+  const sel = $('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  const load = async r => { await new Promise(res => app.loadImageFromURL(r.canvas.toDataURL('image/png'), res)); await wait(120); };
+  const out = {};
+  const W = 2400, H = 1800;
+  // One sheet, tilted 6 degrees, 400 mm along the axis from its centre on a 26 mm equivalent.
+  const pose = { height: 400, tilt: 6, axis: 20, spin: 3, f35: 26 };
+  const tilted = await renderSheetPhoto({ paper: 'letter', sheet: 2, count: 4, job: 0x7f, W, H, pose, k1: 0.04, noise: 2 });
+  await load(tilted);
+  out.noFocal = { camera: app.parallax.state && app.parallax.state.camera, message: app.parallax.state && app.parallax.state.message, note: $('sheetCameraNote') ? $('sheetCameraNote').hidden : 'absent' };
+  app.parallax.setFocal({ f35: 26, focalMm: null, w: W, h: H });
+  const truth = pose => ({ height: pose.height * Math.cos(pose.tilt * Math.PI / 180), below: pose.height * Math.sin(pose.tilt * Math.PI / 180) });
+  const centreOf = () => { const r = st.sheet.verdict.rect; const sc = st.sheet.verdict.scale; return { x: ((r.x0 || 0) + r.w / 2) * sc.x, y: ((r.y0 || 0) + r.h / 2) * sc.y }; };
+  {
+    const p = app.parallax.state, c = centreOf(), tr = truth(pose);
+    out.tilted = { height: p.camera && p.camera.height, truthH: tr.height, tilt: p.camera && p.camera.tiltDeg, belowDist: p.camera && Math.hypot(p.camera.below.x - c.x, p.camera.below.y - c.y), truthBelow: tr.below,
+      factor: p.factor, t: p.t, message: p.message, note: $('sheetCameraNote').textContent, noteShown: !$('sheetCameraNote').hidden, source: p.camera && p.camera.source, plane: p.plane };
+    app.goStep(2);
+    await wait(100);
+    out.tilted.traceInfo = $('traceInfo').textContent;
+    app.goStep(1);
+  }
+  // A resized photo: the focal length cannot be used.
+  app.parallax.setFocal({ f35: 26, focalMm: null, w: 4000, h: 3000 });
+  out.resized = { camera: app.parallax.state.camera, message: app.parallax.state.message };
+  // Without a sheet, the focal length alone places no camera.
+  app.parallax.setFocal({ f35: 26, focalMm: null, w: W, h: H });
+  app.sheet.fitOn = false;
+  app.sheet.recognise();
+  out.plain = { camera: app.parallax.state && app.parallax.state.camera, message: app.parallax.state && app.parallax.state.message };
+  app.sheet.fitOn = true;
+  app.sheet.recognise();
+  // Straight down.
+  const flat = await renderSheetPhoto({ paper: 'letter', sheet: 2, count: 4, job: 0x7f, W, H, pose: { height: 400, tilt: 0, f35: 26 } });
+  await load(flat);
+  app.parallax.setFocal({ f35: 26, focalMm: null, w: W, h: H });
+  { const p = app.parallax.state, c = centreOf(); out.flat = { height: p.camera && p.camera.height, tilt: p.camera && p.camera.tiltDeg, belowDist: p.camera && Math.hypot(p.camera.below.x - c.x, p.camera.below.y - c.y) }; }
+  // A set on a table, the camera placed from the joint fit.
+  const four = [{ x: 300, y: 350, rot: 92 }, { x: 700, y: 150, rot: 3 }, { x: 1100, y: 350, rot: -88 }, { x: 700, y: 550, rot: 182 }]
+    .map((p, i) => ({ ...p, sheet: i + 1, count: 4, job: 0x5a, paper: 'letter', scale: 0.96 }));
+  const tpose = { height: 1000, tilt: 4, axis: 25, spin: 2, f35: 26 };
+  const tb = await renderTablePhoto({ table: { w: 1400, h: 700 }, W: 4000, H: 3000, supersample: 1, pose: tpose, k1: 0.08, noise: 3, sheets: four });
+  await load(tb);
+  app.parallax.setFocal({ f35: 26, focalMm: null, w: 4000, h: 3000 });
+  { const p = app.parallax.state, tr = truth(tpose); out.set = { active: app.sheet.setActive, plane: p.plane, height: p.camera && p.camera.height, truthH: tr.height, tilt: p.camera && p.camera.tiltDeg, message: p.message }; }
+  app.goStep(1);
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens; st.captureFrac = before.captureFrac; st.regions[0].thickness = before.thickness;
+  app.syncRefControls();
+  // The tilted photo as a JPEG, for the file-input case below.
+  return { ...out, jpeg: tilted.canvas.toDataURL('image/jpeg', 0.92) };
+});
+// The focal length read from the file's EXIF through the file input, as a phone's photo arrives.
+{
+  const bytes = Buffer.from(camTest.jpeg.split(',')[1], 'base64');
+  const withExif = spliceExif(new Uint8Array(bytes), exifSegment({ f35: 26, focalMm: 5.7, w: 2400, h: 1800 }));
+  await page.evaluate(() => { const app = window.__app; app.state.reference = 'rect'; app.state.scan = { ...app.state.scan, on: false, active: false, parts: [] }; app.sheet.fitOn = true; app.syncRefControls(); });
+  await page.setInputFiles('#fileInput', { name: 'tilted.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(withExif) });
+  await page.waitForFunction(() => window.__app.state.fileName === 'tilted' && window.__app.parallax.focal && window.__app.parallax.state && window.__app.parallax.state.camera, null, { timeout: 15000 }).catch(() => {});
+  camTest.exif = await page.evaluate(() => { const app = window.__app; const p = app.parallax.state; return { focal: app.parallax.focal, camera: p && p.camera && { height: p.camera.height, tiltDeg: p.camera.tiltDeg, source: p.camera.source } }; });
+}
+delete camTest.jpeg;
+{
+  const r = camTest;
+  check('without a focal length the readout says parallax is uncorrected and why, with the stand-back advice (criterion 27, the readout)',
+    !r.noFocal.camera && /Parallax uncorrected: no focal length in the photo/.test(r.noFocal.message) && /farther away/.test(r.noFocal.message) && r.noFocal.note === true,
+    `"${r.noFocal.message}"`);
+  const t = r.tilted;
+  check('with the focal length and one sheet the camera is placed: height within 0.5 percent, tilt within 0.2 degrees, the point below within 1 mm (tilted 6 degrees)',
+    t.height && Math.abs(t.height / t.truthH - 1) < 0.005 && Math.abs(t.tilt - 6) < 0.2 && Math.abs(t.belowDist - t.truthBelow) < 1 && t.source === 'exif' && t.plane === 'sheet',
+    `height ${t.height && t.height.toFixed(1)} (true ${t.truthH.toFixed(1)}), tilt ${t.tilt && t.tilt.toFixed(2)}°, below ${t.belowDist && t.belowDist.toFixed(1)} mm from the centre (true ${t.truthBelow.toFixed(1)})`);
+  check('Step 1 says where the camera was and what a 5 mm part shows, and Step 2\'s readout names the parallax, not yet corrected',
+    t.noteShown && /Camera 39\d mm above the sheet, tilted 6\.\d°/.test(t.note) && /5 mm part shows its top 1\.\d percent large/.test(t.note) &&
+    Math.abs(t.factor - t.truthH / (t.truthH - 5)) < 0.001 && /Parallax: 1\.\d percent at 5 mm, not yet corrected \(camera 39\d mm above the sheet, tilted 6\.\d°/.test(t.traceInfo),
+    `"${t.note}" / "${t.traceInfo.replace(/\n/g, ' / ')}"`);
+  check('a resized photo\'s focal length is refused, and without a sheet the focal length alone places no camera',
+    !r.resized.camera && /resized or cropped/.test(r.resized.message) && !r.plain.camera && /a calibration sheet is needed/.test(r.plain.message),
+    `"${r.resized.message}" / "${r.plain.message}"`);
+  check('straight down, the camera is placed with no tilt and the point below at the sheet\'s centre',
+    r.flat.height && Math.abs(r.flat.height - 400) < 2 && r.flat.tilt < 0.1 && r.flat.belowDist < 1,
+    `height ${r.flat.height && r.flat.height.toFixed(1)}, tilt ${r.flat.tilt && r.flat.tilt.toFixed(3)}°, below ${r.flat.belowDist && r.flat.belowDist.toFixed(2)} mm from the centre`);
+  check('a set on a table places the camera from the joint fit, a metre up at 4 degrees',
+    r.set.active && r.set.plane === 'table' && r.set.height && Math.abs(r.set.height / r.set.truthH - 1) < 0.005 && Math.abs(r.set.tilt - 4) < 0.2 && /above the table/.test(r.set.message),
+    `height ${r.set.height && r.set.height.toFixed(1)} (true ${r.set.truthH.toFixed(1)}), tilt ${r.set.tilt && r.set.tilt.toFixed(2)}°; "${r.set.message}"`);
+  check('the focal length is read from a JPEG\'s EXIF through the file input and places the camera as a phone\'s photo arrives',
+    r.exif.focal && r.exif.focal.f35 === 26 && r.exif.camera && r.exif.camera.source === 'exif' && Math.abs(r.exif.camera.height - 397.8) < 3 && Math.abs(r.exif.camera.tiltDeg - 6) < 0.3,
+    `focal ${JSON.stringify(r.exif.focal)}; camera ${JSON.stringify(r.exif.camera)}`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

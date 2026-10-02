@@ -16,6 +16,7 @@ import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
 import { findSheets, describeFound, pointInQuad as sheetPointInQuad } from './calibFind.js';
 import { fitSheets, describeJoint, tableExtent, tableAxisAngle } from './calibJoint.js';
+import { cameraFromHomography, parallaxFactor, describeParallax } from './parallax.js';
 import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance, frameOutsideMm, rulerScale } from './calibVerdict.js';
 import { lensParams as calibLensParams, undistortPixel as calibUndistort } from './lens.js';
 import { computeHomography as calibHomography, applyHomography as calibApplyH } from './homography.js';
@@ -97,6 +98,7 @@ const state = {
   sheetFit: true,         // the sheet fit snaps the corners; off, a person's own corners rule
   sheetSaved: null,       // the sheet block a loaded project was saved with, for the panel
   sheets: null,           // every calibration sheet found in the photo (phase 2), with its own fit
+  parallax: null,         // the camera's position and the parallax of the base thickness (phase 3)
   sheetWindow: null,      // the sheet's clean window in the rectified image, px and mm
   sheetWindowWarn: null,  // { distMm } when the traced outline runs within 1 mm of the printed band
   rect: null,             // { canvas, pxPerMm }
@@ -458,7 +460,67 @@ function readPhotoFocal(file) {
     if (token !== focalToken) return;
     state.photoFocal = readFocalLength(buf);
     updatePaperCheck();
+    parallaxUpdate();
   }).catch(() => {});
+}
+
+// ---------- parallax: the camera's position (calibration_and_backlog_prd_v1.2, Part A phase 3, step 19) ----------
+//
+// With the photo's focal length and a calibration sheet's exact homography
+// (one sheet's, or the set's table), the camera's height above the plane,
+// its tilt and the point directly below it follow. A plain paper's four
+// corners are not used: too noisy to recover a camera from. The base
+// section's thickness then gives the parallax at its top face; step 20 is
+// what corrects it.
+function parallaxUpdate() {
+  const prev = state.parallax;
+  state.parallax = null;
+  if (!state.image || state.reference !== 'rect' || scanOn()) { parallaxSync(prev); return null; }
+  const iw = state.image.naturalWidth || state.image.width, ih = state.image.naturalHeight || state.image.height;
+  const t = state.regions[0] ? state.regions[0].thickness : 0;
+  const joint = sheetSetActive();
+  const s = state.sheet;
+  let camera = null, plane = null, reason = null, H = null, scale = { x: 1, y: 1 };
+  if (joint) { H = joint.H; plane = 'table'; }
+  else if (s && s.H && state.sheetFit) {
+    // The sheet's design plane to real millimetres through its print scale.
+    const sc = (s.verdict && s.verdict.scale) || { x: 1, y: 1 };
+    const Hd = s.H;
+    H = [Hd[0] / sc.x, Hd[1] / sc.y, Hd[2], Hd[3] / sc.x, Hd[4] / sc.y, Hd[5], Hd[6] / sc.x, Hd[7] / sc.y, Hd[8]];
+    scale = sc; plane = 'sheet';
+  }
+  const f = focalPixels(state.photoFocal, iw, ih);
+  if (H && f) {
+    const cam = cameraFromHomography(H, f, { x: iw / 2, y: ih / 2 });
+    if (cam.ok && cam.height > 0) {
+      camera = { height: cam.height, tiltDeg: cam.tiltDeg, below: cam.below, source: 'exif', f, scaleSpread: cam.scaleSpread };
+    } else reason = 'the camera could not be placed from this photo';
+  } else if (!H) reason = state.photoFocal && focalPixels(state.photoFocal, iw, ih) ? 'a calibration sheet is needed to place the camera' : 'no focal length in the photo and no calibration sheet';
+  else reason = state.photoFocal ? 'the photo\'s focal length cannot be used (the photo was resized or cropped)' : 'no focal length in the photo';
+  const factor = camera ? parallaxFactor(camera.height, t) : 1;
+  state.parallax = {
+    camera, plane, scale, t, factor, corrected: false, reason,
+    H: camera ? H : null,
+    // The point below the camera in the plane's own frame: design mm for a
+    // sheet, table mm for a set.
+    belowPlane: camera ? (plane === 'sheet' ? { x: camera.below.x / scale.x, y: camera.below.y / scale.y } : camera.below) : null,
+  };
+  state.parallax.message = describeParallax(state.parallax);
+  parallaxSync(prev);
+  return state.parallax;
+}
+function parallaxSync(prev) {
+  const el = $('sheetCameraNote');
+  const p = state.parallax;
+  if (el) {
+    if (p && p.camera) {
+      el.textContent = `Camera ${p.camera.height.toFixed(0)} mm above the ${p.plane}, tilted ${p.camera.tiltDeg.toFixed(1)}°, from the photo's focal length. ` +
+        (p.t > 0 ? `A ${p.t} mm part shows its top ${((p.factor - 1) * 100).toFixed(1)} percent large from here.` : '');
+      el.hidden = false;
+    } else el.hidden = true;
+  }
+  const changed = !!(p && p.camera) !== !!(prev && prev.camera);
+  if (changed && typeof updateTraceInfo === 'function' && state.rect) updateTraceInfo();
 }
 
 function loadFile(file, onFail, onLoad) {
@@ -602,6 +664,7 @@ function sheetFindAll() {
     if (state.step === 2 && !scanActive()) { if (doRectify()) retrace(); }
   }
   sheetSyncPanel();
+  parallaxUpdate();
   cornerEditor.draw();
   return state.sheets;
 }
@@ -768,7 +831,7 @@ function sheetRecognise() {
   state.sheet = null;
   cornerEditor.overlay = null;
   const applicable = state.image && state.corners && state.reference === 'rect' && !scanOn();
-  if (!applicable || !state.sheetFit) { sheetSyncPanel(); cornerEditor.draw(); return null; }
+  if (!applicable || !state.sheetFit) { sheetSyncPanel(); parallaxUpdate(); cornerEditor.draw(); return null; }
   const iw = state.image.naturalWidth || state.image.width;
   const ih = state.image.naturalHeight || state.image.height;
   // The rough paper size only scales recognition's profile geometry, so a
@@ -784,7 +847,7 @@ function sheetRecognise() {
     console.error('sheet recognition failed', err);
     rec = null;
   }
-  if (!rec || !rec.ok || !fit || !fit.ok) { sheetSyncPanel(); cornerEditor.draw(); return null; }
+  if (!rec || !rec.ok || !fit || !fit.ok) { sheetSyncPanel(); parallaxUpdate(); cornerEditor.draw(); return null; }
 
   // The paper's edges in design millimetres, and the verdict.
   const edges = {};
@@ -824,7 +887,7 @@ function sheetRecognise() {
   state.sheet = {
     identity: rec.identity, rotation: r, verdict, rect, note,
     fit: { ...fit.fit, k1: fit.k1 }, words: rec.words.length, wordsRead: rec.wordsRead,
-    designToPhoto: fit.designToPhoto, photoToDesign: fit.photoToDesign, geom: fit.geom,
+    H: fit.H, designToPhoto: fit.designToPhoto, photoToDesign: fit.photoToDesign, geom: fit.geom,
     corners, pxPerMm, cleanShare, guidance,
   };
   if (verdict.overridePicker && verdict.overridePicker !== state.paper.size) {
@@ -845,6 +908,7 @@ function sheetRecognise() {
   cornerEditor.overlay = (ctx, vp) => sheetDrawOverlay(ctx, vp);
   sheetSyncPanel();
   updatePaperCheck();
+  parallaxUpdate();
   cornerEditor.draw();
   return state.sheet;
 }
@@ -891,7 +955,7 @@ function sheetSyncPanel() {
   box.title = 'On, the sheet fit places the corners and the lens; a dragged corner re-fits and snaps. Off, your corners stay where you put them.';
   box.addEventListener('change', () => {
     state.sheetFit = box.checked;
-    if (state.sheetFit) sheetRecognise(); else { state.sheet = null; cornerEditor.overlay = null; sheetSyncPanel(); cornerEditor.draw(); }
+    if (state.sheetFit) sheetRecognise(); else { state.sheet = null; cornerEditor.overlay = null; sheetSyncPanel(); parallaxUpdate(); cornerEditor.draw(); }
   });
   lab.append(box, document.createTextNode(' Use the sheet fit'));
   el.append(text, lab);
@@ -933,6 +997,12 @@ function sheetSyncPanel() {
     p.textContent = g.text;
     el.appendChild(p);
   }
+  const cam = document.createElement('div');
+  cam.id = 'sheetCameraNote';
+  cam.style.marginTop = '4px';
+  cam.hidden = true;
+  el.appendChild(cam);
+  parallaxSync(state.parallax);
   el.hidden = false;
 }
 
@@ -2504,10 +2574,12 @@ function updateTraceInfo(msg) {
     minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
   }
   const set = state.sheetWindow && state.sheetWindow.set;
+  const px = state.parallax && state.reference === 'rect' && !scanOn() ? state.parallax : null;
   el.textContent =
     `Outline: ${outer.length} pts, ${fmtDim(maxX - minX)} × ${fmtDimL(maxY - minY)}\n` +
     `Holes: ${holes.length} traced + ${circles.length} circles` +
     (set ? `\nRectified from ${set.count} calibration sheets fitted on one plane.` : '') +
+    (px ? `\n${px.message}` : '') +
     (state.sheetWindowWarn
       ? (set
         ? `\nWithin ${fmtDim(state.sheetWindowWarn.distMm)} mm of a sheet's printed band: the object may run into it. Keep the part clear of the sheets.`
@@ -7269,7 +7341,7 @@ $('regionName').addEventListener('change', e => {
 });
 $('thickness').addEventListener('change', e => {
   const mm = parseDim(e.target.value);
-  if (mm > 0) { currentRegion().thickness = mm; rebuildMesh(); }
+  if (mm > 0) { currentRegion().thickness = mm; rebuildMesh(); if (state.selRegion === 0) parallaxUpdate(); }
   refreshModelFields();
   traceEditor.draw();
 });
@@ -8680,6 +8752,13 @@ window.__app = {
     get saved() { return state.sheetSaved; },
     clearChecks: () => { try { localStorage.removeItem(CALIB_CHECKS_KEY); } catch { /* blocked */ } },
     check: (job, sheet) => calibCheckRecord(job, sheet),
+  },
+  // Parallax: the camera's position and the correction (phase 3).
+  parallax: {
+    update: () => parallaxUpdate(),
+    get state() { return state.parallax; },
+    setFocal: f => { state.photoFocal = f; updatePaperCheck(); parallaxUpdate(); },
+    get focal() { return state.photoFocal; },
   },
   // Calibration sheets: the panel, the print and the download with their
   // record, and the clock the job is drawn from.
