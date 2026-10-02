@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.17
+version: 1.2.18
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -876,6 +876,21 @@ checkpoint that needs a person.
     within 0.1 px; a cut sheet at 25° and 100° read from 13 words.
 15. **The joint fit.** A small Gauss-Newton solver, one shared plane and lens,
     a pose per sheet, a scale per print job. Tests: criteria 20, 21, 22.
+    *Shipped v1.32.1, 2026-10-02.* `js/calibJoint.js`: Levenberg-Marquardt
+    with a numerical Jacobian over the table-to-photo homography, one lens
+    term, a pose per non-anchor sheet and a scale per non-anchor job; the
+    anchor (the complete sheet with the lowest job and number) fixes the
+    table's axes, and its job's scale is fixed from that job's best verdict
+    (ruler, edges, print check), since frames alone cannot tell a print
+    scale from a camera distance. Measured on 12 MP photos with lens 0.08
+    and noise: four sheets fitted in 4 iterations and 0.2 s, frames within
+    0.03 px, places within 0.03 mm, the lens recovered as 0.0801; a second
+    job's scale fitted as 96.010 percent against a true 96. Criterion 20 is
+    met here through the mapping (a 500 mm part's true photo points:
+    500.06 mm; from one sheet at one end 499.89); the traced measurement
+    comes with step 16's rectification. Criterion 22's duplicates each get
+    their own pose. Step 1 runs the fit after the finder and the panel
+    reports it; the corners still follow the one sheet until step 16.
 16. **Rectification and segmentation for a set.** The table rectangle, the
     list of paper regions in the background model, every band masked.
 17. **Drawer scale from a sheet.** Recognition inside a drawer scan, the
@@ -1181,6 +1196,8 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.18 (2026-10-02): Part A step 15 shipped in v1.32.1; criterion 20's
+  traced form deferred to step 16, noted at the step.
 - v1.2.17 (2026-10-02): Part A step 14 shipped in v1.32.0.
 - v1.2.16 (2026-10-02): Sam signed off Part A phases 2 and 3 ("Continue I'm
   signing off of the next build work"), before phase 1's real-photo

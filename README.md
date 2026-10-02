@@ -635,9 +635,17 @@ edge, the frame's dark ring is tried instead. The panel lists what it found
 overlay marks each frame with its number, a sheet cut by the photo's edge is
 found from its visible part and marked as cut, and a set printed twice is
 still two sheets, with a note to print a fresh set so each has its own
-number. For now the corners still follow the one sheet under them; fitting
-the set together on one plane, and measuring a part between the sheets, is
-the next step of phase 2.
+number. The set is then fitted together: one plane and one lens term for
+every sheet, a position and rotation per sheet, and one print scale per set,
+fixed from whichever sheet of that set has its edges, a ruler or a print
+check on record. A second set in the same photo gets its scale fitted
+against the first and checked against its own edges ("Set 3C: 100.0
+percent, fitted against set 5A, and its own edges agree"). On synthetic
+photos of four sheets around a 500 mm part the joint mapping measures the
+part within 0.1 mm where one sheet at one end comes out worse. For now the
+corners still follow the one sheet under them; rectifying the whole table
+from the joint fit, and tracing a part between the sheets, is the next step
+of phase 2.
 
 **Not yet.** A sheet on a drawer's floor for the drawer scan, and parallax
 correction for thick parts, are the rest of phases 2 and 3
@@ -1159,7 +1167,8 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   part, a sheet on a drawer's floor for the drawer scan, and parallax
   correction for thick parts. Phase 1 (one sheet) shipped in v1.30.x and waits
   on its real-photo checkpoint; phases 2 and 3 were signed off on 2026-10-02
-  and are being built: finding several sheets shipped in v1.32.0.
+  and are being built: finding several sheets shipped in v1.32.0, the
+  joint fit in v1.32.1.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0; a calibration sheet on the drawer floor, recognised on its own,
   will do the same without a coin in Part A phase 2.

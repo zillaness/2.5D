@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.26
+version: 1.27
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -701,7 +701,37 @@ real-photo checkpoint. Building in the PRD's suggested order.
     sides cannot.
   - ⚠ Finding costs 0.1 to 0.2 s per seed at 12 MP, so a photo of eight
     sheets adds 1.4 s after the load; it runs after the paint, not before.
-- ▶ NEXT: Part A step 15, the joint fit.
+- ✅ Part A step 15, the joint fit. `js/calibJoint.js`: Levenberg-Marquardt
+  with a numerical Jacobian over the table-to-photo homography (8), one lens
+  term, a pose per non-anchor sheet (3) and a print scale per non-anchor
+  job (2), initialised from the single-sheet fits (each sheet's design
+  corners through its own fit into the photo and back through the anchor's,
+  a similarity from there). The anchor is the complete sheet with the lowest
+  job and number; its job's scale is fixed from that job's best verdict
+  (ruler, then edges, then a print check), because the frames alone cannot
+  tell a print scale from a camera distance; another job's scale is
+  observable against the anchor's frames and is fitted, then compared with
+  that job's own edges (0.5 percent band). Residuals in table millimetres:
+  every clock cell against its predicted place, every frame dip against its
+  design line. Step 1 runs it after the finder, keeps each sheet's verdict,
+  and the panel says how the set was fitted and where each set's scale came
+  from. Measured on 12 MP photos with lens 0.08 and noise 3: four sheets,
+  18 unknowns against 896 cells and 3458 dips, 4 iterations, 0.19 s, frames
+  within 0.02 px, places within 0.02 mm, lens 0.0801; a second job fitted
+  at 96.010 percent against a true 96, its own edges agreeing; a 500 mm
+  part's true photo points measure 500.06 mm through the joint mapping and
+  499.89 from one sheet at one end; duplicates each get their own pose. 827
+  checks, all passing, no console errors; dist rebuilt and smoke-tested —
+  v1.32.1.
+  - ⚠ Criterion 20's "one sheet comes out worse" is a narrow margin on a
+    synthetic photo: the single sheet's own lens fit extrapolates well
+    (0.11 mm off over 500 mm against the joint's 0.06). The large single-
+    sheet failure is the sheet whose edges are not visible, which assumes
+    1:1 and reads 520.6 for 500. The traced form of criterion 20 comes with
+    step 16.
+  - ⚠ The job code is printed in upper-case hex everywhere now (`jobHex`);
+    the finder's first draft printed it lower-case and the test said 5a.
+- ▶ NEXT: Part A step 16, rectification and segmentation for a set.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1062,6 +1092,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.27 (2026-10-02): Part A step 15 shipped as v1.32.1.
 - v1.26 (2026-10-02): Part A step 14 shipped as v1.32.0.
 - v1.25 (2026-10-02): Phases 2 and 3 of the calibration PRD signed off by Sam before the real-photo checkpoint; build resumes at step 14.
 - v1.24 (2026-10-02): Steps 1a and 1b shipped as v1.28.0 and v1.28.1; criterion 14 revised; handoff to a fresh session written.

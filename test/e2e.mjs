@@ -16341,8 +16341,162 @@ const findTest = await page.evaluate(async () => {
     `${r.white.n} found (${ids(r.white)}) from ${fmtMs(r.white)}, frames within ${worst(r.white).toFixed(2)} px`);
   check('in Step 1 the set is listed in the panel with the duplicate note, each sheet is on the overlay, and another reference has no set',
     r.app.found === 3 && r.app.duplicates && r.app.duplicates.length === 1 && r.app.primary && r.app.primary.job === 0x5a && r.app.overlay &&
-    /3 calibration sheets in this photo: sheets 1, 2 and 2 of set 5a/.test(r.app.note || '') && /print a fresh set/.test(r.app.note || '') && r.app.again === 3 && r.app.afterLeave === 'cleared',
+    /3 calibration sheets in this photo: sheets 1, 2 and 2 of set 5A/.test(r.app.note || '') && /print a fresh set/.test(r.app.note || '') && r.app.again === 3 && r.app.afterLeave === 'cleared',
     `${r.app.found} found, primary sheet ${r.app.primary && r.app.primary.sheet}; note "${r.app.note}"; after leaving: ${r.app.afterLeave}`);
+}
+
+// ---------- Several sheets: the joint fit (Part A phase 2, step 15 of calibration_and_backlog_prd_v1.2) ----------
+//
+// One plane and one lens for every sheet, a pose per sheet, a print scale
+// per job with the anchor job's fixed from its own verdict. Criteria 20
+// (a 500 mm part between four sheets, measured here through the mapping
+// from its true photo points; through a trace in step 16), 21 (one job,
+// one scale; another job fitted and checked against its own edges) and 22
+// (duplicates fitted as two sheets).
+
+console.log('\nSeveral sheets: the joint fit');
+
+const jointTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderTablePhoto } = await import('./test/sheetPhoto.js');
+  const { findSheets } = await import('./js/calibFind.js');
+  const { fitSheets, tableExtent, similarity } = await import('./js/calibJoint.js');
+  const { fitPaperRect, sheetVerdict } = await import('./js/calibVerdict.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const toImg = c => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = c.toDataURL('image/png'); });
+  const verdicts = res => res.sheets.map(s => {
+    const edges = {};
+    for (const e of s.rec.edges || []) edges[e.side] = (e.raw || []).map(p => s.fit.photoToDesign(p));
+    let rect = null; try { rect = fitPaperRect(edges); } catch { rect = null; }
+    return sheetVerdict({ identity: s.identity, rect, picker: 'letter', record: null });
+  });
+  const scalesOf = (res, vs) => { const m = {}; vs.forEach((v, i) => { const j = res.sheets[i].identity.job; if (!m[j] && v.source === 'edges') m[j] = { ...v.scale, source: v.source, sheet: res.sheets[i].identity.sheet }; }); return m; };
+  const run = async (opts, sheets, part) => {
+    const tb = await renderTablePhoto({ ...opts, sheets });
+    const img = await toImg(tb.canvas);
+    const res = findSheets(img);
+    const vs = verdicts(res);
+    const scales = scalesOf(res, vs);
+    const t0 = performance.now();
+    const joint = fitSheets(res.sheets, img.width, img.height, scales);
+    const ms = performance.now() - t0;
+    const o = { found: res.sheets.length, verdicts: vs.map(v => v.source), scales: Object.fromEntries(Object.entries(scales).map(([j, s]) => [j, { x: s.x, y: s.y }])), ms, truthK1: opts.k1 };
+    if (!joint) return { ...o, joint: null };
+    o.fit = { rmsMm: joint.fit.rmsMm, points: joint.fit.points, lines: joint.fit.lines, iterations: joint.fit.iterations, params: joint.fit.params, k1: joint.k1, anchor: joint.anchor, anchorJob: joint.anchorJob };
+    o.jobs = joint.jobs;
+    // Every sheet's frame through the joint fit against the truth (rectify's convention).
+    o.frameErr = joint.sheets.map(js => {
+      const s = res.sheets[js.index];
+      const tr = tb.truth.sheets.filter(x => x.sheet === s.identity.sheet && x.job === s.identity.job).sort((a, b) => Math.hypot(a.centre.x - s.centre.x, a.centre.y - s.centre.y) - Math.hypot(b.centre.x - s.centre.x, b.centre.y - s.centre.y))[0];
+      const g = s.fit.geom.frame.outer;
+      const dc = [[g.x, g.y], [g.x + g.w, g.y], [g.x + g.w, g.y + g.h], [g.x, g.y + g.h]].map(([x, y]) => js.designToPhoto({ x, y }));
+      return Math.max(...dc.map((p, i) => Math.hypot(p.x - tr.frame[i].x, p.y - tr.frame[i].y)));
+    });
+    o.poses = joint.sheets.map(js => ({ sheet: js.identity.sheet, job: js.identity.job, anchor: js.anchor, thetaDeg: js.pose.thetaDeg, rmsMm: js.rmsMm, duplicate: !!res.sheets[js.index].duplicate }));
+    // The relative poses against the truth: each sheet's true table position through the anchor's true frame.
+    const an = res.sheets[joint.anchor];
+    const trA = tb.truth.sheets.find(x => x.sheet === an.identity.sheet && x.job === an.identity.job && Math.hypot(x.centre.x - an.centre.x, x.centre.y - an.centre.y) < 50);
+    o.poseErrMm = joint.sheets.map(js => {
+      const s = res.sheets[js.index];
+      const tr = tb.truth.sheets.filter(x => x.sheet === s.identity.sheet && x.job === s.identity.job).sort((a, b) => Math.hypot(a.centre.x - s.centre.x, a.centre.y - s.centre.y) - Math.hypot(b.centre.x - s.centre.x, b.centre.y - s.centre.y))[0];
+      // The sheet's design corners: truth on the table (renderer's table mm, through the anchor's paper frame) against the fit's table mm.
+      const g = s.fit.geom.frame.outer;
+      const dc = [[g.x, g.y], [g.x + g.w, g.y], [g.x + g.w, g.y + g.h], [g.x, g.y + g.h]].map(([x, y]) => ({ x, y }));
+      const trueTable = dc.map(p => tr.paperToTable(tr.print.map(p)));
+      const fitTable = dc.map(p => js.designToTable(p));
+      // The two table frames differ by a rigid motion (the anchor's placement): take it out with the anchor's own corners.
+      const ga = an.fit.geom.frame.outer;
+      const da = [[ga.x, ga.y], [ga.x + ga.w, ga.y], [ga.x + ga.w, ga.y + ga.h], [ga.x, ga.y + ga.h]].map(([x, y]) => ({ x, y }));
+      const sim = similarity(da.map(p => joint.sheets[joint.anchor].designToTable(p)), da.map(p => trA.paperToTable(trA.print.map(p))));
+      const c = Math.cos(sim.th), sn = Math.sin(sim.th);
+      const moved = fitTable.map(p => ({ x: sim.tx + sim.s * (c * p.x - sn * p.y), y: sim.ty + sim.s * (sn * p.x + c * p.y) }));
+      return { err: Math.max(...moved.map((p, i) => Math.hypot(p.x - trueTable[i].x, p.y - trueTable[i].y))), simScale: sim.s };
+    });
+    if (part) {
+      const pa = tb.truth.tableToPhoto(part[0]), pb = tb.truth.tableToPhoto(part[1]);
+      const ja = joint.photoToTable(pa), jb = joint.photoToTable(pb);
+      o.partTrue = Math.hypot(part[0].x - part[1].x, part[0].y - part[1].y);
+      o.partJoint = Math.hypot(ja.x - jb.x, ja.y - jb.y);
+      // Calibrated from one sheet at one end: the sheet nearest the part's left end, through its own fit and verdict.
+      const ends = res.sheets.map((s, i) => ({ i, d: Math.hypot(s.centre.x - pa.x, s.centre.y - pa.y) })).sort((a, b) => a.d - b.d);
+      const one = res.sheets[ends[0].i], v = vs[ends[0].i];
+      const a = one.fit.photoToDesign(pa), b = one.fit.photoToDesign(pb);
+      o.partSingle = Math.hypot((a.x - b.x) * v.scale.x, (a.y - b.y) * v.scale.y);
+      o.partSingleSheet = { sheet: one.identity.sheet, verdict: v.source, k1: one.fit.k1 };
+    }
+    const ext = tableExtent(joint, vs.map(v => v.rect));
+    o.extent = { w: ext.w, h: ext.h };
+    return o;
+  };
+  const out = {};
+  // Four sheets of one set, printed at 96 percent, around a 500 mm part; lens 0.08, noise; 12 MP from a metre.
+  const photo = { table: { w: 1400, h: 700 }, W: 4000, H: 3000, supersample: 1, pose: { height: 1000, tilt: 4, axis: 25, spin: 2 }, k1: 0.08, noise: 3,
+    objects: [{ x: 450, y: 330, w: 500, h: 40, r: 4 }] };
+  const partEnds = [{ x: 450, y: 350 }, { x: 950, y: 350 }];
+  const four = [{ x: 300, y: 350, rot: 92 }, { x: 700, y: 150, rot: 3 }, { x: 1100, y: 350, rot: -88 }, { x: 700, y: 550, rot: 182 }]
+    .map((p, i) => ({ ...p, sheet: i + 1, count: 4, job: 0x5a, paper: 'letter', scale: 0.96 }));
+  out.four = await run(photo, four, partEnds);
+  // Two jobs: set 3c at 1:1 and set 5a at 96 percent, two sheets each.
+  const two = [{ x: 300, y: 350, rot: 92, sheet: 1, job: 0x5a, scale: 0.96 }, { x: 700, y: 150, rot: 3, sheet: 2, job: 0x5a, scale: 0.96 },
+    { x: 1100, y: 350, rot: -88, sheet: 1, job: 0x3c, scale: 1 }, { x: 700, y: 550, rot: 182, sheet: 2, job: 0x3c, scale: 1 }]
+    .map(p => ({ ...p, count: 2, paper: 'letter' }));
+  out.twoJobs = await run(photo, two, partEnds);
+  // A set printed twice: sheet 2 of set 5a twice, with sheet 1.
+  const dupSheets = [{ x: 220, y: 200, rot: 10, sheet: 1 }, { x: 660, y: 190, rot: -80, sheet: 2 }, { x: 450, y: 520, rot: 185, sheet: 2 }]
+    .map(s => ({ ...s, count: 4, job: 0x5a, paper: 'letter', scale: 0.96 }));
+  const dupPhoto = { table: { w: 900, h: 700 }, W: 3000, H: 2250, supersample: 1, pose: { height: 700, tilt: 2 }, k1: 0.04, noise: 2 };
+  out.dup = await run(dupPhoto, dupSheets);
+  // In Step 1: the joint fit runs after the finder and the panel says so.
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens } };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  app.syncRefControls();
+  const sel = $('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  const dupTb = await renderTablePhoto({ ...dupPhoto, sheets: dupSheets });
+  await new Promise(res => app.loadImageFromURL(dupTb.canvas.toDataURL('image/png'), res));
+  await wait(80);
+  const j = app.sheet.joint;
+  out.app = { found: app.sheet.all ? app.sheet.all.sheets.length : 0, joint: j ? { sheets: j.sheets.length, rmsMm: j.fit.rmsMm, k1: j.k1, message: j.message } : null,
+    note: $('sheetSetNote') ? $('sheetSetNote').textContent : null, verdicts: app.sheet.all ? app.sheet.all.sheets.map(s => s.verdict && s.verdict.source) : null };
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens;
+  app.syncRefControls();
+  return out;
+});
+{
+  const r = jointTest;
+  const worst = a => Math.max(...a);
+  const f = r.four;
+  check('four sheets of one set are fitted together on one plane: every frame within a quarter pixel, every sheet within 0.05 mm of its true place, the lens recovered (criterion 19, the fitting)',
+    f.joint !== null && f.found === 4 && f.verdicts.every(v => v === 'edges') && worst(f.frameErr) < 0.25 && worst(f.poseErrMm.map(p => p.err)) < 0.05 &&
+    Math.abs(f.fit.k1 - f.truthK1) < 0.002 && f.fit.rmsMm < 0.08 && f.ms < 1000,
+    `${f.found} sheets, verdicts ${f.verdicts.join('/')}; frames within ${worst(f.frameErr).toFixed(3)} px; places within ${worst(f.poseErrMm.map(p => p.err)).toFixed(3)} mm; ` +
+    `lens ${f.fit.k1} (true ${f.truthK1}); ${f.fit.rmsMm.toFixed(3)} mm over ${f.fit.points} cells and ${f.fit.lines} dips, ${f.fit.iterations} iterations, ${f.fit.params} unknowns, ${f.ms.toFixed(0)} ms`);
+  check('one print job, one scale: the set\'s scale is fixed from one sheet\'s edges and shared (criterion 21, one job)',
+    f.jobs && f.jobs[0x5a] && f.jobs[0x5a].fixed && Math.abs(f.jobs[0x5a].scale.x - 0.96) < 0.001 && Math.abs(f.jobs[0x5a].scale.y - 0.96) < 0.001 && f.jobs[0x5a].from === 'edges',
+    `set 5a ${f.jobs && (f.jobs[0x5a].scale.x * 100).toFixed(2)} / ${f.jobs && (f.jobs[0x5a].scale.y * 100).toFixed(2)} percent, ${f.jobs && f.jobs[0x5a].from}`);
+  check('a 500 mm part between four sheets measures within 0.2 mm through the joint mapping, and from one sheet at one end comes out worse (criterion 20, through the mapping)',
+    Math.abs(f.partJoint - f.partTrue) < 0.2 && Math.abs(f.partSingle - f.partTrue) > Math.abs(f.partJoint - f.partTrue),
+    `joint ${f.partJoint.toFixed(3)} mm, one sheet (sheet ${f.partSingleSheet.sheet}, ${f.partSingleSheet.verdict}, lens ${f.partSingleSheet.k1}) ${f.partSingle.toFixed(3)} mm, true ${f.partTrue}`);
+  const t = r.twoJobs;
+  check('a second print job is fitted against the anchor set and checked against its own edges (criterion 21, another job)',
+    t.joint !== null && t.found === 4 && t.fit.anchorJob === 0x3c && t.jobs[0x3c].fixed && Math.abs(t.jobs[0x3c].scale.x - 1) < 0.001 &&
+    !t.jobs[0x5a].fixed && Math.abs(t.jobs[0x5a].scale.x - 0.96) < 0.001 && Math.abs(t.jobs[0x5a].scale.y - 0.96) < 0.001 &&
+    worst(t.frameErr) < 0.25 && Math.abs(t.partJoint - t.partTrue) < 0.2,
+    `anchor set ${t.fit && t.fit.anchorJob.toString(16)} at ${t.jobs && (t.jobs[0x3c].scale.x * 100).toFixed(2)} percent (${t.jobs && t.jobs[0x3c].from}); ` +
+    `set 5a fitted ${t.jobs && (t.jobs[0x5a].scale.x * 100).toFixed(3)} / ${t.jobs && (t.jobs[0x5a].scale.y * 100).toFixed(3)} percent (true 96); frames within ${worst(t.frameErr).toFixed(3)} px; part ${t.partJoint.toFixed(3)} mm`);
+  const d = r.dup;
+  check('a set printed twice is fitted as three sheets, the two sheet 2s each with their own place (criterion 22, fitted)',
+    d.joint !== null && d.found === 3 && d.poses.filter(p => p.sheet === 2).length === 2 && d.poses.filter(p => p.duplicate).length === 2 &&
+    worst(d.frameErr) < 0.25 && d.fit.rmsMm < 0.08,
+    `${d.found} sheets: ${d.poses.map(p => `${p.sheet}${p.duplicate ? '*' : ''} at ${p.thetaDeg.toFixed(1)}°`).join(', ')}; frames within ${worst(d.frameErr).toFixed(3)} px; ${d.fit.rmsMm.toFixed(3)} mm`);
+  const a = r.app;
+  check('in Step 1 the joint fit runs after the finder and the panel says how the set was fitted and where each set\'s scale came from',
+    a.found === 3 && a.joint && a.joint.sheets === 3 && a.joint.rmsMm < 0.1 && /Fitted together: 3 sheets on one plane/.test(a.note || '') && /Set 5A: printed at 96\.0 percent, from sheet \d's edges/.test(a.note || '') &&
+    a.verdicts && a.verdicts.every(v => v === 'edges'),
+    `${a.found} found, verdicts ${a.verdicts && a.verdicts.join('/')}; "${a.joint && a.joint.message}"`);
 }
 
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------

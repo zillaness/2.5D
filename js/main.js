@@ -15,6 +15,7 @@ import { sheetSetSVG, printPageHTML, drawJob, jobHex, paperLabel as calibPaperLa
 import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
 import { findSheets, describeFound, pointInQuad as sheetPointInQuad } from './calibFind.js';
+import { fitSheets, describeJoint } from './calibJoint.js';
 import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance, frameOutsideMm, rulerScale } from './calibVerdict.js';
 import { lensParams as calibLensParams, undistortPixel as calibUndistort } from './lens.js';
 import { computeHomography as calibHomography, applyHomography as calibApplyH } from './homography.js';
@@ -592,10 +593,58 @@ function sheetFindAll() {
     res = null;
   }
   state.sheets = res && res.sheets.length ? res : null;
+  if (state.sheets) sheetJointFit();
   if (state.sheets && !cornerEditor.overlay) cornerEditor.overlay = (ctx, vp) => sheetDrawOverlay(ctx, vp);
   sheetSyncPanel();
   cornerEditor.draw();
   return state.sheets;
+}
+
+// The joint fit (phase 2, plan step 15): every sheet found gets its own
+// verdict (its edges, a ruler or a print check on record), one scale per
+// job comes from the best of them, and the set is fitted on one plane with
+// the anchor job's scale fixed. The result waits on state.sheets.joint for
+// the rectification of step 16; the corners still follow the one sheet.
+function sheetJointFit() {
+  const all = state.sheets;
+  if (!all) return null;
+  all.joint = null;
+  const iw = state.image.naturalWidth || state.image.width;
+  const ih = state.image.naturalHeight || state.image.height;
+  for (const s of all.sheets) {
+    const edges = {};
+    for (const e of s.rec.edges || []) edges[e.side] = (e.raw || []).map(p => s.fit.photoToDesign(p));
+    let rect = null;
+    try { rect = fitPaperRect(edges); } catch { rect = null; }
+    const record = calibCheckRecord(s.identity.job, s.identity.sheet);
+    s.rect = rect;
+    s.verdict = sheetVerdict({ identity: s.identity, rect, picker: state.paper.size, record });
+  }
+  if (all.sheets.length < 2) return null;
+  // One scale per job, from the sheet whose verdict is best founded.
+  const rank = { ruler: 3, edges: 2, record: 1, design: 0 };
+  const scales = {};
+  for (const s of all.sheets) {
+    const j = s.identity.job, v = s.verdict;
+    if (rank[v.source] > 0 && (!scales[j] || rank[v.source] > rank[scales[j].source])) scales[j] = { x: v.scale.x, y: v.scale.y, source: v.source, sheet: s.identity.sheet };
+  }
+  let joint = null;
+  try {
+    joint = fitSheets(all.sheets, iw, ih, scales);
+  } catch (err) {
+    console.error('joint fit failed', err);
+    joint = null;
+  }
+  if (joint) {
+    for (const [j, info] of Object.entries(joint.jobs)) {
+      const own = scales[j] || null;
+      info.own = own;
+      info.disagrees = !!(own && !info.fixed && (Math.abs(own.x - info.scale.x) > 0.005 || Math.abs(own.y - info.scale.y) > 0.005));
+    }
+    joint.message = describeJoint(joint, jobHex);
+  }
+  all.joint = joint;
+  return joint;
 }
 
 // ---------- the calibration sheet in Step 1 (calibration_and_backlog_prd_v1.2, Part A step 8) ----------
@@ -784,7 +833,7 @@ function sheetSyncPanel() {
     const more = document.createElement('div');
     more.id = 'sheetSetNote';
     more.style.marginTop = '4px';
-    more.textContent = describeFound(all) + (all.sheets.length > 1 ? ' Fitting them together is the next phase; the corners follow the one sheet above.' : '');
+    more.textContent = describeFound(all) + (all.joint ? ' ' + all.joint.message + ' The corners still follow the one sheet above.' : '');
     el.appendChild(more);
   }
   if (s) {
@@ -8386,6 +8435,7 @@ window.__app = {
     recognise: () => sheetRecognise(),
     findAll: () => sheetFindAll(),
     get all() { return state.sheets; },
+    get joint() { return state.sheets && state.sheets.joint; },
     get state() { return state.sheet; },
     get fitOn() { return state.sheetFit; },
     set fitOn(v) { state.sheetFit = !!v; },

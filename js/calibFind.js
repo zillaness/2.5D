@@ -17,6 +17,7 @@ import { detectPaperRegions } from './detectPaper.js';
 import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
 import { PAPER_SIZES } from './paperSizes.js';
+import { jobHex } from './calibSheet.js';
 
 export const FIND_DEFAULTS = {
   maxSeeds: 16,
@@ -214,7 +215,7 @@ export function describeFound(res) {
     if (!jobs.has(j)) jobs.set(j, []);
     jobs.get(j).push(s.identity.sheet);
   }
-  const hex = j => j.toString(16).padStart(2, '0');
+  const hex = jobHex;
   const list = n => n.length === 1 ? String(n[0]) : n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1];
   const parts = [...jobs.entries()].map(([j, nums]) => `sheet${nums.length > 1 ? 's' : ''} ${list(nums.slice().sort((a, b) => a - b))} of set ${hex(j)}`);
   let text = `${res.sheets.length} calibration sheet${res.sheets.length > 1 ? 's' : ''} in this photo: ${parts.join('; ')}.`;
