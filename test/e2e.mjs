@@ -14651,6 +14651,16 @@ const coinCheck = await page.evaluate(async () => {
   await wait(100);
   const found = app.scan.parts.length;
   const asFound = snap();
+  // B.2 thumbnails: every row shows a crop of the drawer around its candidate.
+  const thumbImgs = Array.from($('scanList').querySelectorAll('img.scan-thumb'));
+  const pxTol = 1 / st.rect.pxPerMm + 1e-9;
+  const thumbs = {
+    rows: $('scanList').querySelectorAll('.scan-row').length, imgs: thumbImgs.length,
+    withSrc: thumbImgs.filter(i => /^data:image\/jpeg/.test(i.src)).length,
+    originOk: app.scan.parts.every(p => p.thumb && Math.abs(p.thumb.origin.x - p.bbox.minX) <= pxTol &&
+      Math.abs(p.thumb.origin.y - p.bbox.minY) <= pxTol),
+    sized: app.scan.parts.every(p => p.thumb && p.thumb.mmPerPx > 0 && /^data:image\/jpeg/.test(p.thumb.dataUrl)),
+  };
   const chk = app.scan.coinFind();
   await wait(50);
   const coinPart = app.scan.parts.find(p => p.isCoin);
@@ -14686,6 +14696,11 @@ const coinCheck = await page.evaluate(async () => {
   const rescale = app.scan.coinApply();
   await wait(50);
   const afterApply = { bar: snap(), coinD: app.scan.coin.d, info: $('scanCoinInfo').textContent, apply: $('scanCoinApplyBtn').textContent, check: { ...app.scan.coinCheck } };
+  const barPart = bar();
+  const thumbAfter = barPart && barPart.thumb ? {
+    dx: barPart.thumb.origin.x - barPart.bbox.minX, dy: barPart.thumb.origin.y - barPart.bbox.minY,
+    mmPerPx: barPart.thumb.mmPerPx, tol: app.scan.rescale.factor / st.rect.pxPerMm + 1e-9,
+  } : null;
   // Undo puts it back; apply again for the placing.
   app.scan.coinApply();
   const afterUndo = { bar: snap(), rescale: app.scan.rescale };
@@ -14697,6 +14712,7 @@ const coinCheck = await page.evaluate(async () => {
   const placed = app.scan.accept();
   window.confirm = realConfirm;
   await wait(100);
+  const itemThumbs = st.layout.items.every(it => it.thumb && /^data:image\/jpeg/.test(it.thumb.dataUrl));
   const items = st.layout.items.map(it => ({ name: it.name, source: it.source, w: (() => { let a = Infinity, b = -Infinity; for (const p of it.outer) { a = Math.min(a, p.x); b = Math.max(b, p.x); } return b - a; })() }));
   $('projectBtn').click();
   const text = $('projText').value;
@@ -14734,7 +14750,7 @@ const coinCheck = await page.evaluate(async () => {
   st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.seg = before.seg;
   st.coin = before.coin;
   app.syncRefControls();
-  return { entered, found, asFound, chk, coinFound: !!coinPart, coinAuto: app.scan.coin ? null : chk && true, afterFind, panel,
+  return { entered, found, asFound, chk, coinFound: !!coinPart, thumbs, thumbAfter, itemThumbs, afterFind, panel,
     picksBefore, picksAfterCoinPress, dragged, onLiner, rescale, afterApply, afterUndo, placed, items, saved: saved.layout.items.map(it => it.source), reloaded,
     enteredFloor, chkFloor, floorPanel, pure, trueFactor: FLOOR / (FLOOR - DEPTH) };
 });
@@ -14772,6 +14788,12 @@ const coinCheck = await page.evaluate(async () => {
     r.items.some(it => nearPct(it.w, 120, 1.2)) &&
     r.saved.every(s => s && nearPct(s.scale, r.trueFactor, 0.012)) && r.reloaded.length === 3 && r.reloaded.every(s => s && nearPct(s.scale, r.trueFactor, 0.012)),
     `${r.items.length} placed, factors ${r.items.map(it => it.source && it.source.scale && it.source.scale.toFixed(4)).join(', ')}; reloaded ${r.reloaded.map(s => s && s.scale && s.scale.toFixed(4)).join(', ')}`);
+  check('every review row shows a thumbnail cropped from the drawer around its candidate',
+    r.thumbs.rows === r.found && r.thumbs.imgs === r.found && r.thumbs.withSrc === r.found && r.thumbs.originOk && r.thumbs.sized,
+    `${r.thumbs.withSrc} of ${r.thumbs.rows} rows with a picture; crop corners match ${r.thumbs.originOk}`);
+  check('a thumbnail follows its outline through the rescale, and every placed tool carries its picture',
+    r.thumbAfter && Math.abs(r.thumbAfter.dx) <= r.thumbAfter.tol && Math.abs(r.thumbAfter.dy) <= r.thumbAfter.tol && r.itemThumbs,
+    r.thumbAfter ? `crop corner off by (${r.thumbAfter.dx.toFixed(3)}, ${r.thumbAfter.dy.toFixed(3)}) mm; items with pictures ${r.itemThumbs}` : 'no thumb');
   check('with the corners on the floor the coin agrees and no rescale is offered',
     r.enteredFloor && r.chkFloor && !r.chkFloor.warn && Math.abs(r.chkFloor.percent) < 1 && !r.floorPanel.applyShown &&
     r.floorPanel.infoClass === 'hint' && /holds/.test(r.floorPanel.info) && r.floorPanel.bar && nearPct(r.floorPanel.bar.w, 120, 1.2),

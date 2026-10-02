@@ -4015,14 +4015,32 @@ function scanRun() {
     marginPx: scanMarginPx(),
     minAreaPx,
   });
-  return scanParts(masks, ppm, {
+  const parts = scanParts(masks, ppm, scanPartOpts(dm));
+  for (const part of parts) scanAttachThumb(part);
+  return parts;
+}
+
+function scanPartOpts(dm) {
+  return {
     simplify: state.seg.simplify,
     smooth: state.seg.smooth,
     detectHoles: state.seg.detectHoles,
     // The drawer's own extent, so a strip of wall along a mis-dragged edge can
     // be told from a tool pushed against that wall.
-    frame: { w: dm.w / ppm, h: dm.h / ppm },
-  });
+    frame: { w: dm.w / state.rect.pxPerMm, h: dm.h / state.rect.pxPerMm },
+  };
+}
+
+// A crop of the rectified drawer around the candidate, the same thumb a
+// library entry carries, so the review row shows the tool rather than
+// "Tool 4, 182 x 31 mm" and the placed item draws its photo inside its pocket.
+function scanAttachThumb(part) {
+  if (!state.rect || !part || !part.outer) return part;
+  try {
+    const t = thumbFromImage(state.rect.canvas, state.rect.pxPerMm, part.outer);
+    if (t) part.thumb = t;
+  } catch { /* a row without a picture still works */ }
+  return part;
 }
 
 // The candidates, drawn over the photo in the trace editor's own draw pass.
@@ -4113,6 +4131,12 @@ function scanSyncPanel() {
     row.style.cssText =
       'display:flex; align-items:center; gap:6px; padding:3px 4px; border-radius:4px; ' +
       (i === state.scan.sel ? 'background:var(--bg2)' : '');
+    const pic = document.createElement('img');
+    pic.className = 'scan-thumb';
+    pic.alt = '';
+    pic.style.cssText = 'width:40px; height:40px; object-fit:contain; flex:none; ' +
+      'background:var(--bg3); border-radius:3px';
+    if (part.thumb && part.thumb.dataUrl) pic.src = part.thumb.dataUrl;
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.checked = part.picked !== false && !part.isCoin;
@@ -4142,7 +4166,7 @@ function scanSyncPanel() {
     area.textContent = part.isCoin
       ? `coin, ⌀ ${fmtDim((part.bbox.w + part.bbox.h) / 2)} mm`
       : `${Math.round(part.bbox.w)} × ${Math.round(part.bbox.h)} mm`;
-    row.append(box, name, area);
+    row.append(box, pic, name, area);
     row.addEventListener('click', e => {
       if (e.target === box || e.target === name) return;
       state.scan.sel = i;

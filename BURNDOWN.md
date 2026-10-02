@@ -337,7 +337,13 @@ real-photo checkpoint. Building in the PRD's suggested order.
     trace instead (`part.disc`). Round tools in a scan, sockets say, carry
     the same bias in their pockets; worth a measured look when B.3's quality
     gate is built, since the same pass runs under retrace.
-- ▶ NEXT: B.2 thumbnails and merge; then B.4, the rest of Part A phase 1, B.3.
+- ✅ Part B.2, thumbnails: every review row shows a crop of the rectified
+  drawer around its candidate, the same `thumb` a library entry carries
+  (`thumbFromImage`, 256 px JPEG), attached in `scanRun`, scaled with the
+  outline by `rescaleParts`, and carried onto the placed item so Step 4 draws
+  it in the pocket. 728 checks, all passing, no console errors; dist
+  rebuilt and smoke-tested — v1.29.1.
+- ▶ NEXT: B.2 merge; then B.4, the rest of Part A phase 1, B.3.
 
 ### Handoff to a fresh session, 2026-10-02
 

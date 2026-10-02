@@ -336,9 +336,14 @@ export function rescaleParts(parts, factor, centre) {
       cx: c.x + (part.disc.cx - c.x) * k, cy: c.y + (part.disc.cy - c.y) * k,
       r: part.disc.r * k, rms: part.disc.rms * k,
     } : part.disc;
+    // The thumbnail is a crop in the same millimetres: its corner moves with
+    // the outline and each of its pixels covers k times as much.
+    const thumb = part.thumb && part.thumb.origin ? {
+      ...part.thumb, origin: sc([part.thumb.origin])[0], mmPerPx: part.thumb.mmPerPx * k,
+    } : part.thumb;
     return {
       ...part, outer, holes: (part.holes || []).map(sc),
-      area: part.area * k * k, bbox: bboxOfPts(outer), disc,
+      area: part.area * k * k, bbox: bboxOfPts(outer), disc, thumb,
     };
   });
 }

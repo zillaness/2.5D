@@ -929,7 +929,10 @@ touch are one shape to a segmenter, and v1 does not try to cut them apart.
 
 **Review.** Continue to Step 2 and the drawer is segmented and traced. Step 2
 becomes a review: every shape found is drawn over the photo with its name, and
-the panel lists them. Click a tool on the photo to tick or untick it, rename
+the panel lists them, each row with a thumbnail cropped from the drawer around
+its shape, so a row says which tool it is and not only its size. The picture
+rides onto the placed tool and shows inside its pocket in Step 4. Click a tool
+on the photo to tick or untick it, rename
 anything you will want engraved, and **Find again** re-runs the segmentation if
 you change the detection threshold. **Place these N tools** puts them in the
 drawer and opens Step 4.
