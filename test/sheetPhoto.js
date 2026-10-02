@@ -246,6 +246,22 @@ async function photograph(flat, dims, R, o) {
     }
     return true;
   };
+  // Layers above the plane (phase 3's raised sheet): each a flat canvas with
+  // its own quad in undistorted photo space, sampled before the plane.
+  const layers = (o.layers || []).map(L => {
+    const pq = [{ x: 0, y: 0 }, { x: L.dims.w, y: 0 }, { x: L.dims.w, y: L.dims.h }, { x: 0, y: L.dims.h }];
+    const d = L.canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, L.canvas.width, L.canvas.height).data;
+    return { ...L, Hinv: computeHomography(L.quad, pq), data: d, fw: L.canvas.width, fh: L.canvas.height };
+  });
+  const sampleLayer = (L, mx, my, acc) => {
+    const fx = Math.max(0, Math.min(L.fw - 1, mx * L.R - 0.5)), fy = Math.max(0, Math.min(L.fh - 1, my * L.R - 0.5));
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(x0 + 1, L.fw - 1), y1 = Math.min(y0 + 1, L.fh - 1);
+    const ax = fx - x0, ay = fy - y0, d = L.data, fw = L.fw;
+    for (let c = 0; c < 3; c++) {
+      const a = d[(y0 * fw + x0) * 4 + c], b = d[(y0 * fw + x1) * 4 + c], e = d[(y1 * fw + x0) * 4 + c], f = d[(y1 * fw + x1) * 4 + c];
+      acc[c] += (a * (1 - ax) + b * ax) * (1 - ay) + (e * (1 - ax) + f * ax) * ay;
+    }
+  };
   const acc = [0, 0, 0];
   for (let v = 0; v < o.H; v++) {
     for (let u = 0; u < o.W; u++) {
@@ -254,6 +270,13 @@ async function photograph(flat, dims, R, o) {
       for (const [dx, dy] of sub) {
         let X = u + dx, Y = v + dy;
         if (o.k1) { const p = undistortPixel({ x: X, y: Y }, o.k1, 0, lp); X = p.x; Y = p.y; }
+        let onLayer = false;
+        for (const L of layers) {
+          const lw = L.Hinv[6] * X + L.Hinv[7] * Y + L.Hinv[8];
+          const lx = (L.Hinv[0] * X + L.Hinv[1] * Y + L.Hinv[2]) / lw, ly = (L.Hinv[3] * X + L.Hinv[4] * Y + L.Hinv[5]) / lw;
+          if (lx >= 0 && ly >= 0 && lx <= L.dims.w && ly <= L.dims.h) { sampleLayer(L, lx, ly, acc); onLayer = true; break; }
+        }
+        if (onLayer) { inside++; continue; }
         const w = Hinv[6] * X + Hinv[7] * Y + Hinv[8];
         let mx = (Hinv[0] * X + Hinv[1] * Y + Hinv[2]) / w, my = (Hinv[3] * X + Hinv[4] * Y + Hinv[5]) / w;
         if (o.bend) {
@@ -363,11 +386,21 @@ export async function renderTablePhoto(opts = {}) {
   const fc = flat.getContext('2d');
   fc.fillStyle = o.desk; fc.fillRect(0, 0, flat.width, flat.height);
   const placed = [];
+  const layers = [];
+  const camPre = o.quad ? null : cameraQuad(table, o.pose || {}, o.W, o.H);
   for (const sh of o.sheets) {
     const so = { ...SHEET_DEFAULTS, flatPxPerMm: R, paperTint: o.paperTint, ...sh };
     const fs = await flatSheet(so);
     const t = (so.rot || 0) * Math.PI / 180, c = Math.cos(t), sn = Math.sin(t);
     const cx = so.x, cy = so.y;
+    if (so.z > 0 && camPre) {
+      // Raised: a layer above the table, its corners through the camera at its height.
+      const p2t = p => { const x = p.x - fs.stock.w / 2, y = p.y - fs.stock.h / 2; return { x: cx + x * c - y * sn, y: cy + x * sn + y * c }; };
+      const quad = [{ x: 0, y: 0 }, { x: fs.stock.w, y: 0 }, { x: fs.stock.w, y: fs.stock.h }, { x: 0, y: fs.stock.h }].map(p => { const q = p2t(p); return camPre.project(q.x, q.y, so.z); });
+      layers.push({ canvas: fs.canvas, dims: fs.stock, R, quad });
+      placed.push({ so, fs, paperToTable: p2t, z: so.z });
+      continue;
+    }
     fc.save();
     fc.setTransform(c, sn, -sn, c, cx * R, cy * R);
     fc.imageSmoothingEnabled = true; fc.imageSmoothingQuality = 'high';
@@ -378,13 +411,15 @@ export async function renderTablePhoto(opts = {}) {
       const x = p.x - fs.stock.w / 2, y = p.y - fs.stock.h / 2;
       return { x: cx + x * c - y * sn, y: cy + x * sn + y * c };
     };
-    placed.push({ so, fs, paperToTable });
+    placed.push({ so, fs, paperToTable, z: 0 });
   }
   drawObjects(fc, o.objects, R);
-  const ph = await photograph(flat, table, R, { ...o, overdraw: (ctx, pd) => drawRaised(ctx, o.objects, pd) });
+  const ph = await photograph(flat, table, R, { ...o, layers, overdraw: (ctx, pd) => drawRaised(ctx, o.objects, pd) });
   const { canvas, quad, Hp, Hinv, lp, cam } = ph;
-  const sheets = placed.map(({ so, fs, paperToTable }) => {
-    const paperToPhoto = p => ph.planeToPhoto(paperToTable(p));
+  const sheets = placed.map(({ so, fs, paperToTable, z }) => {
+    const paperToPhoto = z > 0
+      ? p => { const q = paperToTable(p); const r = cam.project(q.x, q.y, z); return o.k1 ? distortPixel(r, o.k1, 0, lp) : r; }
+      : p => ph.planeToPhoto(paperToTable(p));
     const designToPhoto = p => paperToPhoto(fs.aff.map(p));
     const st = fs.stock;
     const pq = [[0, 0], [st.w, 0], [st.w, st.h], [0, st.h]].map(([x, y]) => paperToPhoto({ x, y }));
@@ -393,7 +428,7 @@ export async function renderTablePhoto(opts = {}) {
     const frameQuad = [[fo.x, fo.y], [fo.x + fo.w, fo.y], [fo.x + fo.w, fo.y + fo.h], [fo.x, fo.y + fo.h]].map(([x, y]) => designToPhoto({ x, y }));
     return {
       paper: so.paper, stock: so.stock || so.paper, stockDims: st, designDims: fs.design,
-      code: PAPER_CODES[so.paper], sheet: so.sheet, count: so.count, job: so.job, x: so.x, y: so.y, rot: so.rot || 0,
+      code: PAPER_CODES[so.paper], sheet: so.sheet, count: so.count, job: so.job, x: so.x, y: so.y, rot: so.rot || 0, z,
       quad: pq, corners: pq.map(q => ({ x: q.x - 0.5, y: q.y - 0.5 })),
       frameQuad, frame: frameQuad.map(q => ({ x: q.x - 0.5, y: q.y - 0.5 })),   // the frame's outer corners, rectify's convention
       centre: paperToPhoto({ x: st.w / 2, y: st.h / 2 }),

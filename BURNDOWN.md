@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.32
+version: 1.33
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -847,7 +847,33 @@ real-photo checkpoint. Building in the PRD's suggested order.
     default); a thickness typed later moves the trace, not the picture, so
     the picture is then out of scale with the trace by a percent or so until
     Step 2 is re-rectified. The readout and the trace are right either way.
-- ▶ NEXT: Part A step 21, the raised sheet.
+- ✅ Part A step 21, the raised sheet. `fitSheets` now reports each sheet's
+  apparent scale against the anchor's plane from its initial similarity
+  (`initScale`), before the joint fit spreads a raised sheet's disagreement
+  over the whole plane (the first draft looked for it in the per-sheet
+  residual after the fit and found nothing: the plane had bent to it and
+  EXIF then read the camera 14 percent high). A sheet more than 0.5 percent
+  over the median whose own edges still agree with its job's print scale
+  is raised, is taken out, and the rest are refitted; its magnification m
+  against the refit and the typed height h give D = h·m/(m − 1), and
+  `focalFromHeight` bisects the focal length that puts the camera at D, so
+  the tilt and the point below follow with no EXIF at all. EXIF, when
+  present, is only checked and flagged past 3 percent, in the panel and in
+  the readout. The panel asks for the height in the set's row; the raised
+  sheet is masked where it appears, through its own fit and the joint's
+  inverse; the renderer draws a sheet with a height as a layer above the
+  table through the camera. Measured: magnification 1.02566 against a true
+  1.02564 for 25 mm a metre down, camera 999.4 mm, an EXIF 15.5 percent off
+  flagged and not used, the 10 mm part corrected to 500.06 × 40.01. 853
+  checks, all passing, no console errors; dist rebuilt and smoke-tested —
+  v1.33.2.
+  - ⚠ A set of two sheets with one raised leaves one sheet on the plane,
+    which the joint fit refuses; the raised sheet is then not detected and
+    the camera, if any, comes from EXIF. Three or more sheets, or the plain
+    EXIF route.
+  - ⚠ The typed height is held in `state.sheets.raisedH` for the photo and
+    not saved in the project; a reload re-asks.
+- ▶ NEXT: Part A step 22, README.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1208,6 +1234,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.33 (2026-10-02): Part A step 21 shipped as v1.33.2.
 - v1.32 (2026-10-02): Part A step 20 shipped as v1.33.1.
 - v1.31 (2026-10-02): Part A step 19 shipped as v1.33.0.
 - v1.30 (2026-10-02): Part A step 18 shipped as v1.32.4; phase 2 complete.

@@ -110,6 +110,10 @@ export function fitSheets(sheets, imgW, imgH, scales = {}, opts = {}) {
   const G0 = invert3(H0);
   if (!G0) return null;
   const jobScale0 = {};
+  // Each sheet's apparent scale against the anchor's plane, from the
+  // initial similarity: a sheet raised above the plane reads larger than
+  // its fellows here, before the joint fit spreads the disagreement.
+  const initScale = sheets.map(() => 1);
   for (const i of sheetIdx) {
     const s = sheets[i];
     // The sheet's design corners through its own fit into the photo, then
@@ -122,6 +126,7 @@ export function fitSheets(sheets, imgW, imgH, scales = {}, opts = {}) {
     const paper = dc.map(p => ({ x: p.x * sc.x, y: p.y * sc.y }));
     const table = dc.map(p => { const q = s.fit.H ? apply(s.fit.H, p.x, p.y) : null; return apply(G0, q.x, q.y); });
     const sim = similarity(paper, table);
+    initScale[i] = sim.s;
     p0[pos.sheet(i)] = sim.th; p0[pos.sheet(i) + 1] = sim.tx; p0[pos.sheet(i) + 2] = sim.ty;
     if (s.identity.job !== anchorJob) {
       const j = s.identity.job;
@@ -269,7 +274,7 @@ export function fitSheets(sheets, imgW, imgH, scales = {}, opts = {}) {
     let k = 0;
     for (const t of terms) { const v = t.kind === 'point' ? pointRes[k] : null; if (t.kind === 'point') { if (t.sheet === i) perSheet.push(v); k++; } }
     return {
-      index: i, identity: s.identity, anchor: i === anchor, pose: { thetaDeg: q.th * 180 / Math.PI, tx: q.tx, ty: q.ty }, scale: sc,
+      index: i, identity: s.identity, anchor: i === anchor, pose: { thetaDeg: q.th * 180 / Math.PI, tx: q.tx, ty: q.ty }, scale: sc, initScale: initScale[i],
       designToTable, tableToDesign, designToPhoto: d => tableToPhoto(designToTable(d)),
       rmsMm: rms(perSheet), points: perSheet.length,
     };

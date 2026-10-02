@@ -16938,6 +16938,93 @@ const corrTest = await page.evaluate(async () => {
     `${s.bbox.w.toFixed(2)} × ${s.bbox.h.toFixed(2)} mm; "${s.info.replace(/\n/g, ' / ')}"`);
 }
 
+// ---------- Parallax: the raised sheet (Part A phase 3, step 21 of calibration_and_backlog_prd_v1.2) ----------
+//
+// Criterion 25: a sheet of the set raised on a surface of stated height
+// recovers the camera height within 3 percent with no EXIF at all, and
+// flags an EXIF focal length that disagrees by more than 3 percent. The
+// raised sheet is told from a differently scaled print by its paper edges,
+// which are magnified with its frame.
+
+console.log('\nParallax: the raised sheet');
+
+const raisedTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderTablePhoto } = await import('./test/sheetPhoto.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens }, captureFrac: st.captureFrac, thickness: st.regions[0].thickness };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  st.captureFrac = 0;
+  st.regions[0].thickness = 10;
+  app.syncRefControls();
+  const sel = $('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  const load = async r => { await new Promise(res => app.loadImageFromURL(r.canvas.toDataURL('image/png'), res)); await wait(150); };
+  const bboxOf = pts => { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const p of pts) { a = Math.min(a, p.x); c = Math.max(c, p.x); b = Math.min(b, p.y); d = Math.max(d, p.y); } return { w: c - a, h: d - b }; };
+  const out = {};
+  // Three sheets on the table and sheet 4 on a 25 mm book, the camera a metre up, a 500 x 40 x 10 mm part between them.
+  const H0 = 1000, BOOK = 25;
+  const sheets = [{ x: 300, y: 350, rot: 92 }, { x: 700, y: 150, rot: 3 }, { x: 1100, y: 350, rot: -88 }, { x: 700, y: 550, rot: 182, z: BOOK }]
+    .map((p, i) => ({ ...p, sheet: i + 1, count: 4, job: 0x5a, paper: 'letter', scale: 0.96 }));
+  const tb = await renderTablePhoto({ table: { w: 1400, h: 700 }, W: 4000, H: 3000, supersample: 1, pose: { height: H0, tilt: 0, spin: 0, f35: 26 }, k1: 0.05, noise: 3, sheets,
+    objects: [{ x: 450, y: 330, w: 500, h: 40, z: 10, r: 4 }] });
+  await load(tb);
+  const all = app.sheet.all, j = app.sheet.joint;
+  out.found = all ? all.sheets.length : 0;
+  out.joint = j && { sheets: j.sheets.length, raised: j.raised, rms: j.fit.rmsMm };
+  out.raised = app.parallax.raised && app.parallax.raised.map(r => ({ sheet: r.identity.sheet, m: r.m, h: r.h }));
+  out.mTrue = H0 / (H0 - BOOK);
+  out.panel = { row: !!$('sheetRaisedRow'), text: $('sheetRaisedRow') ? $('sheetRaisedRow').textContent : '', input: !!$('sheetRaisedH') };
+  out.beforeHeight = { camera: app.parallax.state && app.parallax.state.camera, message: app.parallax.state && app.parallax.state.message };
+  // The height typed, no EXIF.
+  app.parallax.raisedHeight(BOOK);
+  await wait(30);
+  {
+    const p = app.parallax.state;
+    out.sheetCam = { camera: p.camera && { height: p.camera.height, tiltDeg: p.camera.tiltDeg, source: p.camera.source, exifDisagrees: p.camera.exifDisagrees }, message: p.message, note: $('sheetCameraNote').textContent, rowText: $('sheetRaisedRow') ? $('sheetRaisedRow').textContent : '' };
+  }
+  // EXIF that agrees, then EXIF that disagrees by 15 percent.
+  app.parallax.setFocal({ f35: 26, focalMm: null, w: 4000, h: 3000 });
+  { const p = app.parallax.state; out.agree = { source: p.camera && p.camera.source, exifHeight: p.camera && p.camera.exifHeight, disagrees: p.camera && p.camera.exifDisagrees, message: p.message }; }
+  app.parallax.setFocal({ f35: 30, focalMm: null, w: 4000, h: 3000 });
+  { const p = app.parallax.state; out.disagree = { source: p.camera && p.camera.source, height: p.camera && p.camera.height, exifHeight: p.camera && p.camera.exifHeight, disagrees: p.camera && p.camera.exifDisagrees, message: p.message, note: $('sheetCameraNote').textContent }; }
+  app.parallax.setFocal(null);
+  // The correction from the sheet's camera: the part at true size, the raised sheet masked where it appears.
+  st.rectDirty = true;
+  app.goStep(2);
+  await wait(150);
+  {
+    const w = st.sheetWindow && st.sheetWindow.set;
+    out.corrected = { bbox: bboxOf(app.traceEditor.getTrace().outer), info: $('traceInfo').textContent, sheetsInModel: w && w.sheets.length, raisedMasked: w && w.sheets.filter(s => s.raised).length, holes: app.traceEditor.getTrace().holes.length };
+  }
+  app.goStep(1);
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens; st.captureFrac = before.captureFrac; st.regions[0].thickness = before.thickness;
+  app.syncRefControls();
+  return out;
+});
+{
+  const r = raisedTest;
+  check('a sheet raised on a book is told from the set by its magnified frame and edges, taken out of the plane, and the panel asks for its height',
+    r.found === 4 && r.joint && r.joint.sheets === 3 && r.joint.raised && r.joint.raised.length === 1 && r.raised && r.raised.length === 1 && r.raised[0].sheet === 4 &&
+    Math.abs(r.raised[0].m / r.mTrue - 1) < 0.002 && r.panel.row && r.panel.input && /reads 2\.\d percent larger than the others/.test(r.panel.text) && !r.beforeHeight.camera,
+    `${r.found} found, ${r.joint && r.joint.sheets} on the plane (${r.joint && r.joint.fit && r.joint.rms.toFixed(3)} mm); raised ${JSON.stringify(r.raised)} (true magnification ${r.mTrue.toFixed(4)}); "${r.panel.text}"`);
+  const s = r.sheetCam;
+  check('with its height typed the camera is placed from the raised sheet within 3 percent, no EXIF at all (criterion 25)',
+    s.camera && s.camera.source === 'sheet' && Math.abs(s.camera.height / 1000 - 1) < 0.03 && s.camera.tiltDeg < 1 && /from the raised sheet/.test(s.message) && /from sheet 4 raised 25 mm/.test(s.note),
+    `height ${s.camera && s.camera.height.toFixed(1)} (true 1000), tilt ${s.camera && s.camera.tiltDeg.toFixed(2)}°; "${s.note}"`);
+  check('an EXIF focal length that agrees is checked and passes; one 15 percent off is flagged and not used (criterion 25)',
+    r.agree.source === 'sheet' && !r.agree.disagrees && r.agree.exifHeight && Math.abs(r.agree.exifHeight / 1000 - 1) < 0.03 &&
+    r.disagree.source === 'sheet' && r.disagree.disagrees > 3 && Math.abs(r.disagree.height / 1000 - 1) < 0.03 && /percent off; the sheet is used/.test(r.disagree.note) && /not used/.test(r.disagree.message),
+    `agreeing EXIF ${r.agree.exifHeight && r.agree.exifHeight.toFixed(0)} mm; disagreeing EXIF ${r.disagree.exifHeight && r.disagree.exifHeight.toFixed(0)} mm, ${r.disagree.disagrees && r.disagree.disagrees.toFixed(1)} percent off; "${r.disagree.note}"`);
+  const c = r.corrected;
+  check('the correction runs from the raised sheet\'s camera: the 10 mm part at true size within a pixel, the raised sheet masked where it appears',
+    Math.abs(c.bbox.w - 500) < 0.4 && Math.abs(c.bbox.h - 40) < 0.4 && c.holes === 0 && c.sheetsInModel === 4 && c.raisedMasked === 1 && /Parallax: 1\.0 percent at 10 mm, corrected \(camera \d+ mm above the table, tilted 0\.\d°, from the raised sheet\)/.test(c.info),
+    `${c.bbox.w.toFixed(2)} × ${c.bbox.h.toFixed(2)} mm; ${c.sheetsInModel} sheets in the model, ${c.raisedMasked} raised; "${c.info.replace(/\n/g, ' / ')}"`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

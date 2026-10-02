@@ -84,6 +84,26 @@ export function heightFromRaised(m, h) {
   return h * m / (m - 1);
 }
 
+// The focal length that puts the camera at a known height above the plane:
+// the decomposition's height rises with f, so a bisection over f finds it.
+// Returns { f, camera } or null.
+export function focalFromHeight(H, height, pp, range = [0.3, 4]) {
+  if (!H || !(height > 0) || !pp) return null;
+  const diag = Math.hypot(pp.x * 2, pp.y * 2) || 1;
+  const at = k => cameraFromHomography(H, k * diag, pp);
+  let lo = range[0], hi = range[1];
+  const clo = at(lo), chi = at(hi);
+  if (!clo.ok || !chi.ok || !(clo.height < height && chi.height > height)) return null;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const c = at(mid);
+    if (!c.ok) return null;
+    if (c.height < height) lo = mid; else hi = mid;
+  }
+  const k = (lo + hi) / 2;
+  return { f: k * diag, camera: at(k) };
+}
+
 export const STAND_BACK = 'Parallax scales with thickness over camera height, so shooting from farther away with the 2x lens halves it.';
 
 // The readout (criterion 26 and 27).
@@ -94,7 +114,8 @@ export function describeParallax(p) {
   const c = p.camera;
   const pct = ((p.factor - 1) * 100).toFixed(1);
   const cam = `camera ${c.height.toFixed(0)} mm above the ${p.plane || 'sheet'}, tilted ${c.tiltDeg.toFixed(1)}°` +
-    (c.source === 'sheet' ? ', from the raised sheet' : c.source === 'exif' ? ', from the photo\'s focal length' : '');
+    (c.source === 'sheet' ? ', from the raised sheet' : c.source === 'exif' ? ', from the photo\'s focal length' : '') +
+    (c.exifDisagrees ? `; the photo's focal length puts it at ${c.exifHeight.toFixed(0)} mm, ${c.exifDisagrees.toFixed(0)} percent off, and is not used` : '');
   if (!(p.t > 0)) return `Parallax: none at zero thickness (${cam}).`;
   return `Parallax: ${pct} percent at ${p.t} mm, ${p.corrected ? 'corrected' : 'not yet corrected'} (${cam}).`;
 }

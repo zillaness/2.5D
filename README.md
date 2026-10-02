@@ -693,10 +693,30 @@ than the base is built at its own plane. On a synthetic 10 mm part
 photographed from 400 mm the uncorrected trace reads 102.5 mm for 100; the
 corrected one 99.9. The same holds for a set on a table.
 
-**Not yet.** A sheet raised to a known height in place of the focal length
-is the rest of phase 3 (`docs/calibration_and_backlog_prd_v1.2.md`). A
-photo whose code is too blurred to read at all is treated as plain paper
-rather than fitted from the frame lines alone.
+**Without trusting the phone.** Lay one sheet of the set on a flat book or
+block and the app notices: that sheet reads larger than the others, edges
+and all, which a different print scale cannot do, and the panel asks for
+the height ("Sheet 4 of set 5A reads 2.6 percent larger than the others,
+edges and all: is it raised on a book or a block? Its height: ___ mm"). The
+height typed, the camera's height follows from the magnification alone,
+with no focal length at all, and the raised sheet is left out of the table's
+plane and masked where it appears. A focal length the photo does carry is
+then only checked: one that disagrees by more than 3 percent is said so and
+not used, which is what happens when a phone crops digitally. On the
+synthetic table a sheet on a 25 mm book places a camera a metre up within a
+percent.
+
+**What centring does not do.** Parallax is a uniform scale about the point
+below the camera, not a skew: a part in the middle of the photo shows its
+top face exactly as large as one at the edge. Centring the part makes the
+sides invisible and the trace cleaner, and does nothing for its size. Only
+the camera's height does: shoot from farther away with the 2× lens and the
+error halves, and with the sheet it is measured and taken out.
+
+**Not yet.** A photo whose code is too blurred to read at all is treated as
+plain paper rather than fitted from the frame lines alone, and a set of two
+sheets with one of them raised leaves one sheet on the table, which is not
+a set: use three or more.
 
 ## Tips for good photos
 
@@ -1173,7 +1193,9 @@ are tested on a table: `renderTablePhoto` composes flat sheets at any
 position and angle on one plane, with parts between them, and photographs
 the plane with the same camera, so the finder, the joint fit, the table
 rectification and the drawer's sheet check are all measured against a truth
-per sheet.
+per sheet. For parallax, an object or a sheet with a height is drawn through
+the camera at that height, its silhouette the hull of its base and its top,
+so the photo carries the true parallax the correction is measured against.
 ## Roadmap
 
 ### Shipped
@@ -1234,7 +1256,8 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   and are being built: finding several sheets shipped in v1.32.0, the
   joint fit in v1.32.1, rectification and segmentation for a set in v1.32.2,
   the drawer scale from a sheet in v1.32.3; phase 3's camera position from
-  the focal length in v1.33.0 and the correction in v1.33.1.
+  the focal length in v1.33.0, the correction in v1.33.1 and the raised
+  sheet in v1.33.2.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0 and the sheet on the drawer floor in v1.32.3; see "Checking the
   scale with a calibration sheet" under the drawer scan.

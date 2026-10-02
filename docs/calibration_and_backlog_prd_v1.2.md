@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.23
+version: 1.2.24
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -263,6 +263,7 @@ distance, or a correction, reduces the size error.
 25. **Corrected without trusting the phone.** A sheet raised on a surface of
     stated height recovers the camera height within 3 percent with no EXIF at
     all, and flags an EXIF focal length that disagrees by more than 3 percent.
+    *Met, v1.33.2: 999.4 mm for 1000, an EXIF 15.5 percent off flagged.*
 26. **The correction is visible.** The readout names it ("parallax: 2.4 percent
     at 10 mm, corrected") along with the camera height and tilt, so a changed
     dimension never comes as a surprise. *Met, v1.33.1.*
@@ -962,6 +963,21 @@ checkpoint that needs a person.
 21. **The raised sheet.** Detection by magnified paper edges, the height
     prompt, the EXIF cross-check. Criterion 25. **Checkpoint:** what EXIF
     survives on Sam's own phone and browser, and one real thick part.
+    *Shipped v1.33.2, 2026-10-02.* The joint fit's initial similarity gives
+    each sheet's apparent scale against the anchor's plane before the fit
+    spreads the disagreement; a sheet more than 0.5 percent over the median
+    whose own edges still agree with its job's print scale is raised (a
+    print at another scale moves frame against paper; a raised sheet moves
+    both), is taken out, and the rest are refitted; its magnification
+    against the refit and the typed height give D = h·m/(m − 1), and the
+    focal length that puts the camera at D (a bisection over f) gives the
+    tilt and the point below. EXIF, when present, is only checked, and
+    flagged past 3 percent. The raised sheet is masked where it appears.
+    Measured: a sheet on a 25 mm book a metre down, magnification 1.02566
+    against a true 1.02564, camera 999.4 mm, an EXIF 15.5 percent off
+    flagged, the part corrected to 500.06 × 40.01. The checkpoint waits on
+    Sam's phone with the rest. A set of two with one raised leaves one
+    sheet on the table, which is not a set: three or more.
 22. **README**, including that centring the part does not fix its size.
 
 ---
@@ -1248,6 +1264,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.24 (2026-10-02): Part A step 21 shipped in v1.33.2; criterion 25 met.
 - v1.2.23 (2026-10-02): Part A step 20 shipped in v1.33.1; criteria 24, 26 and 27 met.
 - v1.2.22 (2026-10-02): Part A step 19 shipped in v1.33.0.
 - v1.2.21 (2026-10-02): Part A step 18 shipped in v1.32.4; phase 2 built, status line updated.

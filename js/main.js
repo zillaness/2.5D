@@ -16,7 +16,7 @@ import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
 import { findSheets, describeFound, pointInQuad as sheetPointInQuad } from './calibFind.js';
 import { fitSheets, describeJoint, tableExtent, tableAxisAngle } from './calibJoint.js';
-import { cameraFromHomography, parallaxFactor, describeParallax, raisePoint, lowerPoint } from './parallax.js';
+import { cameraFromHomography, parallaxFactor, describeParallax, raisePoint, lowerPoint, focalFromHeight, heightFromRaised } from './parallax.js';
 import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance, frameOutsideMm, rulerScale } from './calibVerdict.js';
 import { lensParams as calibLensParams, undistortPixel as calibUndistort } from './lens.js';
 import { computeHomography as calibHomography, applyHomography as calibApplyH } from './homography.js';
@@ -493,7 +493,25 @@ function parallaxUpdate() {
     scale = sc; plane = 'sheet';
   }
   const f = focalPixels(state.photoFocal, iw, ih);
-  if (H && f) {
+  const raised = joint && state.sheets && state.sheets.raised && state.sheets.raised.find(r => r.h > 0);
+  if (H && raised) {
+    // Route 2: the raised sheet's magnification gives the height outright,
+    // and the focal length that agrees with it gives the tilt and the point
+    // below. The photo's own focal length, when present, is only checked.
+    const D = heightFromRaised(raised.m, raised.h);
+    const fh = D ? focalFromHeight(H, D, { x: iw / 2, y: ih / 2 }) : null;
+    if (fh && fh.camera.ok) {
+      camera = { height: fh.camera.height, tiltDeg: fh.camera.tiltDeg, below: fh.camera.below, source: 'sheet', f: fh.f, raised: { sheet: raised.identity.sheet, m: raised.m, h: raised.h } };
+      if (f) {
+        const ce = cameraFromHomography(H, f, { x: iw / 2, y: ih / 2 });
+        if (ce.ok) {
+          camera.exifHeight = ce.height;
+          const off = Math.abs(ce.height / camera.height - 1) * 100;
+          camera.exifDisagrees = off > 3 ? off : 0;
+        }
+      }
+    } else reason = 'the raised sheet could not place the camera';
+  } else if (H && f) {
     const cam = cameraFromHomography(H, f, { x: iw / 2, y: ih / 2 });
     if (cam.ok && cam.height > 0) {
       camera = { height: cam.height, tiltDeg: cam.tiltDeg, below: cam.below, source: 'exif', f, scaleSpread: cam.scaleSpread };
@@ -517,7 +535,9 @@ function parallaxSync(prev) {
   const p = state.parallax;
   if (el) {
     if (p && p.camera) {
-      el.textContent = `Camera ${p.camera.height.toFixed(0)} mm above the ${p.plane}, tilted ${p.camera.tiltDeg.toFixed(1)}°, from the photo's focal length. ` +
+      const from = p.camera.source === 'sheet' ? `from sheet ${p.camera.raised.sheet} raised ${fmtDim(p.camera.raised.h)} mm` : 'from the photo\'s focal length';
+      const exif = p.camera.exifDisagrees ? ` The photo's focal length puts it at ${p.camera.exifHeight.toFixed(0)} mm, ${p.camera.exifDisagrees.toFixed(0)} percent off; the sheet is used.` : '';
+      el.textContent = `Camera ${p.camera.height.toFixed(0)} mm above the ${p.plane}, tilted ${p.camera.tiltDeg.toFixed(1)}°, ${from}.${exif} ` +
         (p.t > 0 ? `A ${p.t} mm part shows its top ${((p.factor - 1) * 100).toFixed(1)} percent large from here.` : '');
       el.hidden = false;
     } else el.hidden = true;
@@ -677,6 +697,18 @@ function sheetFindAll() {
 
 // The set is what Step 2 rectifies from when two or more sheets were fitted
 // together (plan step 16): the whole table, every sheet's band masked.
+// The raised sheet's height, typed into the panel: the camera follows.
+function sheetRaisedHeight(h) {
+  const all = state.sheets;
+  if (!all || !all.raised || !all.raised.length) return null;
+  const r = all.raised[0];
+  r.h = h > 0 ? h : null;
+  all.raisedH = r.h ? { index: r.index, h: r.h } : null;
+  sheetSyncPanel();
+  parallaxUpdate();
+  state.rectDirty = true;
+  return r;
+}
 function sheetSetActive() {
   const all = state.sheets;
   const j = all && all.joint;
@@ -721,6 +753,18 @@ function doRectifySet(joint) {
     const wc = [{ x: win.x, y: win.y }, { x: win.x + win.w, y: win.y }, { x: win.x + win.w, y: win.y + win.h }, { x: win.x, y: win.y + win.h }];
     return { paper: pc.map(p => toPx(js.designToTable(p))), window: wc.map(p => toPx(js.designToTable(p))), sheet: s.identity.sheet, job: s.identity.job };
   });
+  // A raised sheet is not on the plane: masked where it appears, through its own fit.
+  for (const idx of joint.raised || []) {
+    const s = all.sheets[idx];
+    if (!s || !s.fit) continue;
+    const stock = PAPER_SIZES[s.identity.paper];
+    const dW = Math.min(stock.w, stock.h), dH = Math.max(stock.w, stock.h);
+    const pc = (s.verdict && s.verdict.rect && s.verdict.rect.corners) || [{ x: 0, y: 0 }, { x: dW, y: 0 }, { x: dW, y: dH }, { x: 0, y: dH }];
+    const win = s.fit.geom.window;
+    const wc = [{ x: win.x, y: win.y }, { x: win.x + win.w, y: win.y }, { x: win.x + win.w, y: win.y + win.h }, { x: win.x, y: win.y + win.h }];
+    const apparent = p => { const l = ext.toLocal(joint.photoToTable(s.fit.designToPhoto(p))); return { x: l.x * ppm, y: l.y * ppm }; };
+    sheets.push({ paper: pc.map(apparent), window: wc.map(apparent), sheet: s.identity.sheet, job: s.identity.job, raised: true });
+  }
   const mm = poly => poly.map(p => ({ x: p.x / ppm, y: p.y / ppm }));
   state.sheetWindow = {
     px: null, mm: null,
@@ -770,6 +814,45 @@ function sheetJointFit() {
   let joint = null;
   try {
     joint = fitSheets(all.sheets, iw, ih, scales);
+    // A sheet raised on a book (phase 3, step 21) does not lie on the plane:
+    // its frame reads magnified by D / (D - h), and its paper edges with it,
+    // so its own verdict agrees with its job's while its residual against
+    // the plane is large. It is taken out and the rest refitted; its
+    // magnification against the refit is what gives the camera's height.
+    all.raised = [];
+    if (joint && joint.sheets.length >= 3) {
+      // Against the anchor's plane before the fit, a raised sheet reads
+      // larger than the rest; the median is the plane.
+      const scalesInit = joint.sheets.map(js => js.initScale).sort((a, b) => a - b);
+      const med = scalesInit[scalesInit.length >> 1];
+      const bad = joint.sheets.filter(js => js.initScale / med > 1.005).map(js => js.index);
+      if (bad.length && joint.sheets.length - bad.length >= 2) {
+        const keep = all.sheets.filter((s, i) => !bad.includes(i));
+        const refit = fitSheets(keep, iw, ih, scales);
+        if (refit) {
+          const magnify = s => {
+            const g = s.fit.geom.frame.outer;
+            const dc = [[g.x, g.y], [g.x + g.w, g.y], [g.x + g.w, g.y + g.h], [g.x, g.y + g.h]].map(([x, y]) => refit.photoToTable(s.fit.designToPhoto({ x, y })));
+            const side = (a, b) => Math.hypot(dc[a].x - dc[b].x, dc[a].y - dc[b].y);
+            const sc = refit.jobs[s.identity.job] ? refit.jobs[s.identity.job].scale : (scales[s.identity.job] || { x: 1, y: 1 });
+            return ((side(0, 1) + side(2, 3)) / 2 / (g.w * sc.x) + (side(1, 2) + side(3, 0)) / 2 / (g.h * sc.y)) / 2;
+          };
+          const jobOf = j => (scales[j] || { x: 1, y: 1 });
+          for (const i of bad) {
+            const s = all.sheets[i];
+            const m = magnify(s);
+            const own = s.verdict && s.verdict.source === 'edges' ? s.verdict.scale : null;
+            const js = jobOf(s.identity.job);
+            const edgesAgree = !own || (Math.abs(own.x - js.x) < 0.01 && Math.abs(own.y - js.y) < 0.01);
+            if (m > 1.005 && edgesAgree) all.raised.push({ index: i, identity: s.identity, m, h: all.raisedH && all.raisedH.index === i ? all.raisedH.h : null });
+          }
+          if (all.raised.length) {
+            joint = refit;
+            joint.raised = all.raised.map(r => r.index);
+          }
+        }
+      }
+    }
   } catch (err) {
     console.error('joint fit failed', err);
     joint = null;
@@ -983,6 +1066,22 @@ function sheetSyncPanel() {
     more.style.marginTop = '4px';
     more.textContent = describeFound(all) + (all.joint ? ' ' + all.joint.message + ' Step 2 rectifies the whole table from the set; the corners above mark the one sheet.' : '');
     el.appendChild(more);
+    if (all.raised && all.raised.length) {
+      const r = all.raised[0];
+      const row = document.createElement('div');
+      row.id = 'sheetRaisedRow';
+      row.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px';
+      const hIn = document.createElement('input');
+      hIn.type = 'text'; hIn.inputMode = 'decimal'; hIn.id = 'sheetRaisedH'; hIn.style.width = '5.5em'; hIn.value = r.h ? fmtDim(r.h) : '';
+      hIn.placeholder = 'height';
+      const save = document.createElement('button');
+      save.className = 'btn small'; save.id = 'sheetRaisedSave'; save.textContent = r.h ? 'Update height' : 'Save height';
+      save.addEventListener('click', () => sheetRaisedHeight(parseDim(hIn.value)));
+      row.append(document.createTextNode(`Sheet ${r.identity.sheet} of set ${jobHex(r.identity.job)} reads ${((r.m - 1) * 100).toFixed(1)} percent larger than the others, edges and all: is it raised on a book or a block? Its height: `),
+        hIn, document.createTextNode(' mm '), save);
+      if (r.h) row.append(document.createTextNode(` Camera placed from it${state.parallax && state.parallax.camera && state.parallax.camera.source === 'sheet' ? `, ${state.parallax.camera.height.toFixed(0)} mm above the table` : ''}.`));
+      el.appendChild(row);
+    }
   }
   if (s) {
     // Under the paper's cut tolerance: the frame's outside edges, measured
@@ -8874,6 +8973,8 @@ window.__app = {
     get rect() { return state.rect && state.rect.parallax; },
     retarget: t => parallaxRetarget(t),
     regions: () => parallaxRegions(),
+    get raised() { return state.sheets && state.sheets.raised; },
+    raisedHeight: h => sheetRaisedHeight(h),
   },
   // Calibration sheets: the panel, the print and the download with their
   // record, and the clock the job is drawn from.
