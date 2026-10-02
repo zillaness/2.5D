@@ -1127,5 +1127,3 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   to test as Access's 90 degrees.
 - The overfull drawer has no bound. The time budget disarms itself while any
   tool is still unplaced, which is the case a user most wants to escape.
-- Re-editing a saved project re-encodes its rectified photo at quality 0.85, so
-  each round trip through the re-edit path costs one generation of JPEG loss.

@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.4
+version: 1.2.5
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -975,6 +975,11 @@ the bench before and after. Open question 14.
 
 ## B.4 Small fixes
 
+*Shipped in v1.29.3, 2026-10-02. The Rotation step select is dimmed with a
+note whenever nothing reads it; a loaded project's rectified JPEG is kept on
+`state.rect.jpeg` and written back unchanged unless the rectification was
+remade.*
+
 - **An inert control.** The nest panel's Rotation step select
   (`layNestRotStep`, `index.html:999`) stays live when Free rotation is off,
   but `nestAngles` then ignores it unless a tool is individually set to free
@@ -1114,6 +1119,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.5 (2026-10-02): B.4 shipped in v1.29.3.
 - v1.2.4 (2026-10-02): B.2 shipped, thumbnails in v1.29.1 and merge in v1.29.2.
 - v1.2.3 (2026-10-02): B.1 shipped in v1.29.0; its status note records the
   raw-boundary circle fit and the centre-anchored rescale.

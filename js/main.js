@@ -3039,6 +3039,7 @@ function syncNestPanel() {
   $('layNestComfortWeb').value = fmtDim(v.comfortWeb);
   $('layNestRotStep').value = String(v.rotationStep);
   $('layNestRotFree').checked = !!v.rotationFree;
+  laySyncRotStep(v);
   $('layNestNotch').value = v.notchPolicy;
   $('layNestLabelSpace').value = v.labelSpace;
   $('layNestRestarts').value = String(v.restarts);
@@ -3066,6 +3067,20 @@ function syncNestPanel() {
 
 // Read one packing field back off the panel. Every edit lands here, so the
 // "modified" comparison runs in exactly one place.
+// The rotation step only means something when nestAngles will read it: with
+// Free rotation on, or for a tool individually set free (rotLock 'free').
+// Otherwise every tool tries 0 and 180 whatever the step says, so the select
+// is dimmed with a note rather than left live and inert.
+function laySyncRotStep(v) {
+  const values = v || (state.layout.pack && state.layout.pack.values) || {};
+  const anyFree = (state.layout.items || []).some(it => it && it.rotLock === 'free');
+  const live = !!values.rotationFree || anyFree;
+  const sel = $('layNestRotStep');
+  if (sel) sel.disabled = !live;
+  const note = $('layNestRotStepNote');
+  if (note) note.hidden = live;
+}
+
 function nestFieldChanged(key, value) {
   const L = state.layout;
   L.pack.values = packNormalize({ ...L.pack.values, [key]: value });
@@ -3936,6 +3951,7 @@ $('laySelRotLock').addEventListener('change', e => {
   // someone who then turns it.
   if (e.target.checked) it.rotLock = 'current'; else delete it.rotLock;
   syncLaySelPanel(layoutEditor.sel);
+  laySyncRotStep();
 });
 for (const [id, key] of [['layBedW', 'w'], ['layBedH', 'h']]) {
   $(id).addEventListener('change', e => {
@@ -6891,9 +6907,13 @@ function serializeProject(includePhoto) {
     lines: traceEditor.lines,
     holeTemplate: traceEditor.holeTemplate,
     pxPerMm: state.rect ? state.rect.pxPerMm : null,
-    rectified: state.rect ? state.rect.canvas.toDataURL('image/jpeg', 0.85) : null,
+    // The JPEG a project was loaded with is written back as it came, so a
+    // re-edit that only touches the trace does not re-encode the photo and
+    // cost it a generation. A rectification that changed (doRectify, a 90
+    // degree turn) makes a new state.rect with no jpeg, and is encoded fresh.
+    rectified: state.rect ? (state.rect.jpeg || state.rect.canvas.toDataURL('image/jpeg', 0.85)) : null,
     back: state.back.rect ? {
-      rectified: state.back.rect.canvas.toDataURL('image/jpeg', 0.85),
+      rectified: state.back.rect.jpeg || state.back.rect.canvas.toDataURL('image/jpeg', 0.85),
       pxPerMm: state.back.rect.pxPerMm,
       align: state.back.align || null,
     } : null,
@@ -7085,7 +7105,7 @@ function loadProject(p, opts = {}) {
       const c = document.createElement('canvas');
       c.width = bim.width; c.height = bim.height;
       c.getContext('2d').drawImage(bim, 0, 0);
-      state.back.rect = { canvas: c, pxPerMm: p.back.pxPerMm || 4 };
+      state.back.rect = { canvas: c, pxPerMm: p.back.pxPerMm || 4, jpeg: p.back.rectified };
       state.back.align = p.back.align;
       const tryRender = (n = 0) => {
         if (state.rect) { backRender(); }
@@ -7125,7 +7145,7 @@ function loadProject(p, opts = {}) {
         const c = document.createElement('canvas');
         c.width = im.width; c.height = im.height;
         c.getContext('2d').drawImage(im, 0, 0);
-        state.rect = { canvas: c, pxPerMm: p.pxPerMm };
+        state.rect = { canvas: c, pxPerMm: p.pxPerMm, jpeg: p.rectified };
         state.rectDirty = false;
         state.diffMap = computeDiffMap(c);
         traceEditor.setRectified(c, p.pxPerMm);

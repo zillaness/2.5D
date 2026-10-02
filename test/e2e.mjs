@@ -14948,6 +14948,97 @@ const mergeTest = await page.evaluate(async () => {
     r.touching ? `${r.touching.w.toFixed(2)} × ${r.touching.h.toFixed(2)}, bridged ${r.touching.bridgedMm}, ${r.touching.pts} points` : 'no merge');
 }
 
+// ---------- Two small fixes (Part B.4 of calibration_and_backlog_prd_v1.2) ----------
+
+console.log('\nB.4: the rotation step control, and the rectified JPEG round trip');
+
+const rotStep = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const before = { free: $('layNestRotFree').checked, items: st.layout.items.slice() };
+  const set = on => { $('layNestRotFree').checked = on; $('layNestRotFree').dispatchEvent(new Event('change')); };
+  const read = () => ({ disabled: $('layNestRotStep').disabled, note: !$('layNestRotStepNote').hidden });
+  set(true);
+  const freeOn = read();
+  set(false);
+  const freeOff = read();
+  // A tool set free on its own brings the step back to life, with Free
+  // rotation still off.
+  const rect = [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 10 }, { x: 0, y: 10 }];
+  st.layout.items.push({ name: 'loose', outer: rect, holes: [], circles: [], x: 30, y: 30, rot: 0, rotLock: 'free' });
+  set(false);
+  const oneFree = read();
+  st.layout.items.pop();
+  set(false);
+  const noneFree = read();
+  set(before.free);
+  st.layout.items = before.items;
+  return { freeOn, freeOff, oneFree, noneFree };
+});
+check('the Rotation step select is dimmed with a note when nothing reads it, and live when Free rotation is on or a tool is set free',
+  !rotStep.freeOn.disabled && !rotStep.freeOn.note && rotStep.freeOff.disabled && rotStep.freeOff.note &&
+  !rotStep.oneFree.disabled && !rotStep.oneFree.note && rotStep.noneFree.disabled && rotStep.noneFree.note,
+  JSON.stringify(rotStep));
+
+// The rectified photo loses a generation on every re-edit: restoring decodes
+// the JPEG and saving re-encodes it at 0.85. The loaded bytes are now kept
+// and written back unless the rectification itself changed.
+const jpegTrip = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const c = document.createElement('canvas');
+  c.width = 400; c.height = 300;
+  const g = c.getContext('2d');
+  g.fillStyle = '#1f3f7f'; g.fillRect(0, 0, 400, 300);
+  g.fillStyle = '#e0c060'; g.fillRect(80, 120, 240, 120);
+  const rectified = c.toDataURL('image/jpeg', 0.85);
+  const rect = (x, y, w, h) => [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  if (app.scan.active) app.scan.exit();
+  // A whole saved project as the app writes one, with the stand-in photo and
+  // a trace put in, so the load is the ordinary path.
+  $('projectBtn').click();
+  const base = JSON.parse($('projText').value);
+  $('projCloseBtn').click();
+  const project = {
+    ...base, fileName: 'jpeg trip', photo: null, back: null,
+    trace: { outer: rect(20, 30, 60, 30), holes: [], circles: [] }, rectified, pxPerMm: 4,
+  };
+  $('projectBtn').click();
+  $('projText').value = JSON.stringify(project);
+  $('projLoadTextBtn').click();
+  for (let i = 0; i < 40 && !(st.rect && st.rect.jpeg); i++) await wait(50);
+  $('projCloseBtn').click();
+  const loaded = { kept: st.rect && st.rect.jpeg === rectified, outer: app.traceEditor.outer.length };
+  // Touch only the trace, then save.
+  app.traceEditor.outer[0].x += 0.5;
+  $('projectBtn').click();
+  const afterEdit = JSON.parse($('projText').value);
+  $('projCloseBtn').click();
+  // Now change the rectification itself: a 90 degree turn.
+  $('rotateRightBtn').click();
+  await wait(100);
+  $('projectBtn').click();
+  const afterRotate = JSON.parse($('projText').value);
+  $('projCloseBtn').click();
+  // Reload what was saved after the edit: it decodes and the trace is there.
+  $('projectBtn').click();
+  $('projText').value = JSON.stringify(afterEdit);
+  $('projLoadTextBtn').click();
+  for (let i = 0; i < 40 && !(st.rect && st.rect.jpeg === rectified); i++) await wait(50);
+  $('projCloseBtn').click();
+  return {
+    loaded, editIdentical: afterEdit.rectified === rectified, editOuterX: afterEdit.trace.outer[0].x,
+    rotateDiffers: afterRotate.rectified !== rectified && /^data:image\/jpeg/.test(afterRotate.rectified || ''),
+    rotatedSize: { w: st.rect ? st.rect.canvas.width : 0 }, reloaded: st.rect && st.rect.jpeg === rectified,
+  };
+});
+check('a re-edit that touches only the trace leaves the project\'s rectified JPEG byte-identical',
+  jpegTrip.loaded.kept && jpegTrip.loaded.outer === 4 && jpegTrip.editIdentical && near(jpegTrip.editOuterX, 20.5, 1e-9) && jpegTrip.reloaded,
+  `kept on load ${jpegTrip.loaded.kept}, identical after edit ${jpegTrip.editIdentical}, outer[0].x ${jpegTrip.editOuterX}`);
+check('a rectification that changed, a 90 degree turn, is encoded fresh',
+  jpegTrip.rotateDiffers, `differs ${jpegTrip.rotateDiffers}`);
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

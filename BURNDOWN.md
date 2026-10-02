@@ -355,7 +355,22 @@ real-photo checkpoint. Building in the PRD's suggested order.
   - ⚠ A closing fills every concavity narrower than the gap it bridges, so a
     merge across a 10 mm gap also fills a 6 mm notch elsewhere on the tool.
     Said in the README and the hint; Edit in Step 2 is the repair.
-- ▶ NEXT: B.4, the two small fixes; then the rest of Part A phase 1, B.3.
+- ✅ Part B.4, the two small fixes. The nest panel's Rotation step select is
+  dimmed with a note (`laySyncRotStep`) unless Free rotation is on or a tool
+  carries `rotLock: 'free'`, re-checked on every panel sync and lock change.
+  A loaded project's rectified JPEG is kept on `state.rect.jpeg` (and
+  `state.back.rect.jpeg`) and written back byte-identical; doRectify and the
+  90 degree turn make a new rect object with no jpeg, so a changed
+  rectification is encoded fresh. 738 checks, all passing, no console
+  errors; dist rebuilt and smoke-tested — v1.29.3.
+  - ⚠ A hand-written minimal project (app, version, trace, rectified, pxPerMm
+    and a one-region list, nothing else) is refused by Load from text: the
+    paste handler catches whatever loadProject throws on the missing fields
+    and says the JSON is invalid. Every project the app writes loads, and the
+    library import path reads the same minimal shape without complaint, so
+    this is a hand-edited-file edge; recorded, not fixed.
+- ▶ NEXT: Part A step 3, the layout and the code (`js/calibSheet.js`); then
+  steps 4 to 13; B.3 at any point.
 
 ### Handoff to a fresh session, 2026-10-02
 
