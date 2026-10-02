@@ -1150,9 +1150,6 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0; a calibration sheet on the drawer floor, recognised on its own,
   will do the same without a coin in Part A phase 2.
-- **Nest speed** — an exact reject before Clipper shipped in v1.31.0 and
-  took a 30-tool Dense pack from 3.5 s to 0.5 s with the pack unchanged. What
-  is left is a bound on the overfull drawer; see Known gaps.
 
 ### Horizon
 
@@ -1191,5 +1188,9 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   of what is already placed rejects the overlapping ones before Clipper, and
   `--gate` checks that any change to the nest still places as many tools
   within 1 percent of the recorded packed area.
-- The overfull drawer has no bound. The time budget disarms itself while any
-  tool is still unplaced, which is the case a user most wants to escape.
+- An overfull drawer is bounded by its passes, not by a clock. Tools of
+  distinct size run one pass (reshuffles only permute tools of equal area),
+  and tools of equal size and different shape stop after six restarts that
+  bettered nothing. Forty tools in a drawer that holds thirty finish in about
+  half a second under Dense and four seconds under Access, and the ones that
+  did not fit are named.

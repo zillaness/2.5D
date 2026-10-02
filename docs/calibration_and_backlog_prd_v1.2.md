@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.14
+version: 1.2.15
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -974,6 +974,17 @@ restores the two.
 
 ## B.3 Nest speed and the overfull drawer
 
+*Shipped v1.30.11 to v1.31.1, 2026-10-02. The measurement corrected the
+diagnosis below in two ways: Dense's 42,280 tests were ONE pass (reshuffles of
+repeated shapes dedupe), and 94 percent of them were screening, not settling.
+The exact change that followed, an occupancy grid that rejects an overlapping
+candidate before Clipper, took Dense from 3.5 s to 0.5 s and Access from 0.6
+to 0.2 with every placement identical. Restarts that better neither count nor
+area now stop after six (`stallRestarts`), which bounds the equal-area case;
+an overfull drawer of forty distinct tools finishes in one pass, 0.5 s under
+Dense and 4.3 s under Access, naming what did not fit. Coarse-to-fine
+rotation was not needed.*
+
 **Problem.** Measured warm on `test/nest-bench.mjs` (30 tools): Dense takes
 about 2.6 s and 42,280 placement tests, Access about 0.45 s and 6,949. A test
 costs the same 0.06 ms under either profile. Dense is slow because it tries
@@ -1157,6 +1168,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.15 (2026-10-02): B.3 shipped in v1.30.11 to v1.31.1, with its diagnosis corrected in the status note.
 - v1.2.14 (2026-10-02): Part A step 12 shipped in v1.30.9.
 - v1.2.13 (2026-10-02): Part A step 11 shipped in v1.30.8, with criterion 12's premise corrected.
 - v1.2.12 (2026-10-02): Part A step 10 shipped in v1.30.7; the real-photo checkpoint waits on Sam's prints.

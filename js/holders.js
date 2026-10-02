@@ -599,6 +599,7 @@ export const NEST_DEFAULTS = {
   obstacles: null,     // extra fixed loops to pack around (seam corridors)
   restarts: 20,        // bounded seeded restarts over the equal-area groups
   testBudget: 40000,   // work ceiling for those restarts, in candidate tests
+  stallRestarts: 6,    // stop after this many distinct restarts that bettered neither count nor area; 0 = never
   seed: 1,             // fixed: same input, same result, every time
   settleRounds: 6,     // slide up / slide left alternations
   settleTol: 0.25,     // mm, the binary-search floor for a slide
@@ -1317,7 +1318,8 @@ function* nestCore(containerOuter, items, opts = {}) {
   }
 
   let best = null;
-  let budgetHit = false;
+  let budgetHit = false, stalled = false, stall = 0;
+  const stallLimit = Math.max(0, Math.round(Number(o.stallRestarts) || 0));
   const seen = new Set();
   const passes = Math.min(200, Math.max(1, Math.round(Number(o.restarts) || 1)));
   const budget = Math.max(0, Number(o.testBudget) || 0);
@@ -1340,6 +1342,17 @@ function* nestCore(containerOuter, items, opts = {}) {
     if (!best || run.placed.length > best.placed.length ||
         (run.placed.length === best.placed.length && run.area < best.area - NEST_EPS)) {
       best = run;
+      stall = 0;
+    } else if (stallLimit > 0 && ++stall >= stallLimit) {
+      // The early stop (calibration_and_backlog_prd_v1.2, B.3, behind the
+      // quality gate of open question 14): restarts that have bettered
+      // neither the placed count nor the packed area for stallLimit distinct
+      // passes in a row are not going to, and this is what bounds a drawer
+      // whose tools are unplaced, where the work ceiling above cannot bite.
+      // Only DISTINCT passes count; a reshuffle the shape keys dedupe away
+      // was never work.
+      stalled = true;
+      break;
     }
   }
 
@@ -1410,6 +1423,7 @@ function* nestCore(containerOuter, items, opts = {}) {
       unplaced: unplaced.length,
       passes: seen.size,
       budgetHit,
+      stalled,
       tests,
       screenTests,
       settleTests,

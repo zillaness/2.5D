@@ -640,9 +640,85 @@ real-photo checkpoint. Building in the PRD's suggested order.
   so the suite can prove that: with and without, same placements, same
   tests, same area. 811 checks, all passing, no console errors;
   dist rebuilt and smoke-tested — v1.31.0.
-- ▶ NEXT: B.3, the overfull drawer: measure 40 distinct shapes where 30 fit,
-  then the early stop on restarts behind the gate; coarse-to-fine rotation
-  only if a bound still needs it.
+- ✅ Part B.3, the overfull drawer and the stalled restart. Measured: forty
+  distinct tools in a drawer that holds about thirty run ONE pass, because
+  the restarts only permute tools of equal area and distinct tools dedupe to
+  the same key; 0.5 s under Dense (budget hit after pass 0) and 4.3 s under
+  Access, twelve named 'noRoom'. So the unbounded case was only ever tools
+  of equal area and different shape, and `stallRestarts: 6` now stops the
+  restarts after six distinct passes that bettered neither count nor area:
+  on ten such tools with forty restarts, 7 passes instead of 23, the same
+  pack, 15,981 tests instead of 52,509. Both behind the gate, which passes.
+  Coarse-to-fine rotation was not needed and is not built. 814
+  checks, all passing, no console errors; dist rebuilt and smoke-tested —
+  v1.31.1.
+  - ⚠ A second exact change, grids for the notch rule's disc tests, passed
+    the gate and bought nothing (Access 222 to 248 ms, noise), so it was
+    taken out again rather than left as clutter. Access's 0.3 ms per test
+    on the overfull drawer is not the notch: it is the partial overlaps of
+    a full drawer, which the grid cannot prove and Clipper must.
+- ▶ NEXT: nothing queued from the signed-off scope. Part A phases 2 and 3
+  wait on the checkpoint and their own sign-off; see the handoff below.
+
+### Handoff to a fresh session, 2026-10-02 (second)
+
+**State.** Branch `claude/2.5d-photo-stl-s3-y0oodn`, v1.31.1, every unit of
+the signed-off scope built and pushed: Part A phase 1, all thirteen steps
+including the two droppable ones, and Part B items B.1 to B.4. Nothing is
+queued from the PRD; the next build work needs a sign-off.
+
+**What exists now, for orientation.** `js/calibSheet.js` (layout v1, the
+code, the SVG, the print page; frozen in `test/fixtures/calib_layout_v1.json`),
+`js/calibDetect.js` (recognition), `js/calibFit.js` (lens and homography),
+`js/calibVerdict.js` (the paper rectangle, the verdict, the ruler, the
+guidance), and the `sheet` block in `js/main.js` (Step 1 integration, the
+print panel, the print-check and ruler records in localStorage). The
+renderer the tests use is `test/sheetPhoto.js`; the real-photo harness is
+`test/realPhotos.mjs` with `test/mark-photo.html`. The nest's exact reject is
+`occGrid` in `js/holders.js`; its gate is `node test/nest-bench.mjs --gate`.
+
+**Waiting on Sam, in order of what unblocks most:**
+1. **Phase 1's real-photo checkpoint.** Print a set from Step 1 ("Print
+   calibration sheets", Actual size), photograph one sheet at 1:1 and one
+   printed with Fit to page on, one under a lamp, each with a steel rule on
+   it, and add them with `test/mark-photo.html` into `test/fixtures/real/`.
+   Also plain sheets with a rule, for step 2's own checkpoint. Everything in
+   this ledger about the sheet is synthetic until then, and the PRD's own
+   constraint says why that is not enough: a rendered paper edge has no curl,
+   shadow or pale desk. The first run of `npm test` records the baselines.
+2. **Sign-off for phases 2 and 3** after the checkpoint, and a decision on
+   what the checkpoint showed. Two things to look at first on real photos:
+   the frame found by `detectPaperCorners` rather than the paper (handled,
+   but worth seeing), and the lens term the fit chooses against the slider.
+3. Repointing GitHub's default branch, so `claude/object-thickness-photo-t8mw2k`
+   and `claude/readme-screenshots` can be deleted (blocked in sessions).
+4. The go-ahead to deploy: gh-pages still serves v1.25.0.
+
+**Known gaps recorded this session, none blocking:**
+- The line-only fallback (a sheet whose code cannot be read at all) is not
+  built; such a photo is treated as plain paper. Four frame lines fix a
+  homography for any aspect, so naming the layout needs the camera
+  assumption `js/paperAspect.js` makes.
+- Criterion 4's absolute accuracy is bounded by rectify's 1600 px cap, not
+  by the sheet; the sheet delivers equality with 1:1 exactly.
+- The auto lens estimate on plain paper (`estimateDistortion`, a 640 px
+  downscale) is too coarse to apply blind: k1 -0.011 on a flat synthetic
+  costs 0.36 mm over 150 mm. The sheet's own fit is a different, precise
+  path.
+- The refine pass shrinks round shapes by about 0.3 mm on a 24 mm disc
+  (simplify then Chaikin); the coin check fits the raw boundary instead.
+  Round tools in a scan carry the bias.
+- A hand-written minimal project is refused by Load from text.
+
+**Conventions kept, plus two new ones:**
+- Splice test blocks into `test/e2e.mjs` with a FUNCTION as the replacement
+  (`s.replace(anchor, () => block + anchor)`): a block containing `$\``
+  once duplicated the suite's first 15,000 lines.
+- A chunked read of a photo must try every region that brackets a sample,
+  not the first; the recogniser lost a word at every chunk boundary before.
+- The rest as before: rectify's pixel convention, camera-rendered photos for
+  anything that reasons about the camera, warm timing only, one commit per
+  unit with the printed total, version bumped and `dist/` smoke-tested.
 
 ### Handoff to a fresh session, 2026-10-02
 

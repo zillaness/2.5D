@@ -16165,6 +16165,56 @@ for (const prof of ['Dense', 'Access']) {
     `${r.placed} placed, ${r.tests[0]} tests either way, area ${Math.round(r.area[0])}; ${r.ms[0]} ms with the grid, ${r.ms[1]} without`);
 }
 
+// ---------- Nest speed: the overfull drawer and the stalled restart (Part B.3, behind the gate) ----------
+
+const nestOver = await page.evaluate(async () => {
+  const { nestLayout, roundedRect, packProfileValues } = await import('/js/holders.js');
+  const rect = (w, h) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }];
+  const ell = (w, h, t) => [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: t }, { x: t, y: t }, { x: t, y: h }, { x: 0, y: h }];
+  const mk = (name, outer) => ({ name, outer, holes: [], circles: [], x: 0, y: 0, rot: 0, thickness: 6 });
+  // Forty distinct shapes in a drawer about thirty of them fit.
+  const items = [];
+  for (let k = 0; k < 40; k++) {
+    items.push(k % 3 === 0 ? mk('L' + k, ell(50 + k * 0.7, 30 + k * 0.5, 12)) : k % 3 === 1 ? mk('r' + k, rect(60 - k * 0.3, 18 + k * 0.4)) : mk('s' + k, rect(24 + k * 0.6, 24 + k * 0.6)));
+  }
+  // Dense packs tighter, so its drawer is smaller: either way about thirty
+  // of the forty fit.
+  const drawers = { Dense: roundedRect(170, 120, 340, 240, 12), Access: roundedRect(210, 150, 420, 300, 12) };
+  const out = {};
+  for (const prof of ['Dense', 'Access']) {
+    const v = packProfileValues(prof);
+    const t0 = performance.now();
+    const res = nestLayout(drawers[prof], items, v);
+    out[prof] = { ms: Math.round(performance.now() - t0), placed: res.placements.length, unplaced: res.unplaced.length,
+      reasons: [...new Set(res.unplaced.map(u => u.reason))], passes: res.stats.passes, named: res.unplaced.every(u => u.name) };
+  }
+  // The stall: ten tools of one area and different shapes, whose reshuffles
+  // are all distinct passes. Forty restarts allowed; the stall ends them
+  // early with the pack as good.
+  const same = [];
+  const dims = [[60, 20], [40, 30], [30, 40], [20, 60], [48, 25], [25, 48], [50, 24], [24, 50], [34, 35.29], [35.29, 34]];
+  dims.forEach(([w, h], i) => same.push(mk('e' + i, rect(w, h))));
+  const tray = rect(260, 160);
+  const dense = packProfileValues('Dense');
+  const full = nestLayout(tray, same, { ...dense, restarts: 40, stallRestarts: 0, testBudget: 0 });
+  const early = nestLayout(tray, same, { ...dense, restarts: 40, stallRestarts: 6, testBudget: 0 });
+  out.stall = { fullPasses: full.stats.passes, earlyPasses: early.stats.passes, stalled: early.stats.stalled, fullStalled: full.stats.stalled,
+    placed: [full.placements.length, early.placements.length], area: [full.stats.area, early.stats.area], tests: [full.stats.tests, early.stats.tests] };
+  return out;
+});
+for (const prof of ['Dense', 'Access']) {
+  const r = nestOver[prof];
+  check(`an overfull drawer under ${prof}, forty tools where about thirty fit, finishes within 10 s and reports what did not fit, by name and reason`,
+    r.ms < 10000 && r.unplaced > 0 && r.placed + r.unplaced === 40 && r.reasons.every(x => x === 'noRoom') && r.named,
+    `${r.placed} placed, ${r.unplaced} unplaced (${r.reasons.join(', ')}) in ${r.ms} ms, ${r.passes} pass(es)`);
+}
+{
+  const r = nestOver.stall;
+  check('restarts that better neither count nor area stop after six, with the pack as good as all forty gave',
+    r.fullPasses > r.earlyPasses && r.stalled && !r.fullStalled && r.placed[0] === r.placed[1] && r.area[1] <= r.area[0] * 1.01 && r.tests[1] < r.tests[0],
+    `${r.earlyPasses} passes against ${r.fullPasses}; placed ${r.placed.join(' / ')}; area ${Math.round(r.area[1])} against ${Math.round(r.area[0])}; tests ${r.tests[1]} against ${r.tests[0]}`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the
