@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.25
+version: 1.26
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -663,7 +663,45 @@ real-photo checkpoint. Building in the PRD's suggested order.
   once that anything phase 1 gets wrong on real paper will be built on. By
   Sam's decision, build proceeds in the plan's order: steps 14 to 18, then
   19 to 22. PRD at v1.2.16.
-- ▶ NEXT: Part A step 14, finding several sheets.
+- ✅ Part A step 14, finding several sheets. `detectPaperRegions` in
+  `js/detectPaper.js` (the single-paper detector refactored over the same
+  code, its path unchanged) returns every bright sheet-sized component and
+  every dark ring that could be a frame line, at a 960 px downscale so a
+  2 mm frame at 3 px/mm survives, a seed of about a sheet's size swallowing
+  the seeds inside it (a paper its window and its ring). `js/calibFind.js`
+  recognises each seed with phase 1's recogniser and fit, keeps the better
+  of two reads of one physical sheet (frames overlapping), flags two sheets
+  of one identity as duplicates (criterion 22), holds a read to three words
+  on two sides, and for a seed touching the photo's edge grows the visible
+  part across the border in its own orientation (the longest hull edge not
+  along the border; the border's normal in the sheet's frame says which
+  axis was cut) to the stock's aspect both ways round, reading each guess.
+  Step 1 runs it once per photo after the load paints; the panel lists the
+  set, the overlay numbers each frame, the corners still follow the one
+  sheet under them until step 15. `renderTablePhoto` in `test/sheetPhoto.js`
+  composes several flat sheets on one plane and photographs it with the
+  single-sheet camera (the single-sheet renderer refactored into the same
+  flat-then-photograph pair; its tests' numbers unchanged). Measured on
+  12 MP photos at 2.8 px/mm: one, four and eight sheets at random rotations
+  all found, frames within 0.1 px, 0.4 / 1.2 / 1.4 s; a set printed twice
+  reads as sheets 1, 2 and 2 with the note; sheets cut by the photo's edge
+  at 25° and 100° read from 13 words each with their in-photo frame corners
+  within 0.02 px; three sheets on a white desk found from their rings. 821
+  checks, all passing, no console errors; dist rebuilt and smoke-tested —
+  v1.32.0.
+  - ⚠ The "whole-photo line search" is built as a search for closed dark
+    rings, not straight segments: a frame line is a closed loop and comes
+    out of the component labelling whole, and the recogniser is the "code
+    reads beside it" filter the PRD asked for. A ring broken by a part
+    lying across the frame is still one component unless the part covers
+    the whole width of the line twice.
+  - ⚠ A cut sheet's single-sheet fit extrapolates its off-photo corners by
+    a few pixels (up to 5.6 px at 40°); the joint fit is what should place
+    them, since the shared plane constrains what one sheet's two or three
+    sides cannot.
+  - ⚠ Finding costs 0.1 to 0.2 s per seed at 12 MP, so a photo of eight
+    sheets adds 1.4 s after the load; it runs after the paint, not before.
+- ▶ NEXT: Part A step 15, the joint fit.
 
 ### Handoff to a fresh session, 2026-10-02 (second)
 
@@ -1024,6 +1062,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.26 (2026-10-02): Part A step 14 shipped as v1.32.0.
 - v1.25 (2026-10-02): Phases 2 and 3 of the calibration PRD signed off by Sam before the real-photo checkpoint; build resumes at step 14.
 - v1.24 (2026-10-02): Steps 1a and 1b shipped as v1.28.0 and v1.28.1; criterion 14 revised; handoff to a fresh session written.
 - v1.23 (2026-10-02): Calibration and backlog PRD signed off for Part A phase 1 and Part B items B.1 to B.4; build started.

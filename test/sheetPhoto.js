@@ -109,21 +109,22 @@ function mulberry32(seed) {
   };
 }
 
-// Render one photo. Returns { canvas, truth }; see the file comment.
-export async function renderSheetPhoto(opts = {}) {
-  const o = {
-    paper: 'letter', sheet: 1, count: 1, job: 0x7f, stock: null,
-    scale: 1, anchor: 'centre', offset: { x: 0, y: 0 }, skewDeg: 0, bottomMargin: 0,
-    W: 2400, H: 1800, pose: null, quad: null, k1: 0, blur: 0, noise: 0, seed: 1,
-    desk: '#3a352f', deskGradient: null, paperTint: '#f6f4ee', objects: [], flatPxPerMm: 8, supersample: 2,
-    jpeg: null, bend: 0, light: 0, ...opts,
-  };
+const SHEET_DEFAULTS = {
+  paper: 'letter', sheet: 1, count: 1, job: 0x7f, stock: null,
+  scale: 1, anchor: 'centre', offset: { x: 0, y: 0 }, skewDeg: 0, bottomMargin: 0,
+  paperTint: '#f6f4ee', objects: [], flatPxPerMm: 8,
+};
+const PHOTO_DEFAULTS = {
+  W: 2400, H: 1800, pose: null, quad: null, k1: 0, blur: 0, noise: 0, seed: 1,
+  desk: '#3a352f', deskGradient: null, supersample: 2, jpeg: null, bend: 0, light: 0,
+};
+
+// The flat sheet: paper, then the ink through the print affine, then the
+// objects on it, at R px/mm. Returns the canvas and the print affine.
+async function flatSheet(o) {
   const design = stockDims(o.paper);
   const stock = stockDims(o.stock || o.paper);
   const R = o.flatPxPerMm;
-
-  // The flat sheet: paper, then the ink through the print affine, then the
-  // objects on it, at R px/mm.
   const svg = sheetSVGFromPrintPage(o.paper, o.sheet, o.count, o.job);
   const img = await decodeSVG(svg);
   const flat = document.createElement('canvas');
@@ -142,7 +143,12 @@ export async function renderSheetPhoto(opts = {}) {
   fc.imageSmoothingEnabled = true; fc.imageSmoothingQuality = 'high';
   fc.drawImage(img, 0, 0, design.w * R, design.h * R);
   fc.restore();
-  for (const ob of o.objects) {
+  drawObjects(fc, o.objects, R);
+  return { canvas: flat, aff, stock, design, R };
+}
+
+function drawObjects(fc, objects, R) {
+  for (const ob of objects || []) {
     fc.fillStyle = ob.color || '#23364a';
     const r = ob.r || 0;
     fc.beginPath();
@@ -150,17 +156,23 @@ export async function renderSheetPhoto(opts = {}) {
     else fc.roundRect(ob.x * R, ob.y * R, ob.w * R, ob.h * R, r * R);
     fc.closePath(); fc.fill();
   }
+}
 
-  // The camera.
-  const cam = o.quad ? null : cameraQuad(stock, o.pose || {}, o.W, o.H);
+// Photograph a flat canvas of dims {w, h} mm at R px/mm: the camera, the
+// lens, the optics, the sensor and the file. Returns the photo canvas and
+// the geometry: the quad, the plane-to-photo homography and its inverse,
+// the lens parameters and the camera.
+async function photograph(flat, dims, R, o) {
+  const fc = flat.getContext('2d');
+  const cam = o.quad ? null : cameraQuad(dims, o.pose || {}, o.W, o.H);
   const quad = o.quad || cam.quad;
-  const paperQuad = [{ x: 0, y: 0 }, { x: stock.w, y: 0 }, { x: stock.w, y: stock.h }, { x: 0, y: stock.h }];
-  const Hp = computeHomography(paperQuad, quad);      // paper mm -> continuous photo (undistorted)
-  const Hinv = computeHomography(quad, paperQuad);    // back
+  const planeQuad = [{ x: 0, y: 0 }, { x: dims.w, y: 0 }, { x: dims.w, y: dims.h }, { x: 0, y: dims.h }];
+  const Hp = computeHomography(planeQuad, quad);      // plane mm -> continuous photo (undistorted)
+  const Hinv = computeHomography(quad, planeQuad);    // back
   const lp = lensParams(o.W, o.H);
   if (o.light) {
     // Uneven light: brightness falls by `light` (a fraction) from the
-    // sheet's left edge to its right, over paper, ink and objects alike.
+    // plane's left edge to its right, over paper, ink and objects alike.
     const d = fc.getImageData(0, 0, flat.width, flat.height);
     const p = d.data, fw0 = flat.width;
     for (let i = 0; i < p.length; i += 4) {
@@ -183,7 +195,7 @@ export async function renderSheetPhoto(opts = {}) {
   const sub = [];
   for (let i = 0; i < ss; i++) for (let j = 0; j < ss; j++) sub.push([(i + 0.5) / ss, (j + 0.5) / ss]);
   const sample = (mx, my, acc) => {
-    // mm on the paper -> flat pixel (pixel j covers [j, j+1) mm*R). Clamped,
+    // mm on the plane -> flat pixel (pixel j covers [j, j+1) mm*R). Clamped,
     // not refused: the outer half pixel of the sheet is still paper, and
     // treating it as desk shaved 0.06 mm off every edge.
     const fx = Math.max(0, Math.min(fw - 1, mx * R - 0.5)), fy = Math.max(0, Math.min(fh - 1, my * R - 0.5));
@@ -210,10 +222,10 @@ export async function renderSheetPhoto(opts = {}) {
           // A sheet that is not flat: a smooth in-plane displacement of up
           // to `bend` mm, one hump across and one down, which no homography
           // can absorb. Not a true curl, but what one looks like to a fit.
-          mx += o.bend * Math.sin(Math.PI * my / stock.h) * Math.cos(Math.PI * mx / stock.w);
-          my += o.bend * Math.sin(Math.PI * mx / stock.w) * Math.cos(Math.PI * my / stock.h);
+          mx += o.bend * Math.sin(Math.PI * my / dims.h) * Math.cos(Math.PI * mx / dims.w);
+          my += o.bend * Math.sin(Math.PI * mx / dims.w) * Math.cos(Math.PI * my / dims.h);
         }
-        if (mx >= 0 && my >= 0 && mx <= stock.w && my <= stock.h && sample(mx, my, acc)) inside++;
+        if (mx >= 0 && my >= 0 && mx <= dims.w && my <= dims.h && sample(mx, my, acc)) inside++;
         else {
           const g = gradTo ? u / (o.W - 1) : 0;
           for (let c = 0; c < 3; c++) acc[c] += gradTo ? deskRGB[c] * (1 - g) + gradTo[c] * g : deskRGB[c];
@@ -257,13 +269,23 @@ export async function renderSheetPhoto(opts = {}) {
     j.getContext('2d').drawImage(im, 0, 0);
     canvas = j;
   }
-
-  // Truth. designToPhoto takes a layout point through the print affine, the
-  // homography and the lens, to continuous photo coordinates.
-  const paperToPhoto = p => {
+  const planeToPhoto = p => {
     const q = applyHomography(Hp, p.x, p.y);
     return o.k1 ? distortPixel(q, o.k1, 0, lp) : q;
   };
+  return { canvas, quad, Hp, Hinv, lp, cam, planeToPhoto };
+}
+
+// Render one photo. Returns { canvas, truth }; see the file comment.
+export async function renderSheetPhoto(opts = {}) {
+  const o = { ...SHEET_DEFAULTS, ...PHOTO_DEFAULTS, ...opts };
+  const { canvas: flat, aff, stock, design, R } = await flatSheet(o);
+  const ph = await photograph(flat, stock, R, o);
+  const { canvas, quad, Hp, Hinv, lp, cam } = ph;
+
+  // Truth. designToPhoto takes a layout point through the print affine, the
+  // homography and the lens, to continuous photo coordinates.
+  const paperToPhoto = ph.planeToPhoto;
   const designToPhoto = p => paperToPhoto(aff.map(p));
   const geom = layoutGeometry(o.paper);
   return {
@@ -276,6 +298,71 @@ export async function renderSheetPhoto(opts = {}) {
       cells: sheetCells(o.paper, o.sheet, o.job),
       paperToPhoto, designToPhoto, project: cam ? cam.project : null, f: cam ? cam.f : null,
       pxPerMm: Math.hypot(quad[2].x - quad[0].x, quad[2].y - quad[0].y) / Math.hypot(stock.w, stock.h),
+    },
+  };
+}
+
+// Several sheets on one table (phase 2). `table` is {w, h} mm, the plane the
+// camera sees; each entry of `sheets` takes the sheet options above plus
+// `x`, `y` (the sheet's centre on the table, mm) and `rot` (degrees,
+// clockwise on the table). Objects in table millimetres lie on the table.
+// The photo options are as above, with the camera over the table's centre.
+// Returns { canvas, truth } where truth.sheets[i] carries each sheet's own
+// corners, paperToPhoto, designToPhoto and cells, and truth.table the plane.
+export async function renderTablePhoto(opts = {}) {
+  const o = { table: { w: 900, h: 600 }, sheets: [], objects: [], flatPxPerMm: 8, paperTint: '#f6f4ee', ...PHOTO_DEFAULTS, ...opts };
+  const R = o.flatPxPerMm;
+  const table = o.table;
+  const flat = document.createElement('canvas');
+  flat.width = Math.round(table.w * R); flat.height = Math.round(table.h * R);
+  const fc = flat.getContext('2d');
+  fc.fillStyle = o.desk; fc.fillRect(0, 0, flat.width, flat.height);
+  const placed = [];
+  for (const sh of o.sheets) {
+    const so = { ...SHEET_DEFAULTS, flatPxPerMm: R, paperTint: o.paperTint, ...sh };
+    const fs = await flatSheet(so);
+    const t = (so.rot || 0) * Math.PI / 180, c = Math.cos(t), sn = Math.sin(t);
+    const cx = so.x, cy = so.y;
+    fc.save();
+    fc.setTransform(c, sn, -sn, c, cx * R, cy * R);
+    fc.imageSmoothingEnabled = true; fc.imageSmoothingQuality = 'high';
+    fc.drawImage(fs.canvas, -fs.stock.w * R / 2, -fs.stock.h * R / 2);
+    fc.restore();
+    // paper mm -> table mm
+    const paperToTable = p => {
+      const x = p.x - fs.stock.w / 2, y = p.y - fs.stock.h / 2;
+      return { x: cx + x * c - y * sn, y: cy + x * sn + y * c };
+    };
+    placed.push({ so, fs, paperToTable });
+  }
+  drawObjects(fc, o.objects, R);
+  const ph = await photograph(flat, table, R, o);
+  const { canvas, quad, Hp, Hinv, lp, cam } = ph;
+  const sheets = placed.map(({ so, fs, paperToTable }) => {
+    const paperToPhoto = p => ph.planeToPhoto(paperToTable(p));
+    const designToPhoto = p => paperToPhoto(fs.aff.map(p));
+    const st = fs.stock;
+    const pq = [[0, 0], [st.w, 0], [st.w, st.h], [0, st.h]].map(([x, y]) => paperToPhoto({ x, y }));
+    const geom = layoutGeometry(so.paper);
+    const fo = geom.frame.outer;
+    const frameQuad = [[fo.x, fo.y], [fo.x + fo.w, fo.y], [fo.x + fo.w, fo.y + fo.h], [fo.x, fo.y + fo.h]].map(([x, y]) => designToPhoto({ x, y }));
+    return {
+      paper: so.paper, stock: so.stock || so.paper, stockDims: st, designDims: fs.design,
+      code: PAPER_CODES[so.paper], sheet: so.sheet, count: so.count, job: so.job, x: so.x, y: so.y, rot: so.rot || 0,
+      quad: pq, corners: pq.map(q => ({ x: q.x - 0.5, y: q.y - 0.5 })),
+      frameQuad, frame: frameQuad.map(q => ({ x: q.x - 0.5, y: q.y - 0.5 })),   // the frame's outer corners, rectify's convention
+      centre: paperToPhoto({ x: st.w / 2, y: st.h / 2 }),
+      print: fs.aff, geom, cells: sheetCells(so.paper, so.sheet, so.job),
+      paperToTable, paperToPhoto, designToPhoto,
+      pxPerMm: Math.hypot(pq[2].x - pq[0].x, pq[2].y - pq[0].y) / Math.hypot(st.w, st.h),
+    };
+  });
+  return {
+    canvas,
+    truth: {
+      table, quad, corners: quad.map(q => ({ x: q.x - 0.5, y: q.y - 0.5 })), Hp, Hinv, k1: o.k1, lensParams: lp,
+      tableToPhoto: ph.planeToPhoto, project: cam ? cam.project : null, f: cam ? cam.f : null,
+      sheets,
     },
   };
 }

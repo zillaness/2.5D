@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.16
+version: 1.2.17
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -863,7 +863,17 @@ checkpoint that needs a person.
 
 14. **Finding several sheets.** Every bright sheet-sized component as a seed;
     the whole-photo line search as the fallback. Tests: one to eight sheets at
-    random poses; duplicates; a sheet half out of frame.
+    random poses; duplicates; a sheet half out of frame. *Shipped v1.32.0,
+    2026-10-02.* `detectPaperRegions` returns every bright sheet-sized
+    component and every dark ring that could be a frame line (the fallback:
+    the frame found as a closed dark component rather than as straight
+    segments, with the recogniser as the "code reads beside it" filter);
+    `js/calibFind.js` recognises each seed, keeps the better of two reads of
+    one sheet, flags duplicates, and grows a seed cut by the photo's edge
+    across the border in the sheet's own orientation before reading it
+    again. The table renderer `renderTablePhoto` composes several sheets on
+    one plane. Measured: eight sheets at 2.8 px/mm found in 1.4 s, frames
+    within 0.1 px; a cut sheet at 25° and 100° read from 13 words.
 15. **The joint fit.** A small Gauss-Newton solver, one shared plane and lens,
     a pose per sheet, a scale per print job. Tests: criteria 20, 21, 22.
 16. **Rectification and segmentation for a set.** The table rectangle, the
@@ -1171,6 +1181,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.17 (2026-10-02): Part A step 14 shipped in v1.32.0.
 - v1.2.16 (2026-10-02): Sam signed off Part A phases 2 and 3 ("Continue I'm
   signing off of the next build work"), before phase 1's real-photo
   checkpoint; recorded as such. Build starts at plan step 14.

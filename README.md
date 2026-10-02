@@ -627,11 +627,23 @@ from the clean ring around the window and fitted as a smooth surface, so a
 lamp on one side does not read as object, and a trace that runs within 1 mm
 of the band is called out.
 
-**Not yet.** Several sheets around a large part, a sheet on a drawer's floor
-for the drawer scan, and parallax correction for thick parts are planned as
-the next phases (`docs/calibration_and_backlog_prd_v1.2.md`, phases 2 and
-3). A photo whose code is too blurred to read at all is treated as plain
-paper rather than fitted from the frame lines alone.
+**Several sheets.** Lay sheets of a set around a large part, by hand, at any
+angle, and Step 1 finds every one of them: each bright sheet-sized patch of
+the photo is tried as a sheet, and on a white desk, where the paper has no
+edge, the frame's dark ring is tried instead. The panel lists what it found
+("4 calibration sheets in this photo: sheets 1, 2, 3 and 4 of set 7f"), the
+overlay marks each frame with its number, a sheet cut by the photo's edge is
+found from its visible part and marked as cut, and a set printed twice is
+still two sheets, with a note to print a fresh set so each has its own
+number. For now the corners still follow the one sheet under them; fitting
+the set together on one plane, and measuring a part between the sheets, is
+the next step of phase 2.
+
+**Not yet.** A sheet on a drawer's floor for the drawer scan, and parallax
+correction for thick parts, are the rest of phases 2 and 3
+(`docs/calibration_and_backlog_prd_v1.2.md`). A photo whose code is too
+blurred to read at all is treated as plain paper rather than fitted from the
+frame lines alone.
 
 ## Tips for good photos
 
@@ -1146,7 +1158,8 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
 - **Calibration sheets, phases 2 and 3** — several sheets around a large
   part, a sheet on a drawer's floor for the drawer scan, and parallax
   correction for thick parts. Phase 1 (one sheet) shipped in v1.30.x and waits
-  on its real-photo checkpoint; the later phases need their own sign-off.
+  on its real-photo checkpoint; phases 2 and 3 were signed off on 2026-10-02
+  and are being built: finding several sheets shipped in v1.32.0.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0; a calibration sheet on the drawer floor, recognised on its own,
   will do the same without a coin in Part A phase 2.

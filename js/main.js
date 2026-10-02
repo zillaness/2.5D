@@ -14,6 +14,7 @@ import { scanParts, SCAN_DEFAULTS, fitCircle, findCoinCandidate, coinScaleCheck,
 import { sheetSetSVG, printPageHTML, drawJob, jobHex, paperLabel as calibPaperLabel, LAYOUT_VERSION as CALIB_LAYOUT } from './calibSheet.js';
 import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
+import { findSheets, describeFound, pointInQuad as sheetPointInQuad } from './calibFind.js';
 import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance, frameOutsideMm, rulerScale } from './calibVerdict.js';
 import { lensParams as calibLensParams, undistortPixel as calibUndistort } from './lens.js';
 import { computeHomography as calibHomography, applyHomography as calibApplyH } from './homography.js';
@@ -94,6 +95,7 @@ const state = {
   sheet: null,
   sheetFit: true,         // the sheet fit snaps the corners; off, a person's own corners rule
   sheetSaved: null,       // the sheet block a loaded project was saved with, for the panel
+  sheets: null,           // every calibration sheet found in the photo (phase 2), with its own fit
   sheetWindow: null,      // the sheet's clean window in the rectified image, px and mm
   sheetWindowWarn: null,  // { distMm } when the traced outline runs within 1 mm of the printed band
   rect: null,             // { canvas, pxPerMm }
@@ -465,6 +467,7 @@ function loadFile(file, onFail, onLoad) {
   }
   readPhotoFocal(file);
   state.sheetSaved = null;
+  state.sheets = null;
   state.fileName = (file.name || 'object').replace(/\.[^.]+$/, '');
   const url = URL.createObjectURL(file);
   // onLoad runs once the photo is actually on screen, which is the moment a
@@ -560,6 +563,39 @@ function autoDetect(announce = true) {
   cornerEditor.setCorners(state.corners);
   updatePaperCheck();
   sheetRecognise();
+  sheetFindSchedule();
+}
+
+// Every sheet in the photo (phase 2, plan step 14): run once per photo,
+// after the load has painted, since it reads the whole photo for seeds and
+// recognises each. The single-sheet path above stays the one that places
+// the corners until the joint fit (step 15) takes over.
+const pointInQuadPhoto = sheetPointInQuad;
+let sheetFindTimer = null;
+function sheetFindSchedule() {
+  if (sheetFindTimer) clearTimeout(sheetFindTimer);
+  const img = state.image;
+  sheetFindTimer = setTimeout(() => { sheetFindTimer = null; if (state.image === img) sheetFindAll(); }, 0);
+}
+function sheetFindAll() {
+  if (sheetFindTimer) { clearTimeout(sheetFindTimer); sheetFindTimer = null; }
+  state.sheets = null;
+  const applicable = state.image && state.reference === 'rect' && !scanOn() && state.sheetFit;
+  if (!applicable) { sheetSyncPanel(); cornerEditor.draw(); return null; }
+  const pickedStock = PAPER_SIZES[state.paper.size];
+  const roughPaper = pickedStock && pickedStock.group === 'Paper' ? state.paper.size : 'letter';
+  let res = null;
+  try {
+    res = findSheets(state.image, { roughPaper, k1: 0 });
+  } catch (err) {
+    console.error('finding sheets failed', err);
+    res = null;
+  }
+  state.sheets = res && res.sheets.length ? res : null;
+  if (state.sheets && !cornerEditor.overlay) cornerEditor.overlay = (ctx, vp) => sheetDrawOverlay(ctx, vp);
+  sheetSyncPanel();
+  cornerEditor.draw();
+  return state.sheets;
 }
 
 // ---------- the calibration sheet in Step 1 (calibration_and_backlog_prd_v1.2, Part A step 8) ----------
@@ -717,15 +753,17 @@ function sheetSyncPanel() {
     el.hidden = false;
     return;
   }
-  if (!s && state.sheetFit) { el.hidden = true; return; }
+  if (!s && state.sheetFit && !state.sheets) { el.hidden = true; return; }
   const text = document.createElement('span');
   if (s) {
     const id = s.identity;
     text.textContent = `Calibration sheet: ${stockLabel(id.paper)} layout v${id.version}, sheet ${id.sheet} of set ${jobHex(id.job)}. ` +
       `${s.verdict.message}${s.note} Fit ${s.fit.rmsMm.toFixed(3)} mm from ${s.fit.points} cells and ${s.fit.lines} frame points` +
       `${s.fit.k1 ? `, lens ${s.fit.k1.toFixed(3)}` : ''}. `;
-  } else {
+  } else if (!state.sheetFit) {
     text.textContent = 'Sheet fit off: your corners rule. ';
+  } else {
+    text.textContent = 'No calibration sheet at the corners. ';
   }
   const lab = document.createElement('label');
   lab.className = 'check';
@@ -741,6 +779,14 @@ function sheetSyncPanel() {
   });
   lab.append(box, document.createTextNode(' Use the sheet fit'));
   el.append(text, lab);
+  const all = state.sheets;
+  if (all && (all.sheets.length > 1 || all.duplicates.length || !s)) {
+    const more = document.createElement('div');
+    more.id = 'sheetSetNote';
+    more.style.marginTop = '4px';
+    more.textContent = describeFound(all) + (all.sheets.length > 1 ? ' Fitting them together is the next phase; the corners follow the one sheet above.' : '');
+    el.appendChild(more);
+  }
   if (s) {
     // Under the paper's cut tolerance: the frame's outside edges, measured
     // with a steel rule, fix the print scale on both axes.
@@ -778,7 +824,7 @@ function sheetSyncPanel() {
 // paper outline it measured (green), so a person can see the double check.
 function sheetDrawOverlay(ctx, vp) {
   const s = state.sheet;
-  if (!s) return;
+  if (!s && !state.sheets) return;
   const poly = (pts, colour, dash) => {
     ctx.beginPath();
     pts.forEach((p, i) => { const q = vp.toScreen(p); if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); });
@@ -789,6 +835,19 @@ function sheetDrawOverlay(ctx, vp) {
     ctx.stroke();
     ctx.setLineDash([]);
   };
+  if (state.sheets) {
+    // The other sheets of the set: their frames, dimmer, with their numbers.
+    for (const o of state.sheets.sheets) {
+      if (s && s.corners && pointInQuadPhoto(o.centre, s.corners)) continue;
+      poly(o.frame, o.duplicate ? '#ff8a65' : 'rgba(255,210,87,0.55)', [4, 4]);
+      const c = vp.toScreen(o.centre);
+      ctx.font = '12px system-ui, sans-serif';
+      ctx.fillStyle = o.duplicate ? '#ff8a65' : 'rgba(255,210,87,0.85)';
+      ctx.textAlign = 'center';
+      ctx.fillText(`sheet ${o.identity.sheet}${o.partial ? ' (cut)' : ''}`, c.x, c.y);
+    }
+  }
+  if (!s) return;
   const fc = s.geom.frame.centre;
   const frame = [];
   const along = (x0, y0, x1, y1) => { for (let i = 0; i < 12; i++) { const t = i / 12; frame.push(s.designToPhoto({ x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t })); } };
@@ -6037,7 +6096,7 @@ $('refType').addEventListener('change', e => {
   // scan. Nothing else guards it, and a scan flag left set under the coin
   // reference would raise the resolution ceiling on a path that never wanted it.
   if (state.reference !== 'rect' && state.scan) state.scan.on = false;
-  if (state.reference !== 'rect') { state.sheet = null; cornerEditor.overlay = null; sheetSyncPanel(); }
+  if (state.reference !== 'rect') { state.sheet = null; state.sheets = null; cornerEditor.overlay = null; sheetSyncPanel(); }
   syncRefControls();
   $('gridCheck').textContent = '';
   if (state.image) {
@@ -8325,6 +8384,8 @@ window.__app = {
   // checks on record, and the switch.
   sheet: {
     recognise: () => sheetRecognise(),
+    findAll: () => sheetFindAll(),
+    get all() { return state.sheets; },
     get state() { return state.sheet; },
     get fitOn() { return state.sheetFit; },
     set fitOn(v) { state.sheetFit = !!v; },

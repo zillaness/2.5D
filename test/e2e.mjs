@@ -16215,6 +16215,136 @@ for (const prof of ['Dense', 'Access']) {
     `${r.earlyPasses} passes against ${r.fullPasses}; placed ${r.placed.join(' / ')}; area ${Math.round(r.area[1])} against ${Math.round(r.area[0])}; tests ${r.tests[1]} against ${r.tests[0]}`);
 }
 
+// ---------- Several sheets: finding them (Part A phase 2, step 14 of calibration_and_backlog_prd_v1.2) ----------
+//
+// Sheets laid by hand around a part, at any rotation, each found from a
+// bright sheet-sized component or, on a white desk, from its frame ring;
+// a set printed twice is two sheets with a note; a sheet cut by the photo's
+// edge is found from its visible part. The photos come from the table
+// renderer: several sheets composed flat on one plane and photographed by
+// the same pinhole camera as the single-sheet photos.
+
+console.log('\nSeveral sheets: finding them');
+
+const findTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderTablePhoto } = await import('./test/sheetPhoto.js');
+  const { findSheets, describeFound } = await import('./js/calibFind.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const toImg = c => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = c.toDataURL('image/png'); });
+  // Seeded random poses: a grid's cells, shuffled, each sheet jittered and
+  // spun through the full circle. Cells of 375 x 500 mm hold a Letter sheet
+  // (diagonal 353 mm) at any rotation without touching its neighbours.
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const poses = (n, table, cols, rows) => {
+    const cw = table.w / cols, ch = table.h / rows;
+    const cells = [];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push([c, r]);
+    for (let i = cells.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [cells[i], cells[j]] = [cells[j], cells[i]]; }
+    return cells.slice(0, n).map(([c, r]) => ({ x: (c + 0.5) * cw + (rnd() - 0.5) * 16, y: (r + 0.5) * ch + (rnd() - 0.5) * 16, rot: rnd() * 360 }));
+  };
+  const inPhoto = (p, W, H) => p.x >= 0 && p.y >= 0 && p.x <= W - 1 && p.y <= H - 1;
+  const summarise = (res, truth, W, H) => ({
+    n: res.sheets.length, tried: res.seeds.tried, kinds: res.seeds.kinds, recognised: res.seeds.recognised, ms: res.ms,
+    duplicates: res.duplicates, misses: res.misses, text: describeFound(res),
+    sheets: res.sheets.map(s => {
+      const cands = truth.sheets.filter(x => x.sheet === s.identity.sheet && x.job === s.identity.job);
+      const tr = cands.sort((a, b) => Math.hypot(a.centre.x - s.centre.x, a.centre.y - s.centre.y) - Math.hypot(b.centre.x - s.centre.x, b.centre.y - s.centre.y))[0];
+      // The frame's corners against the truth, over the corners inside the photo.
+      const errs = tr ? s.frame.map((p, i) => inPhoto(tr.frame[i], W, H) ? Math.hypot(p.x - tr.frame[i].x, p.y - tr.frame[i].y) : null).filter(e => e != null) : [];
+      return { sheet: s.identity.sheet, job: s.identity.job, paper: s.identity.paper, words: s.words, sides: s.sidesFound, seed: s.seed.kind, extended: s.seed.extended,
+        frameErr: errs.length ? Math.max(...errs) : null, cornersIn: errs.length, duplicate: !!s.duplicate, partial: s.partial, rmsMm: s.rmsMm, matched: !!tr };
+    }),
+  });
+  const out = {};
+  // One, four and eight sheets at random poses on a 1.5 x 1 m table, 12 MP from 1.12 m: about 2.8 px/mm, a phone held high.
+  for (const n of [1, 4, 8]) {
+    const table = { w: 1500, h: 1000 };
+    const sheets = poses(n, table, 4, 2).map((p, i) => ({ ...p, sheet: i + 1, count: 8, job: 0x5a, paper: 'letter' }));
+    const t0 = performance.now();
+    const tb = await renderTablePhoto({ table, sheets, W: 4000, H: 3000, supersample: 1, pose: { height: 1120, tilt: 3, axis: 40, spin: 1 }, noise: 3,
+      objects: [{ x: 750, y: 500, w: 90, h: 120, r: 8 }, { x: 300, y: 500, w: 60, h: 60, r: 30, color: '#1d2a36' }] });
+    const renderMs = performance.now() - t0;
+    out['n' + n] = { renderMs, pxPerMm: tb.truth.sheets[0].pxPerMm, rots: sheets.map(s => Math.round(s.rot)), ...summarise(findSheets(await toImg(tb.canvas)), tb.truth, 4000, 3000) };
+  }
+  // A set printed twice: sheet 2 of set 5a twice, with sheet 1.
+  const dupSheets = [{ x: 220, y: 200, rot: 10, sheet: 1 }, { x: 660, y: 190, rot: -80, sheet: 2 }, { x: 450, y: 520, rot: 185, sheet: 2 }]
+    .map(s => ({ ...s, count: 4, job: 0x5a, paper: 'letter' }));
+  const dup = await renderTablePhoto({ table: { w: 900, h: 700 }, sheets: dupSheets, W: 3000, H: 2250, supersample: 1, pose: { height: 700, tilt: 2 } });
+  out.dup = summarise(findSheets(await toImg(dup.canvas)), dup.truth, 3000, 2250);
+  // Sheets cut by the photo's edge: the table is wider than the view (932 x 700 mm at 700 mm), sheet 2 crosses the right edge at 25 degrees and sheet 3 the bottom edge at 100.
+  const cutSheets = [{ x: 400, y: 350, rot: -30, sheet: 1 }, { x: 1066, y: 400, rot: 25, sheet: 2 }, { x: 700, y: 800, rot: 100, sheet: 3 }]
+    .map(s => ({ ...s, count: 4, job: 0x5a, paper: 'letter' }));
+  const cut = await renderTablePhoto({ table: { w: 1200, h: 900 }, sheets: cutSheets, W: 3000, H: 2250, supersample: 1, pose: { height: 700 } });
+  out.cut = { visible: cut.truth.sheets.map(t => t.corners.filter(c => inPhoto(c, 3000, 2250)).length), ...summarise(findSheets(await toImg(cut.canvas)), cut.truth, 3000, 2250) };
+  // A white desk: the paper's edge has no contrast, the frame rings seed the search.
+  const whiteSheets = [{ x: 220, y: 200, rot: 10, sheet: 1 }, { x: 660, y: 190, rot: -80, sheet: 2 }, { x: 450, y: 520, rot: 185, sheet: 3 }]
+    .map(s => ({ ...s, count: 4, job: 0x5a, paper: 'letter' }));
+  const white = await renderTablePhoto({ table: { w: 900, h: 700 }, sheets: whiteSheets, W: 3000, H: 2250, supersample: 1, pose: { height: 700, tilt: 2 }, desk: '#f6f4ee' });
+  out.white = summarise(findSheets(await toImg(white.canvas)), white.truth, 3000, 2250);
+  // In Step 1: the duplicate photo loaded, the set listed in the panel, each sheet on the overlay.
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens } };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  app.syncRefControls();
+  const sel = $('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  await new Promise(res => app.loadImageFromURL(dup.canvas.toDataURL('image/png'), res));
+  await wait(80);
+  const all = app.sheet.all;
+  out.app = {
+    found: all ? all.sheets.length : 0, duplicates: all ? all.duplicates : null,
+    primary: st.sheet ? { sheet: st.sheet.identity.sheet, job: st.sheet.identity.job } : null,
+    panel: $('sheetPanel').textContent, note: $('sheetSetNote') ? $('sheetSetNote').textContent : null,
+    overlay: !!app.cornerEditor.overlay,
+    again: (() => { const r = app.sheet.findAll(); return r ? r.sheets.length : 0; })(),
+  };
+  // Under another reference there is no set to find.
+  st.reference = 'coin';
+  out.app.afterLeave = app.sheet.findAll() === null && !app.sheet.all ? 'cleared' : 'kept';
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens;
+  app.syncRefControls();
+  return out;
+});
+{
+  const r = findTest;
+  const ids = x => x.sheets.map(s => s.sheet).sort((a, b) => a - b).join(',');
+  const worst = x => Math.max(...x.sheets.map(s => s.frameErr == null ? Infinity : s.frameErr));
+  const allJob = (x, job) => x.sheets.every(s => s.job === job && s.paper === 'letter');
+  const fmtMs = x => `${x.ms.toFixed(0)} ms from ${x.tried} seeds (${x.kinds.join(', ')})`;
+  check('one sheet on the table is found by the finder and placed within half a pixel',
+    r.n1.n === 1 && ids(r.n1) === '1' && allJob(r.n1, 0x5a) && worst(r.n1) < 0.5 && r.n1.sheets[0].sides === 4,
+    `${r.n1.n} found (${ids(r.n1)}), frame within ${worst(r.n1).toFixed(2)} px, ${fmtMs(r.n1)}, ${r.n1.pxPerMm.toFixed(1)} px/mm`);
+  check('four sheets at random rotations are each identified and placed within half a pixel, and the parts on the table are not sheets',
+    r.n4.n === 4 && ids(r.n4) === '1,2,3,4' && allJob(r.n4, 0x5a) && worst(r.n4) < 0.5 && r.n4.sheets.every(s => s.sides === 4 && !s.partial) && r.n4.ms < 4000,
+    `${r.n4.n} found (${ids(r.n4)}) at rotations ${r.n4.rots.join(', ')}°, frames within ${worst(r.n4).toFixed(2)} px, ${fmtMs(r.n4)}`);
+  check('eight sheets laid by hand are each identified and placed within a pixel (criterion 19, the finding)',
+    r.n8.n === 8 && ids(r.n8) === '1,2,3,4,5,6,7,8' && allJob(r.n8, 0x5a) && worst(r.n8) < 1 && r.n8.sheets.every(s => !s.partial) && r.n8.ms < 6000,
+    `${r.n8.n} found (${ids(r.n8)}) at rotations ${r.n8.rots.join(', ')}°, frames within ${worst(r.n8).toFixed(2)} px, words ${r.n8.sheets.map(s => s.words).join('/')}, ${fmtMs(r.n8)}`);
+  check('a set printed twice is still two sheets, flagged, with the note to print a fresh set (criterion 22)',
+    r.dup.n === 3 && ids(r.dup) === '1,2,2' && r.dup.duplicates.length === 1 && r.dup.duplicates[0].sheet === 2 && r.dup.duplicates[0].count === 2 &&
+    r.dup.sheets.filter(s => s.duplicate).length === 2 && !r.dup.sheets.find(s => s.sheet === 1).duplicate && /print a fresh set/.test(r.dup.text) && worst(r.dup) < 0.5,
+    `${r.dup.n} found (${ids(r.dup)}); "${r.dup.text}"`);
+  {
+    const s2 = r.cut.sheets.find(s => s.sheet === 2), s3 = r.cut.sheets.find(s => s.sheet === 3);
+    check('a sheet cut by the photo\'s edge is found from its visible part, at 25 and at 100 degrees, and flagged as partly out',
+      r.cut.n === 3 && ids(r.cut) === '1,2,3' && s2 && s3 && s2.partial && s3.partial && s2.extended && s3.extended && s2.words >= 8 && s3.words >= 8 &&
+      s2.frameErr < 3 && s3.frameErr < 3 && /2 are partly out of the photo/.test(r.cut.text),
+      `${r.cut.n} found (${ids(r.cut)}); visible corners ${r.cut.visible.join('/')}; sheet 2: ${s2 && s2.words} words on ${s2 && s2.sides} sides, in-photo frame corners within ${s2 && s2.frameErr && s2.frameErr.toFixed(2)} px; ` +
+      `sheet 3: ${s3 && s3.words} words on ${s3 && s3.sides} sides, within ${s3 && s3.frameErr && s3.frameErr.toFixed(2)} px; "${r.cut.text}"`);
+  }
+  check('on a white desk, where the paper has no edge, the frame rings seed the search and every sheet is found',
+    r.white.n === 3 && ids(r.white) === '1,2,3' && r.white.kinds.every(k => k === 'ring') && r.white.sheets.every(s => s.seed === 'ring') && worst(r.white) < 0.5,
+    `${r.white.n} found (${ids(r.white)}) from ${fmtMs(r.white)}, frames within ${worst(r.white).toFixed(2)} px`);
+  check('in Step 1 the set is listed in the panel with the duplicate note, each sheet is on the overlay, and another reference has no set',
+    r.app.found === 3 && r.app.duplicates && r.app.duplicates.length === 1 && r.app.primary && r.app.primary.job === 0x5a && r.app.overlay &&
+    /3 calibration sheets in this photo: sheets 1, 2 and 2 of set 5a/.test(r.app.note || '') && /print a fresh set/.test(r.app.note || '') && r.app.again === 3 && r.app.afterLeave === 'cleared',
+    `${r.app.found} found, primary sheet ${r.app.primary && r.app.primary.sheet}; note "${r.app.note}"; after leaving: ${r.app.afterLeave}`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the
