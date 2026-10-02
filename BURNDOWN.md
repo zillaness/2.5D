@@ -1,6 +1,6 @@
 ---
 file: BURNDOWN.md
-version: 1.34
+version: 1.35
 author: Sam Cao
 created: 2026-09-04
 last_updated: 2026-10-02
@@ -882,6 +882,10 @@ real-photo checkpoint. Building in the PRD's suggested order.
   The PRD's status line says every phase is built and every checkpoint
   waits on Sam. 853 checks, all passing, no console errors; dist rebuilt
   and smoke-tested — v1.33.3.
+- ✅ Deployed v1.33.3 to gh-pages on Sam's "deploy" — ca8f524. The site is
+  the landing page plus `2.5d.html`, which is `dist/2.5d-local.html` copied
+  over with the landing page's cache-buster link bumped from `?v=1.25.0` to
+  `?v=1.33.3`; nothing else on that branch changed.
 - ▶ NEXT: nothing queued. The calibration PRD is built end to end; its three
   checkpoints (steps 10, 17 and 21) and Part B.5's housekeeping wait on Sam.
   See the handoff below.
@@ -926,7 +930,7 @@ raisedHeight}`, `app.scan.{sheetCheck, sheetApply, sheet}`.
    how far the EXIF camera and the raised-sheet camera agree.
 2. Repointing GitHub's default branch, so the two stale branches can be
    deleted (blocked in sessions).
-3. The go-ahead to deploy: gh-pages still serves v1.25.0.
+3. ~~The go-ahead to deploy~~ Done: gh-pages serves v1.33.3 since ca8f524.
 4. Part B.5's housekeeping, which this PRD left outside the build.
 
 **Known gaps recorded this session, none blocking:** the second handoff's
@@ -1307,6 +1311,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.35 (2026-10-02): v1.33.3 deployed to gh-pages.
 - v1.34 (2026-10-02): Part A step 22 shipped as v1.33.3; the calibration PRD built end to end; third handoff written.
 - v1.33 (2026-10-02): Part A step 21 shipped as v1.33.2.
 - v1.32 (2026-10-02): Part A step 20 shipped as v1.33.1.
