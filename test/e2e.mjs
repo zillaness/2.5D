@@ -16017,6 +16017,96 @@ const lightTest = await page.evaluate(async () => {
     `single colour: ${r.flatAreaMm2.toFixed(0)} mm² of object for a ${r.objectAreaMm2.toFixed(0)} mm² part, bare paper at the dark end reads ${r.paperDiff.flat}; with the surface ${r.paperDiff.model} (threshold ${r.withModel.threshold})`);
 }
 
+// ---------- Calibration sheet: ruler verification (Part A step 12 of calibration_and_backlog_prd_v1.2) ----------
+//
+// The print check inherits the paper's cut tolerance. The frame is itself a
+// ruler: its outside edges measured with a steel rule, typed in, fix the
+// print scale on both axes, stored with the print check and preferred over
+// it and over the edges' size.
+
+console.log('\nCalibration sheet: ruler verification');
+
+const rulerTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const { renderSheetPhoto } = await import('./test/sheetPhoto.js');
+  const { rulerScale, frameOutsideMm } = await import('./js/calibVerdict.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens } };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  app.syncRefControls();
+  const sel = $('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  const load = async r => { await new Promise(res => app.loadImageFromURL(r.canvas.toDataURL('image/png'), res)); await wait(50); };
+  const cornerErr = truth => Math.max(...st.corners.map((c, i) => Math.hypot(c.x - truth.corners[i].x, c.y - truth.corners[i].y)));
+  const sum = () => { const s = st.sheet; return s ? { source: s.verdict.source, scale: s.verdict.scale, message: s.verdict.message, panel: $('sheetPanel').textContent } : null; };
+  const base = { paper: 'letter', sheet: 2, count: 4, job: 0x7f, W: 2400, H: 1800, pose: { height: 330, tilt: 6, axis: 20, spin: 3 } };
+  const out = {};
+  const f = frameOutsideMm('letter');
+  out.frame = f;
+  const p96 = await renderSheetPhoto({ ...base, scale: 0.96 });
+  await load(p96);
+  out.edges = { ...sum(), cornerErr: cornerErr(p96.truth), rowShown: !!$('sheetRulerSave'), placeholder: $('sheetRulerW') && $('sheetRulerW').placeholder };
+  // A ruler reading of the 96 percent print: the frame's outside edges.
+  const rw = +(f.w * 0.96).toFixed(1), rh = +(f.h * 0.96).toFixed(1);
+  $('sheetRulerW').value = String(rw); $('sheetRulerH').value = String(rh);
+  $('sheetRulerSave').click();
+  await wait(50);
+  out.ruler = { ...sum(), cornerErr: cornerErr(p96.truth), rw, rh, record: app.sheet.check(0x7f, 2) && app.sheet.check(0x7f, 2).ruler, forget: !!$('sheetRulerClear') };
+  // A reading a quarter percent off: the scale follows the ruler, not the edges.
+  app.sheet.ruler(+(f.w * 0.9625).toFixed(2), rh);
+  await wait(50);
+  out.rulerOff = { ...sum(), cornerErr: cornerErr(p96.truth) };
+  // On a white desk the ruler still rules, with the position from the print check.
+  const white = await renderSheetPhoto({ ...base, scale: 0.96, desk: '#f6f4ee' });
+  await load(white);
+  const { applyHomography } = await import('./js/homography.js');
+  const dirs = [[1, 1], [-1, 1], [-1, -1], [1, -1]];
+  st.corners = white.truth.corners.map((c, i) => {
+    const mm = [[0, 0], [215.9, 0], [215.9, 279.4], [0, 279.4]][i];
+    const q = applyHomography(white.truth.Hp, mm[0] + dirs[i][0] * 4, mm[1] + dirs[i][1] * 4);
+    return { x: q.x - 0.5, y: q.y - 0.5 };
+  });
+  app.cornerEditor.setCorners(st.corners);
+  // The sheet first, from the rough corners: the ruler is keyed by its identity.
+  app.sheet.recognise();
+  app.sheet.ruler(rw, rh);
+  await wait(50);
+  out.white = { ...sum(), cornerErr: cornerErr(white.truth) };
+  // Forget the ruler: back to the edges.
+  await load(p96);
+  $('sheetRulerClear').click();
+  await wait(50);
+  out.forgotten = { ...sum(), record: app.sheet.check(0x7f, 2) && app.sheet.check(0x7f, 2).ruler };
+  out.implausible = { scale: rulerScale('letter', 100, 259), ok: rulerScale('letter', 195.9, 259.4) };
+  app.sheet.clearChecks();
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens;
+  app.syncRefControls();
+  return out;
+});
+{
+  const r = rulerTest;
+  const sc = x => x && x.scale ? `${(x.scale.x * 100).toFixed(2)} / ${(x.scale.y * 100).toFixed(2)} percent` : 'none';
+  check('the sheet panel offers a ruler row with the frame\'s outside size as its placeholder',
+    r.edges && r.edges.source === 'edges' && r.edges.rowShown && r.edges.placeholder === '195.9' && Math.abs(r.frame.w - 195.9) < 1e-9 && Math.abs(r.frame.h - 259.4) < 1e-9,
+    `${sc(r.edges)}, placeholder "${r.edges && r.edges.placeholder}"`);
+  check('a ruler reading is stored with the print check and becomes the scale, with the position from the edges (criterion: under the cut tolerance)',
+    r.ruler && r.ruler.source === 'ruler' && Math.abs(r.ruler.scale.x - r.ruler.rw / 195.9) < 1e-9 && Math.abs(r.ruler.scale.y - r.ruler.rh / 259.4) < 1e-9 &&
+    /Scale from your ruler/.test(r.ruler.message) && /the paper's edges/.test(r.ruler.message) && r.ruler.record && r.ruler.record.w === r.ruler.rw && r.ruler.forget && r.ruler.cornerErr < 1.5,
+    `${sc(r.ruler)} from ${r.ruler && r.ruler.rw} × ${r.ruler && r.ruler.rh}; corners ${r.ruler && r.ruler.cornerErr.toFixed(2)} px; "${r.ruler && r.ruler.message}"`);
+  check('the scale follows the ruler, not the edges, when the two differ',
+    r.rulerOff && r.rulerOff.source === 'ruler' && Math.abs(r.rulerOff.scale.x - 0.9625) < 0.0002 && r.rulerOff.cornerErr > r.ruler.cornerErr,
+    `${sc(r.rulerOff)}; corners ${r.rulerOff && r.rulerOff.cornerErr.toFixed(2)} px`);
+  check('on a white desk the ruler still gives the scale, with the sheet\'s position from the print check',
+    r.white && r.white.source === 'ruler' && /from your print check/.test(r.white.message) && r.white.cornerErr < 2,
+    `${sc(r.white)}; corners ${r.white && r.white.cornerErr.toFixed(2)} px; "${r.white && r.white.message}"`);
+  check('forgetting the ruler returns the verdict to the edges, and an implausible reading is refused',
+    r.forgotten && r.forgotten.source === 'edges' && !r.forgotten.record && r.implausible.scale === null && r.implausible.ok && Math.abs(r.implausible.ok.x - 1) < 1e-9,
+    `${sc(r.forgotten)}; implausible ${JSON.stringify(r.implausible.scale)}`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

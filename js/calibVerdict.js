@@ -134,6 +134,48 @@ export function sheetVerdict({ identity, rect, picker, record }, opts = {}) {
   const d = PAPER_SIZES[designStock];
   const dW = Math.min(d.w, d.h), dH = Math.max(d.w, d.h);
   const measured = rect && rect.w != null && rect.h != null;
+  // A ruler verification on record (plan step 12) is preferred over the
+  // paper's edges for the SIZE, because it is under the paper's cut
+  // tolerance: the frame's outside edges were measured with a steel rule,
+  // which fixes the print scale on both axes. The paper's position and
+  // rotation still come from the edges when they are visible, from the
+  // print check otherwise, and are assumed centred when neither is known.
+  if (record && record.ruler && record.ruler.scale) {
+    const rs = record.ruler.scale;
+    const named = measured ? stockFromAspect(rect.w, rect.h, o) : null;
+    const stock = named ? named.stock : (record.stock || designStock);
+    const p = PAPER_SIZES[stock];
+    const sW = Math.min(p.w, p.h), sH = Math.max(p.w, p.h);
+    const w = sW / rs.x, h = sH / rs.y;
+    let x0, y0, rotDeg, from;
+    if (measured && rect.x0 != null) {
+      // The edges' rectangle, re-sized about its own centre.
+      const rad = (rect.rotDeg || 0) * Math.PI / 180, c = Math.cos(rad), s = Math.sin(rad);
+      const cx = rect.x0 + (rect.w * c - rect.h * s) / 2, cy = rect.y0 + (rect.w * s + rect.h * c) / 2;
+      x0 = cx - (w * c - h * s) / 2; y0 = cy - (w * s + h * c) / 2; rotDeg = rect.rotDeg || 0; from = 'the paper\'s edges';
+    } else if (record.rect) {
+      const r = record.rect;
+      const rad = (r.rotDeg || 0) * Math.PI / 180, c = Math.cos(rad), s = Math.sin(rad);
+      const cx = r.x0 + (r.w * c - r.h * s) / 2, cy = r.y0 + (r.w * s + r.h * c) / 2;
+      x0 = cx - (w * c - h * s) / 2; y0 = cy - (w * s + h * c) / 2; rotDeg = r.rotDeg || 0; from = 'your print check';
+    } else {
+      x0 = (dW - w) / 2; y0 = (dH - h) / 2; rotDeg = 0; from = 'a centred print, assumed';
+    }
+    const rad = rotDeg * Math.PI / 180, c = Math.cos(rad), s = Math.sin(rad);
+    const back = (uu, vv) => ({ x: x0 + uu * c - vv * s, y: y0 + uu * s + vv * c });
+    const corners = [back(0, 0), back(w, 0), back(w, h), back(0, h)];
+    const oneToOne = Math.abs(rs.x - 1) <= o.oneToOneBand && Math.abs(rs.y - 1) <= o.oneToOneBand;
+    return {
+      source: 'ruler', stock, scale: { x: rs.x, y: rs.y }, oneToOne,
+      rect: { x0, y0, w, h, rotDeg, corners },
+      message: `Scale from your ruler: ${pct(rs.x)} across, ${pct(rs.y)} down (frame measured ${record.ruler.w} × ${record.ruler.h} mm); the sheet's position from ${from}.` +
+        (named && picker && picker !== named.stock && PAPER_CODES[picker] !== undefined ? ` The paper picker said ${stockLabel(picker)}; the sheet's edges say ${stockLabel(named.stock)}, which is used.` : ''),
+      overridePicker: named && picker && picker !== named.stock && PAPER_CODES[picker] !== undefined ? named.stock : null,
+      // The edges, when measured, still refresh the print check beside the ruler.
+      record: measured && named ? { job: identity.job, sheet: identity.sheet, layout: identity.version, design: designStock, stock: named.stock,
+        scale: { x: Math.min(sW, sH) / Math.min(rect.w, rect.h) * (sW < sH ? 1 : 1), y: sH / rect.h }, rect: { x0: rect.x0, y0: rect.y0, w: rect.w, h: rect.h, rotDeg: rect.rotDeg } } : null,
+    };
+  }
   if (measured) {
     const named = stockFromAspect(rect.w, rect.h, o);
     if (!named) {
@@ -216,6 +258,25 @@ export function photoGuidance({ pxPerMm, cleanShare, fitMm }, thresholds = GUIDA
 
 export function jobHex(job) {
   return (Number(job) & 0xff).toString(16).toUpperCase().padStart(2, '0');
+}
+
+// The frame's outside size at 100 percent, which is what a steel rule
+// measures on the print: the layout's margin in from every paper edge.
+export function frameOutsideMm(paperKey) {
+  const p = PAPER_SIZES[paperKey];
+  if (!p) return null;
+  return { w: Math.min(p.w, p.h) - 2 * FRAME_MARGIN_MM, h: Math.max(p.w, p.h) - 2 * FRAME_MARGIN_MM };
+}
+const FRAME_MARGIN_MM = 10;
+
+// A ruler reading to a scale per axis, or null when it is not a plausible
+// reading (within 15 percent of the design).
+export function rulerScale(paperKey, wMm, hMm) {
+  const f = frameOutsideMm(paperKey);
+  if (!f || !(wMm > 0) || !(hMm > 0)) return null;
+  const sx = wMm / f.w, sy = hMm / f.h;
+  if (sx < 0.85 || sx > 1.15 || sy < 0.85 || sy > 1.15) return null;
+  return { x: sx, y: sy };
 }
 
 // Did a measured rectangle disagree with a record past the 1:1 band? Then

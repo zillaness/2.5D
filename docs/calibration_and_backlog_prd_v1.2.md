@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.13
+version: 1.2.14
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -845,7 +845,11 @@ checkpoint that needs a person.
     chroma at 1.6, already tolerates a 30 percent gradient and breaks only
     past about 80; the model's gain is margin, bare paper at the dark end
     reading near zero instead of tens.*
-12. **Ruler verification.** Droppable.
+12. **Ruler verification.** Droppable. *Shipped v1.30.9, 2026-10-02: a row
+    under the sheet panel takes the frame's outside width and height as
+    measured with a steel rule, stores them with the print check by job and
+    sheet, and the verdict then takes its scale from the ruler, the sheet's
+    position from the edges when visible and from the print check otherwise.*
 13. **README** and this PRD's status line.
 
 ### Phase 2: several sheets (sign-off after phase 1's checkpoint)
@@ -1149,6 +1153,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.14 (2026-10-02): Part A step 12 shipped in v1.30.9.
 - v1.2.13 (2026-10-02): Part A step 11 shipped in v1.30.8, with criterion 12's premise corrected.
 - v1.2.12 (2026-10-02): Part A step 10 shipped in v1.30.7; the real-photo checkpoint waits on Sam's prints.
 - v1.2.11 (2026-10-02): Part A step 9 shipped in v1.30.6.

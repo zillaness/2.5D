@@ -583,8 +583,19 @@ real-photo checkpoint. Building in the PRD's suggested order.
     threshold has room on a lamp-lit sheet. The test asserts that and says
     so. A sharp shadow across the sheet, which a quadratic cannot follow, is
     the lighting case the real photos should include.
-- ▶ NEXT: Part A step 12, ruler verification (droppable, drafted); step 13,
-  README and the PRD's status line; B.3 at any point.
+- ✅ Part A step 12, ruler verification. A row under the sheet panel takes
+  the frame's outside width and height as a steel rule reads them on the
+  print (placeholders are the design's 195.9 x 259.4 for Letter), refuses a
+  reading more than 15 percent off, and stores the reading with the print
+  check by job and sheet; `sheetVerdict` then takes its scale from the ruler,
+  under the paper's cut tolerance, the sheet's position from the edges when
+  visible and from the print check otherwise, and Forget returns to the
+  edges. On the renderer: a reading of the 96 percent print gives 96.02 /
+  95.99 with corners 0.15 px; a reading a quarter percent off moves the scale
+  with it, not with the edges; on a white desk the ruler still gives the
+  scale with the position from the print check. 808 checks, all
+  passing, no console errors; dist rebuilt and smoke-tested — v1.30.9.
+- ▶ NEXT: Part A step 13, README and the PRD's status line; then B.3.
 
 ### Handoff to a fresh session, 2026-10-02
 

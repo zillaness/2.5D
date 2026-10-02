@@ -14,7 +14,7 @@ import { scanParts, SCAN_DEFAULTS, fitCircle, findCoinCandidate, coinScaleCheck,
 import { sheetSetSVG, printPageHTML, drawJob, jobHex, paperLabel as calibPaperLabel, LAYOUT_VERSION as CALIB_LAYOUT } from './calibSheet.js';
 import { recogniseSheet } from './calibDetect.js';
 import { fitSheet } from './calibFit.js';
-import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance } from './calibVerdict.js';
+import { fitPaperRect, sheetVerdict, recordDisagrees, stockLabel, photoGuidance, frameOutsideMm, rulerScale } from './calibVerdict.js';
 import { lensParams as calibLensParams, undistortPixel as calibUndistort } from './lens.js';
 import { computeHomography as calibHomography, applyHomography as calibApplyH } from './homography.js';
 import {
@@ -581,8 +581,37 @@ function calibCheckRecord(job, sheet) {
 }
 function calibCheckRemember(rec) {
   const all = calibChecks();
-  all[`${rec.job}:${rec.sheet}`] = { ...rec, at: calibClock() };
+  const prev = all[`${rec.job}:${rec.sheet}`];
+  all[`${rec.job}:${rec.sheet}`] = { ...rec, at: calibClock(), ...(prev && prev.ruler ? { ruler: prev.ruler } : {}) };
   try { localStorage.setItem(CALIB_CHECKS_KEY, JSON.stringify(all)); } catch { /* storage blocked */ }
+}
+
+// Ruler verification (plan step 12): the frame's outside edges measured
+// with a steel rule, stored beside the print check for this job and sheet.
+function sheetRulerSet(wMm, hMm) {
+  const s = state.sheet;
+  if (!s) return null;
+  const scale = rulerScale(s.identity.paper, wMm, hMm);
+  if (!scale) { toast('That is not a plausible reading for this frame: expected within 15 percent of ' + fmtFrame(s.identity.paper) + '.'); return null; }
+  const all = calibChecks();
+  const key = `${s.identity.job}:${s.identity.sheet}`;
+  const prev = all[key] || { job: s.identity.job, sheet: s.identity.sheet, layout: s.identity.version, design: s.identity.paper };
+  all[key] = { ...prev, ruler: { w: wMm, h: hMm, scale, at: calibClock() } };
+  try { localStorage.setItem(CALIB_CHECKS_KEY, JSON.stringify(all)); } catch { /* storage blocked */ }
+  sheetRecognise();
+  return scale;
+}
+function sheetRulerClear() {
+  const s = state.sheet;
+  if (!s) return;
+  const all = calibChecks();
+  const key = `${s.identity.job}:${s.identity.sheet}`;
+  if (all[key] && all[key].ruler) { delete all[key].ruler; try { localStorage.setItem(CALIB_CHECKS_KEY, JSON.stringify(all)); } catch { /* blocked */ } }
+  sheetRecognise();
+}
+function fmtFrame(paperKey) {
+  const f = frameOutsideMm(paperKey);
+  return f ? `${fmtDim(f.w)} × ${fmtDim(f.h)} mm` : '';
 }
 
 let sheetRefitTimer = null;
@@ -712,6 +741,29 @@ function sheetSyncPanel() {
   });
   lab.append(box, document.createTextNode(' Use the sheet fit'));
   el.append(text, lab);
+  if (s) {
+    // Under the paper's cut tolerance: the frame's outside edges, measured
+    // with a steel rule, fix the print scale on both axes.
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:4px';
+    const rec = calibCheckRecord(s.identity.job, s.identity.sheet);
+    const f = frameOutsideMm(s.identity.paper);
+    const mk = (id, v) => { const i = document.createElement('input'); i.type = 'text'; i.inputMode = 'decimal'; i.id = id; i.style.width = '5.5em'; i.value = v; return i; };
+    const wIn = mk('sheetRulerW', rec && rec.ruler ? fmtDim(rec.ruler.w) : ''), hIn = mk('sheetRulerH', rec && rec.ruler ? fmtDim(rec.ruler.h) : '');
+    wIn.placeholder = fmtDim(f.w); hIn.placeholder = fmtDim(f.h);
+    const save = document.createElement('button');
+    save.className = 'btn small'; save.id = 'sheetRulerSave'; save.textContent = rec && rec.ruler ? 'Update ruler' : 'Save ruler';
+    save.title = 'Measure the frame\'s outside edges on the print with a steel rule, across and down, and type them: the print scale is then known under the paper\'s cut tolerance.';
+    save.addEventListener('click', () => sheetRulerSet(parseDim(wIn.value), parseDim(hIn.value)));
+    row.append(document.createTextNode('Frame outside, by ruler: '), wIn, document.createTextNode(' × '), hIn, document.createTextNode(' mm '), save);
+    if (rec && rec.ruler) {
+      const clr = document.createElement('button');
+      clr.className = 'btn small'; clr.id = 'sheetRulerClear'; clr.textContent = 'Forget';
+      clr.addEventListener('click', sheetRulerClear);
+      row.append(clr);
+    }
+    el.appendChild(row);
+  }
   for (const g of (s && s.guidance) || []) {
     const p = document.createElement('div');
     p.className = 'warn sheet-guidance';
@@ -8278,6 +8330,8 @@ window.__app = {
     set fitOn(v) { state.sheetFit = !!v; },
     checks: () => calibChecks(),
     get window() { return state.sheetWindow; },
+    ruler: (w, h) => sheetRulerSet(w, h),
+    clearRuler: () => sheetRulerClear(),
     get lighting() { return !!(state.diffMap && state.diffMap.lighting); },
     get warn() { return state.sheetWindowWarn; },
     get saved() { return state.sheetSaved; },
