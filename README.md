@@ -75,10 +75,13 @@ the fully offline option.
 - **Rectangle** — a sheet of paper (defaults to US Letter), or a
   **credit/ID card** or a **banknote** you always have on hand. Currency is
   grouped into submenus in the picker (US & Canadian bills, euro €5–€100, UK
-  £5–£50, Australian $5–$100) so the list stays tidy. Corners are auto-detected;
-  drag the four handles to fine-tune (a magnifier loupe appears while dragging,
-  the yellow edge marks the top). A rectangle corrects perspective and skew
-  exactly.
+  £5–£50, Australian $5–$100) so the list stays tidy. Corners are auto-detected,
+  then fitted to a fraction of a pixel from the straight middle of each edge,
+  so a curled corner or a dog-ear does not pull them. A card's rounded corners
+  come out where its nominal rectangle has them, which is what its size refers
+  to. Drag the four handles only if one looks off (a magnifier loupe appears
+  while dragging, the yellow edge marks the top). A rectangle corrects
+  perspective and skew exactly.
 - **Graph paper / dot grid / cutting mat** — calibrate off a printed grid
   instead of the sheet's edges. Pick the pitch (metric 1–10 mm, imperial
   1/10–1 in, cutting-mat presets, or a custom one) and put the four handles on
@@ -950,7 +953,7 @@ defence against a mis-measured drawer.
 ## Tests
 
 An end-to-end test renders a synthetic photo with a known homography, drives
-the app headlessly and checks corner detection (< 3 px), trace accuracy
+the app headlessly and checks edge-fitted corner detection (< 0.5 px), trace accuracy
 (< 0.2 mm), mesh dimensions, chamfer/fillet insets, and that every generated
 mesh is watertight (each edge shared by exactly two triangles) — including
 degenerate cases like fillets meeting at half thickness and treatments larger

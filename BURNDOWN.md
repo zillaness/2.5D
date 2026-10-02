@@ -261,7 +261,20 @@ recommendation. Phases 2 and 3 wait for their own sign-off after phase 1's
 real-photo checkpoint. Building in the PRD's suggested order.
 
 - ✅ Sign-off recorded; PRD status flipped.
-- ▶ NEXT: Part A step 1, edge-fitted corners and the wrong-paper check.
+- ✅ Part A step 1a, edge-fitted corners (`js/edgeFit.js`), wired into
+  `autoDetect` and the underside photo. On the suite's photo the corners land
+  0.034 px from truth against 2.88 px for the coarse detector; 0.02 to 0.1 px at
+  3000 x 4000, turned 30 degrees, under k1 0.10, and with a tool across an
+  edge. An edge with no contrast makes it decline and return the coarse
+  corners untouched. 699 checks, all passing, no console errors; dist rebuilt
+  and smoke-tested — v1.28.0.
+  - ⚠ The suite's own corner truth was half a pixel off the convention
+    `rectify` reads in. A canvas path vertex at x is the boundary of pixel x,
+    whose centre is x + 0.5, while `rectify` samples pixel k at coordinate k. The
+    old check compared against the drawn corner, so a perfect fit would have
+    read 0.71 px out. The new check compares in `rectify`'s convention and says
+    why in a comment.
+- ▶ NEXT: Part A step 1b, the wrong-paper check.
 - ⚠ The frontmatter said version 1.15 while the CHANGELOG stopped at v1.7. The
   entries for v1.8 through v1.15 were never written and cannot be reconstructed
   from the file, so they are recorded as a gap rather than invented. The bumps

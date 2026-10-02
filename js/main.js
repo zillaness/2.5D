@@ -6,6 +6,7 @@ import { GRID_PITCHES, gridPitchMm, gridDims, analyzeGrid, autoCount } from './g
 import { rectify } from './homography.js';
 import { estimateDistortion } from './lens.js';
 import { detectPaperCorners } from './detectPaper.js';
+import { refineCorners } from './edgeFit.js';
 import { computeDiffMap, otsuThreshold, segmentObject, segmentObjects } from './segment.js';
 import { scanParts, SCAN_DEFAULTS } from './scan.js';
 import {
@@ -482,6 +483,22 @@ function loadImageFromURL(url, done, fail) {
   img.src = url;
 }
 
+// The coarse detector's quad, refined to sub-pixel from the middle of each
+// edge (js/edgeFit.js). A fit that fails any of its checks hands the coarse
+// corners back untouched, so this can only improve a detection or leave it
+// alone. Kept as diagnostics in state.cornerFit; never saved.
+function fitCorners(img, corners) {
+  try {
+    const fit = refineCorners(img, corners, { k1: state.lens.k1, k2: state.lens.k2 });
+    state.cornerFit = { fitted: fit.ok, moved: fit.moved, reason: fit.reason };
+    return fit.ok ? fit.corners : corners;
+  } catch (err) {
+    console.error('refineCorners failed', err);
+    state.cornerFit = { fitted: false, moved: 0, reason: String(err) };
+    return corners;
+  }
+}
+
 function autoDetect(announce = true) {
   let corners = null;
   try {
@@ -489,11 +506,16 @@ function autoDetect(announce = true) {
   } catch (err) {
     console.error('detectPaperCorners failed', err);
   }
+  if (corners) corners = fitCorners(state.image, corners);
   if (corners) {
     state.corners = corners;
     state.paper.orientation = guessOrientation(corners);
     $('paperOrient').value = state.paper.orientation;
-    if (announce) toast('Paper detected — fine-tune the corners if needed.');
+    if (announce) {
+      toast(state.cornerFit && state.cornerFit.fitted
+        ? 'Paper detected and its edges fitted to a fraction of a pixel. Move a corner only if it looks off.'
+        : 'Paper detected — fine-tune the corners if needed.');
+    }
   } else {
     state.corners = defaultCorners();
     toast('Could not auto-detect the paper — drag the corners manually.');
@@ -2282,6 +2304,7 @@ $('backFile').addEventListener('change', e => {
       toast('Could not find the paper corners in the back photo — retake with all four corners visible.', 6000);
       return;
     }
+    corners = fitCorners(img, corners);
     const { w, h } = currentPaper();
     const marginMm = (state.captureFrac || 0) * Math.max(w, h);
     const res = rectify(img, corners, w, h, { k1: state.lens.k1, k2: state.lens.k2, marginMm });

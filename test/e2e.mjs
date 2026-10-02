@@ -153,18 +153,117 @@ const setup = await page.evaluate(async () => {
 
   const dataURL = c.toDataURL('image/png');
   await new Promise(res => window.__app.loadImageFromURL(dataURL, res));
-  return { quad, detected: window.__app.state.corners };
+  const { detectPaperCorners } = await import('./js/detectPaper.js');
+  return {
+    quad, detected: window.__app.state.corners,
+    coarse: detectPaperCorners(c),
+    fitted: !!(window.__app.state.cornerFit && window.__app.state.cornerFit.fitted),
+  };
 });
 
 console.log('\nStep 1 — paper detection');
 {
-  const { quad, detected } = setup;
-  let maxErr = 0;
-  for (let i = 0; i < 4; i++) {
-    maxErr = Math.max(maxErr, Math.hypot(quad[i].x - detected[i].x, quad[i].y - detected[i].y));
-  }
-  check('auto-detected corners near truth', maxErr < 10, `max error ${maxErr.toFixed(1)} px`);
+  // Truth in rectify's convention. A canvas path vertex at x lies on the
+  // boundary of pixel x, whose centre is x + 0.5, while rectify reads pixel
+  // k's value at coordinate k. So the corner rectify needs is the drawn corner
+  // minus half a pixel on each axis; measured against the drawn corner itself,
+  // a perfect fit would read 0.71 px out.
+  const { quad, detected, coarse } = setup;
+  const err = cs => {
+    let m = 0;
+    for (let i = 0; i < 4; i++) m = Math.max(m, Math.hypot(quad[i].x - 0.5 - cs[i].x, quad[i].y - 0.5 - cs[i].y));
+    return m;
+  };
+  check('auto-detected corners land within half a pixel of truth (edge-fitted)',
+    err(detected) < 0.5 && setup.fitted,
+    `edge-fitted ${err(detected).toFixed(3)} px; the coarse detector alone ${coarse ? err(coarse).toFixed(2) : 'n/a'} px`);
 }
+// Edge-fitted corners on harder sheets than the first photo (Part A step 1 of
+// docs/calibration_and_backlog_prd_v1.2.md). Drives js/edgeFit.js directly and
+// leaves the app's state alone.
+const edgeFit = await page.evaluate(async () => {
+  const { computeHomography, applyHomography } = await import('./js/homography.js');
+  const { detectPaperCorners } = await import('./js/detectPaper.js');
+  const { refineCorners } = await import('./js/edgeFit.js');
+  const { lensParams, distortPixel } = await import('./js/lens.js');
+  const paperW = 210, paperH = 297;
+  const render = (W, Hh, quad, k1, extra) => {
+    const H = computeHomography(
+      [{ x: 0, y: 0 }, { x: paperW, y: 0 }, { x: paperW, y: paperH }, { x: 0, y: paperH }], quad);
+    const lp = lensParams(W, Hh);
+    const m2 = (x, y) => { const q = applyHomography(H, x, y); return k1 ? distortPixel(q, k1, 0, lp) : q; };
+    const c = document.createElement('canvas'); c.width = W; c.height = Hh;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#38342e'; ctx.fillRect(0, 0, W, Hh);
+    const dense = cs => {
+      const o = [];
+      for (let i = 0; i < cs.length; i++) {
+        const a = cs[i], b = cs[(i + 1) % cs.length];
+        for (let k = 0; k < 64; k++) o.push({ x: a.x + (b.x - a.x) * k / 64, y: a.y + (b.y - a.y) * k / 64 });
+      }
+      return o;
+    };
+    const poly = (pts, fill) => {
+      ctx.beginPath();
+      pts.forEach((p, i) => { const d = m2(p.x, p.y); if (i) ctx.lineTo(d.x, d.y); else ctx.moveTo(d.x, d.y); });
+      ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+    };
+    poly(dense([{ x: 0, y: 0 }, { x: paperW, y: 0 }, { x: paperW, y: paperH }, { x: 0, y: paperH }]), '#f4f2ec');
+    poly(dense([{ x: 65, y: 120 }, { x: 145, y: 120 }, { x: 145, y: 170 }, { x: 65, y: 170 }]), '#23364a');
+    if (extra) extra(ctx, m2, poly, dense);
+    // Truth in rectify's convention: half a pixel up and left of the drawn corner.
+    const truth = [{ x: 0, y: 0 }, { x: paperW, y: 0 }, { x: paperW, y: paperH }, { x: 0, y: paperH }]
+      .map(p => { const d = m2(p.x, p.y); return { x: d.x - 0.5, y: d.y - 0.5 }; });
+    return { c, truth };
+  };
+  const err = (a, b) => Math.max(...a.map((p, i) => Math.hypot(p.x - b[i].x, p.y - b[i].y)));
+  const trial = (W, Hh, quad, k1, extra) => {
+    const { c, truth } = render(W, Hh, quad, k1, extra);
+    const coarse = detectPaperCorners(c);
+    if (!coarse) return { found: false };
+    const r = refineCorners(c, coarse, { k1 });
+    return { found: true, ok: r.ok, reason: r.reason, coarse: err(coarse, truth),
+      fitted: r.ok ? err(r.corners, truth) : null };
+  };
+  const rot = (cx, cy, a, hw, hh) => [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]
+    .map(([x, y]) => ({ x: cx + x * Math.cos(a) - y * Math.sin(a), y: cy + x * Math.sin(a) + y * Math.cos(a) }));
+  const hires = trial(3000, 4000,
+    [{ x: 420, y: 560 }, { x: 2480, y: 430 }, { x: 2700, y: 3650 }, { x: 330, y: 3800 }], 0);
+  const rotated = trial(2000, 2000, rot(1000, 1000, Math.PI / 6, 520, 740), 0);
+  const lensed = trial(1000, 1400,
+    [{ x: 150, y: 180 }, { x: 850, y: 150 }, { x: 900, y: 1250 }, { x: 120, y: 1280 }], 0.10);
+  // A dark tool lying across the top edge, covering about a sixth of it: the
+  // profiles it blocks have to come out as outliers, not drag the line.
+  const overEdge = trial(1600, 2200,
+    [{ x: 230, y: 260 }, { x: 1330, y: 220 }, { x: 1420, y: 1960 }, { x: 180, y: 2010 }], 0,
+    (ctx, m2, poly, dense) => poly(dense([{ x: 120, y: -15 }, { x: 155, y: -15 }, { x: 155, y: 40 }, { x: 120, y: 40 }]), '#2a2a30'));
+  // The guard: a sheet whose right edge has no contrast at all (paper laid
+  // against paper). The fit must decline and hand back exactly what it got.
+  const { c: flat, truth: flatTruth } = render(1000, 1400,
+    [{ x: 150, y: 180 }, { x: 820, y: 140 }, { x: 900, y: 1220 }, { x: 120, y: 1260 }], 0,
+    ctx => { ctx.fillStyle = '#f4f2ec'; ctx.fillRect(790, 0, 210, 1400); });
+  const guard = refineCorners(flat, flatTruth, {});
+  return {
+    hires, rotated, lensed, overEdge,
+    guardOk: guard.ok, guardReason: guard.reason, guardSame: guard.corners === flatTruth,
+  };
+});
+
+const fitLine = r => r.found
+  ? `edge-fitted ${r.fitted === null ? 'declined (' + r.reason + ')' : r.fitted.toFixed(3) + ' px'}, coarse ${r.coarse.toFixed(2)} px`
+  : 'coarse detector found no sheet';
+check('edge-fitted corners hold at 3000 x 4000, under a tenth of a pixel',
+  edgeFit.hires.ok && edgeFit.hires.fitted < 0.1, fitLine(edgeFit.hires));
+check('edge-fitted corners hold on a sheet turned 30 degrees in the frame',
+  edgeFit.rotated.ok && edgeFit.rotated.fitted < 0.15, fitLine(edgeFit.rotated));
+check('edge-fitted corners hold under radial lens distortion, fitted in undistorted space',
+  edgeFit.lensed.ok && edgeFit.lensed.fitted < 0.15, fitLine(edgeFit.lensed));
+check('a tool lying across an edge is rejected as outliers, not fitted through',
+  edgeFit.overEdge.ok && edgeFit.overEdge.fitted < 0.15, fitLine(edgeFit.overEdge));
+check('an edge with no contrast makes the fit decline and return the corners it was given',
+  !edgeFit.guardOk && edgeFit.guardSame && /edge 1/.test(edgeFit.guardReason || ''),
+  edgeFit.guardReason || 'accepted');
+
 await page.screenshot({ path: path.join(shotDir, 'step1-corners.png') });
 
 // ---------- 2. Trace ----------
