@@ -343,7 +343,19 @@ real-photo checkpoint. Building in the PRD's suggested order.
   outline by `rescaleParts`, and carried onto the placed item so Step 4 draws
   it in the pocket. 728 checks, all passing, no console errors; dist
   rebuilt and smoke-tested — v1.29.1.
-- ▶ NEXT: B.2 merge; then B.4, the rest of Part A phase 1, B.3.
+- ✅ Part B.2, merge: `mergeParts` in `js/scan.js` joins the chosen
+  candidates' masks (each part now carries its component as `src`) and traces
+  once, so the pocket is one loop with no seam; a gap is bridged by the
+  smallest closing that joins them, up to 12 mm, and the width bridged is
+  reported. Shift-click chooses, in the list or on the photo (the pick now
+  receives its event); Merge replaces the chosen with one, named for the
+  first, rescaled if a coin rescale is applied, with a fresh thumbnail; Undo
+  merge restores. 735 checks, all passing, no console errors; dist
+  rebuilt and smoke-tested — v1.29.2.
+  - ⚠ A closing fills every concavity narrower than the gap it bridges, so a
+    merge across a 10 mm gap also fills a 6 mm notch elsewhere on the tool.
+    Said in the README and the hint; Edit in Step 2 is the repair.
+- ▶ NEXT: B.4, the two small fixes; then the rest of Part A phase 1, B.3.
 
 ### Handoff to a fresh session, 2026-10-02
 

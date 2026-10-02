@@ -88,7 +88,7 @@ export function otsuThreshold(diff) {
   return thresh;
 }
 
-function dilate(mask, w, h, r) {
+export function dilate(mask, w, h, r) {
   if (r <= 0) return mask;
   // Two-pass (horizontal then vertical) box dilation.
   const tmp = new Uint8Array(w * h);
@@ -115,7 +115,7 @@ function dilate(mask, w, h, r) {
   return out;
 }
 
-function erode(mask, w, h, r) {
+export function erode(mask, w, h, r) {
   if (r <= 0) return mask;
   const inv = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) inv[i] = mask[i] ? 0 : 1;

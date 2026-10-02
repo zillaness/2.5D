@@ -22,6 +22,7 @@ import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
 } from './contour.js';
+import { labelComponents, dilate, erode } from './segment.js';
 
 export const SCAN_DEFAULTS = {
   // retrace's own refine settings. Simplify is in MILLIMETRES here, which is
@@ -172,7 +173,53 @@ function partFromMask(part, pxPerMm, o) {
   // curve: a 24 mm disc comes out of refine about 0.3 mm under, and a scale
   // check cannot carry that bias. Cheap enough to do for every part.
   const disc = fitCircle(outerRaw.pts);
-  return { outer, holes, area: outerRaw.area, bbox: bboxOfPts(outer), disc };
+  // The component's own mask rides along, so two candidates can be merged as
+  // masks before tracing (mergeParts). Never copied onto a placed item.
+  return { outer, holes, area: outerRaw.area, bbox: bboxOfPts(outer), disc, src: part };
+}
+
+// Two or more candidates joined as masks and traced once, so the result is
+// one loop with no seam (drawer scan PRD, open question 4). A gap between
+// them, the light section of a two-colour handle that segmented as liner, is
+// bridged by the smallest closing that joins them, up to maxBridgeMm; a
+// closing also fills any concavity narrower than the gap it bridged, which
+// is the honest cost of guessing what was between. Returns the part, with
+// bridgedMm saying how wide a gap was closed (0 for touching masks), or null
+// when the candidates carry no masks or lie too far apart.
+export function mergeParts(parts, pxPerMm, opts = {}) {
+  const o = { ...SCAN_DEFAULTS, maxBridgeMm: 12, ...opts };
+  const srcs = (Array.isArray(parts) ? parts : []).map(p => p && p.src).filter(s => s && s.mask);
+  if (srcs.length < 2 || !(pxPerMm > 0)) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of srcs) {
+    x0 = Math.min(x0, s.x0); y0 = Math.min(y0, s.y0);
+    x1 = Math.max(x1, s.x0 + s.w); y1 = Math.max(y1, s.y0 + s.h);
+  }
+  const maxR = Math.max(1, Math.round(o.maxBridgeMm * pxPerMm / 2));
+  const pad = maxR + 1;
+  const w = x1 - x0 + 2 * pad, h = y1 - y0 + 2 * pad;
+  let mask = new Uint8Array(w * h);
+  for (const s of srcs) {
+    for (let y = 0; y < s.h; y++) {
+      const srow = y * s.w, drow = (y + s.y0 - y0 + pad) * w + (s.x0 - x0 + pad);
+      for (let x = 0; x < s.w; x++) if (s.mask[srow + x]) mask[drow + x] = 1;
+    }
+  }
+  let bridgedMm = 0;
+  if (labelComponents(mask, w, h).sizes.length > 1) {
+    const step = Math.max(1, Math.round(0.25 * pxPerMm));
+    let joined = null;
+    for (let r = step; r <= maxR; r += step) {
+      const m = erode(dilate(mask, w, h, r), w, h, r);
+      if (labelComponents(m, w, h).sizes.length === 1) { joined = m; bridgedMm = 2 * r / pxPerMm; break; }
+    }
+    if (!joined) return null;
+    mask = joined;
+  }
+  const src = { mask, w, h, x0: x0 - pad, y0: y0 - pad };
+  const part = partFromMask(src, pxPerMm, o);
+  if (!part) return null;
+  return { ...part, src, bridgedMm };
 }
 
 // Reading order: down the drawer in bands, left to right within each band.

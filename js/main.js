@@ -10,7 +10,7 @@ import { refineCorners } from './edgeFit.js';
 import { checkPaperAspect } from './paperAspect.js';
 import { readFocalLength, focalPixels } from './exif.js';
 import { computeDiffMap, otsuThreshold, segmentObject, segmentObjects } from './segment.js';
-import { scanParts, SCAN_DEFAULTS, fitCircle, findCoinCandidate, coinScaleCheck, rescaleParts } from './scan.js';
+import { scanParts, SCAN_DEFAULTS, fitCircle, findCoinCandidate, coinScaleCheck, rescaleParts, mergeParts } from './scan.js';
 import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
@@ -79,7 +79,7 @@ const state = {
   // a project written before it loads with the flag off and behaves exactly as
   // it did. `on` is the capture mode; `active` means a review is in progress
   // and is what stops goStep(2) retracing over it.
-  scan: { on: false, active: false, parts: [], coin: null, rescale: null },
+  scan: { on: false, active: false, parts: [], coin: null, rescale: null, multi: [], undo: [] },
   labels: [],     // emboss/deboss text on a face
   coin: { size: DEFAULT_COIN, customD: 24.26 },
   lens: { k1: 0, k2: 0 }, // radial lens-distortion correction (rectangle path)
@@ -204,7 +204,7 @@ const traceEditor = new TraceEditor($('traceCanvas'), {
     try { if (ctx && vp) scanDrawOverlay(ctx, vp); } catch { /* overlay only */ }
     positionHoleTag();
   },
-  onScanPick: mm => scanPickAt(mm),
+  onScanPick: (mm, e) => scanPickAt(mm, e),
   onScanPress: (mm, sp) => scanCoinPress(mm, sp),
   onScanDrag: mm => scanCoinDrag(mm),
   onScanDragEnd: () => scanCoinDragEnd(),
@@ -4079,6 +4079,14 @@ function scanDrawOverlay(ctx, vp) {
     ctx.setLineDash(on ? [] : [5, 4]);
     ctx.stroke();
     ctx.setLineDash([]);
+    if (scanInMulti(i)) {
+      // Chosen for a merge: a wide translucent ring the pick colour cannot be
+      // mistaken for.
+      path(part.outer);
+      ctx.lineWidth = 7;
+      ctx.strokeStyle = 'rgba(255,212,121,0.35)';
+      ctx.stroke();
+    }
     // The name, at the top-left of the part, so it reads against the photo.
     const a = toS({ x: part.bbox.minX, y: part.bbox.minY });
     ctx.font = '600 12px system-ui, sans-serif';
@@ -4096,17 +4104,19 @@ function scanDrawOverlay(ctx, vp) {
 
 // A press on the drawer picks the candidate under it. Smallest first, so a
 // little tool lying on a big one wins rather than being unreachable.
-function scanPickAt(mm) {
+function scanPickAt(mm, e) {
   if (!scanActive()) return;
   const parts = state.scan.parts || [];
   const order = parts.map((p, i) => i)
     .sort((a, b) => parts[a].area - parts[b].area);
+  const adding = !!(e && (e.shiftKey || e.ctrlKey || e.metaKey));
   for (const i of order) {
     if (pointInPolygon(mm, parts[i].outer)) {
       if (parts[i].isCoin) {
         toast('That is the coin. It checks the scale and is not placed.');
         return;
       }
+      if (adding) { scanSelectRow(i, true); return; }
       state.scan.sel = i;
       parts[i].picked = parts[i].picked === false;
       scanSyncPanel();
@@ -4130,7 +4140,8 @@ function scanSyncPanel() {
     row.dataset.i = String(i);
     row.style.cssText =
       'display:flex; align-items:center; gap:6px; padding:3px 4px; border-radius:4px; ' +
-      (i === state.scan.sel ? 'background:var(--bg2)' : '');
+      (i === state.scan.sel ? 'background:var(--bg2); ' : '') +
+      (scanInMulti(i) ? 'outline:2px solid var(--accent2); outline-offset:-2px' : '');
     const pic = document.createElement('img');
     pic.className = 'scan-thumb';
     pic.alt = '';
@@ -4169,16 +4180,20 @@ function scanSyncPanel() {
     row.append(box, pic, name, area);
     row.addEventListener('click', e => {
       if (e.target === box || e.target === name) return;
-      state.scan.sel = i;
-      scanSyncPanel();
-      traceEditor.draw();
+      scanSelectRow(i, !!(e.shiftKey || e.ctrlKey || e.metaKey));
     });
     list.appendChild(row);
   });
+  const multi = (state.scan && state.scan.multi) || [];
+  const mergeBtn = $('scanMergeBtn');
+  mergeBtn.disabled = multi.length < 2;
+  mergeBtn.textContent = multi.length >= 2 ? `\u21c6 Merge these ${multi.length}` : '\u21c6 Merge selected';
+  $('scanUndoMergeBtn').hidden = !(state.scan && state.scan.undo && state.scan.undo.length);
   $('scanReviewHint').textContent = parts.length
     ? `${parts.length} shape${parts.length === 1 ? '' : 's'} found, ${on} ticked. ` +
       'Click a tool on the photo to tick or untick it, and rename anything you will ' +
-      'want engraved. Two tools that were touching come back as one shape.'
+      'want engraved. One tool that came back as two shapes: Shift-click both and ' +
+      'merge them. Two tools that were touching come back as one shape.'
     : 'Nothing was found. Check the corners are on the drawer, that the liner is ' +
       'clear around the edge, and that the tools contrast with it.';
   $('scanPlaceBtn').disabled = !on;
@@ -4200,6 +4215,8 @@ function scanEnterReview(parts) {
   state.scan.sel = -1;
   state.scan.coin = null;
   state.scan.rescale = null;
+  state.scan.multi = [];
+  state.scan.undo = [];
   // A previous tool's sections draw in cyan over the drawer and are
   // click-draggable, and traceEditor.sections IS state.regions, the same array.
   state.regions.length = 0;
@@ -4232,6 +4249,8 @@ function scanExitReview() {
   state.scan.sel = -1;
   state.scan.coin = null;
   state.scan.rescale = null;
+  state.scan.multi = [];
+  state.scan.undo = [];
   $('scanPanel').hidden = true;
   $('traceControls').hidden = false;
   $('panel2Title').textContent = 'Trace & holes';
@@ -4280,6 +4299,8 @@ $('scanRedoBtn').addEventListener('click', () => {
   // the check starts over rather than describing shapes that no longer exist.
   state.scan.coin = null;
   state.scan.rescale = null;
+  state.scan.multi = [];
+  state.scan.undo = [];
   scanSyncPanel();
   traceEditor.draw();
   toast(`Found ${parts.length} shape${parts.length === 1 ? '' : 's'}.`);
@@ -4312,6 +4333,95 @@ function scanPlaceReviewed() {
   toast(`${bits.join('. ')}.`, 8000);
   return res;
 }
+
+// ---------- merging two candidates (calibration_and_backlog_prd_v1.2, Part B.2) ----------
+//
+// One tool that the segmenter returned as two shapes, a two-colour handle for
+// example, is joined as masks and traced once (mergeParts), so the pocket is
+// one loop with no seam. Shift-click chooses the shapes, in the list or on
+// the photo; Merge replaces them with one; Undo puts them back.
+
+const scanInMulti = i => !!(state.scan && state.scan.multi && state.scan.multi.includes(i));
+
+function scanSelectRow(i, add) {
+  if (!scanActive()) return;
+  const parts = state.scan.parts || [];
+  if (!parts[i]) return;
+  if (!state.scan.multi) state.scan.multi = [];
+  if (add) {
+    const at = state.scan.multi.indexOf(i);
+    if (at >= 0) state.scan.multi.splice(at, 1); else state.scan.multi.push(i);
+  } else {
+    state.scan.multi = [i];
+  }
+  state.scan.sel = i;
+  scanSyncPanel();
+  traceEditor.draw();
+}
+
+function scanMerge() {
+  if (!scanActive() || !state.rect) return null;
+  const parts = state.scan.parts || [];
+  const idx = (state.scan.multi || []).filter(i => parts[i]).sort((a, b) => a - b);
+  if (idx.length < 2) { toast('Shift-click two shapes first, then merge.'); return null; }
+  if (idx.some(i => parts[i].isCoin)) { toast('The coin is not a tool and cannot be merged.'); return null; }
+  const chosen = idx.map(i => parts[i]);
+  const dm = state.diffMap || computeDiffMap(state.rect.canvas);
+  let merged = mergeParts(chosen, state.rect.pxPerMm, scanPartOpts(dm));
+  if (!merged) {
+    toast('Those shapes are too far apart to be one tool (more than 12 mm between them).', 6000);
+    return null;
+  }
+  // The merge is traced from the masks, which are the scan as found; a coin
+  // rescale already applied has to be applied to it too.
+  const k = scanRescaleFactor();
+  if (k) merged = rescaleParts([merged], k, scanCentreMm())[0];
+  scanAttachThumb(merged);
+  merged.name = chosen[0].name;
+  merged.renamed = chosen.some(p => p.renamed);
+  merged.picked = true;
+  state.scan.undo.push(parts.slice());
+  const next = parts.filter((p, i) => !idx.includes(i));
+  next.splice(idx[0], 0, merged);
+  state.scan.parts = next;
+  state.scan.multi = [];
+  state.scan.sel = idx[0];
+  scanCoinReindex();
+  scanSyncPanel();
+  traceEditor.draw();
+  toast(merged.bridgedMm > 0
+    ? `Merged ${chosen.length} shapes into one, bridging a ${fmtDim(merged.bridgedMm)} mm gap. Undo merge puts them back.`
+    : `Merged ${chosen.length} shapes into one. Undo merge puts them back.`, 5000);
+  return merged;
+}
+
+function scanUndoMerge() {
+  if (!scanActive() || !state.scan.undo || !state.scan.undo.length) return false;
+  state.scan.parts = state.scan.undo.pop();
+  state.scan.multi = [];
+  state.scan.sel = -1;
+  scanCoinReindex();
+  scanSyncPanel();
+  traceEditor.draw();
+  return true;
+}
+
+// The coin's candidate index after the parts array changed under it.
+function scanCoinReindex() {
+  if (!state.scan.coin) return;
+  const i = (state.scan.parts || []).findIndex(p => p.isCoin);
+  if (i < 0 && state.scan.coin.part >= 0) {
+    // Its candidate was merged away: the circle stays where it was, as a
+    // hand-placed one, and the check continues from it.
+    state.scan.coin.part = -1;
+    state.scan.coin.auto = false;
+  } else {
+    state.scan.coin.part = i;
+  }
+}
+
+$('scanMergeBtn').addEventListener('click', () => { scanMerge(); });
+$('scanUndoMergeBtn').addEventListener('click', () => { scanUndoMerge(); });
 
 // ---------- the coin check (calibration_and_backlog_prd_v1.2, Part B.1) ----------
 //
@@ -7744,7 +7854,7 @@ window.__app = {
     review: parts => scanEnterReview(parts),
     maybeReview: () => scanMaybeReview(),
     exit: () => scanExitReview(),
-    pick: mm => scanPickAt(mm),
+    pick: (mm, e) => scanPickAt(mm, e),
     accept: () => scanPlaceReviewed(),
     edit: i => itemEditBegin(i),
     autoNamed: () => layAutoNamed().map(it => it.name),
@@ -7755,6 +7865,10 @@ window.__app = {
     get active() { return scanActive(); },
     get parts() { return (state.scan && state.scan.parts) || []; },
     get state() { return state.scan; },
+    select: (i, add) => scanSelectRow(i, add),
+    merge: () => scanMerge(),
+    undoMerge: () => scanUndoMerge(),
+    get multi() { return (state.scan && state.scan.multi) || []; },
     coinFind: () => scanCoinFind(),
     coinApply: () => scanCoinApply(),
     coinClear: () => scanCoinClear(),

@@ -932,9 +932,14 @@ becomes a review: every shape found is drawn over the photo with its name, and
 the panel lists them, each row with a thumbnail cropped from the drawer around
 its shape, so a row says which tool it is and not only its size. The picture
 rides onto the placed tool and shows inside its pocket in Step 4. Click a tool
-on the photo to tick or untick it, rename
-anything you will want engraved, and **Find again** re-runs the segmentation if
-you change the detection threshold. **Place these N tools** puts them in the
+on the photo to tick or untick it, rename anything you will want engraved, and
+**Find again** re-runs the segmentation if you change the detection threshold.
+One tool that came back as two shapes, a two-colour handle whose light section
+read as liner, is put back together by Shift-clicking both, in the list or on
+the photo, and pressing **Merge**: the two are joined as masks and traced once,
+so the pocket is one loop with no seam, and a gap of up to 12 mm between them
+is bridged (a closing, so a notch narrower than the gap is filled with it).
+**Undo merge** puts the two back. **Place these N tools** puts them in the
 drawer and opens Step 4.
 
 **Checking the scale with a coin.** Lay a coin on the drawer's floor before the
@@ -968,9 +973,10 @@ it is why scanned tools are badged, why the escape hatch above exists, and why
 an export warns when tools are still carrying the names the scan gave them
 rather than engraving "Tool 4" into your foam.
 
-**Not in v1.** Tools that touch are not separated. The coin check reads the
-rim-versus-floor error and offers the fix; a mis-typed width or depth it can
-only report as a disagreement, since it cannot tell which number is wrong.
+**Not in v1.** Tools that touch are not separated; move them apart and shoot
+again. The coin check reads the rim-versus-floor error and offers the fix; a
+mis-typed width or depth it can only report as a disagreement, since it cannot
+tell which number is wrong.
 
 ## Tests
 
@@ -1075,10 +1081,6 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
 - **Drawer scale from a calibration sheet** — the coin check shipped in
   v1.29.0; a calibration sheet on the drawer floor, recognised on its own,
   will do the same without a coin in Part A phase 2.
-- **Drawer scan review** — thumbnails in the review list, and merging two
-  candidates that are really one tool, for example a two-colour handle the
-  segmenter split. Tools that touch still arrive as one shape and are not
-  separated; move them apart.
 - **Nest speed** — the cheap-reject pass shipped in v1.27.5. What is left is
   Dense trying 24 rotations per tool against Access's two, and an overfull
   drawer the time budget never stops. See Known gaps.

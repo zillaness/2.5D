@@ -1,6 +1,6 @@
 ---
 file: drawer_scan_prd_v1.0.md
-version: 1.3
+version: 1.4
 author: Sam Cao
 created: 2026-09-19
 last_updated: 2026-10-02
@@ -14,7 +14,7 @@ Status: **Steps 1 to 6 and 8 SHIPPED in v1.27.0, 2026-09-19. Step 7, the coin
 cross-check with the one-click rescale of open question 6, SHIPPED in v1.29.0,
 2026-10-02, as Part B.1 of `docs/calibration_and_backlog_prd_v1.2.md`; the
 sheet-based version is that document's Part A phase 2. Merge and thumbnails
-from step 5 remain planned there as Part B.2.**
+from step 5 SHIPPED in v1.29.1 and v1.29.2, 2026-10-02, as its Part B.2.**
 · 2026-09-19 · target branch `claude/2.5d-photo-stl-s3-y0oodn`
 
 Sam put this in the work queue on 2026-09-19, which granted the exception asked
@@ -33,8 +33,10 @@ and the rim and offers one click that rescales every candidate, sizes and
 positions, about the drawer's centre. Undo restores the scan as found; placed
 tools carry the factor in `source.scale`.
 
-**Not built**, and both named in the README: merging two candidates that were
-touching, and per-candidate thumbnails in the review list.
+**Shipped later, v1.29.1 and v1.29.2:** per-candidate thumbnails in the review
+list, and merge as masks before tracing (open question 4), with a closing that
+bridges a gap of up to 12 mm between the two. Touching tools remain one shape
+(open question 7).
 
 **Three corrections this document needed, found by building it:**
 
@@ -520,6 +522,7 @@ Step 2 as the escape hatch. Open questions 3, 6 and 9 change what gets built;
 the rest are defaults.
 
 ## CHANGELOG
+- v1.4 (2026-10-02): Step 5's merge and thumbnails shipped in v1.29.1 and v1.29.2 (calibration_and_backlog_prd_v1.2.md, Part B.2).
 - v1.3 (2026-10-02): Step 7 shipped in v1.29.0 as the coin check (calibration_and_backlog_prd_v1.2.md, Part B.1). Status and the "Not built" paragraph updated.
 - v1.2 (2026-09-29): Status line points at `docs/calibration_and_backlog_prd_v1.2.md`, which now carries step 7 and the unbuilt merge and thumbnails. Filename kept at _v1.0 because `js/main.js` and `js/scan.js` cite it by name.
 - v1.1 (2026-09-19): Steps 1 to 6 and 8 shipped in v1.27.0. Records the three corrections building it forced (the paperDims transposition, the goStep(2) retrace that would have destroyed a scan, and the two TraceEditor edits the "no new capability" framing hid), the three paper-tuned constants the scan does not inherit, and what remains: step 7's cross-check, merge, and thumbnails.

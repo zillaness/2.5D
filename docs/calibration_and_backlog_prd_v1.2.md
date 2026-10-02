@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.3
+version: 1.2.4
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -901,6 +901,11 @@ applied factor.
 
 ## B.2 Drawer scan review: merge and thumbnails
 
+*Shipped: thumbnails in v1.29.1, merge in v1.29.2 (2026-10-02). Merge joins
+the candidates' masks and traces once (`mergeParts`), bridging a gap of up to
+12 mm with the smallest closing that joins them; Shift-click chooses, in the
+list or on the photo; undo restores.*
+
 **Problem.** Two pieces of the scan review were planned in the drawer scan
 PRD's step 5 and dropped when the session ran short. Checked in code: the
 review row (`scanSyncPanel`, `js/main.js:4016`) has a tick box, a name and a
@@ -1109,6 +1114,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.4 (2026-10-02): B.2 shipped, thumbnails in v1.29.1 and merge in v1.29.2.
 - v1.2.3 (2026-10-02): B.1 shipped in v1.29.0; its status note records the
   raw-boundary circle fit and the centre-anchored rescale.
 - v1.2.2 (2026-10-02): Criterion 14 revised after building step 1b: without a

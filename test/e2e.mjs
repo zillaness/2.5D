@@ -14805,6 +14805,149 @@ const coinCheck = await page.evaluate(async () => {
     `fit (${r.pure.fit && r.pure.fit.cx.toFixed(3)}, ${r.pure.fit && r.pure.fit.cy.toFixed(3)}) r ${r.pure.fit && r.pure.fit.r.toFixed(3)}; check ${r.pure.check.percent.toFixed(2)} percent`);
 }
 
+// ---------- Merging two candidates (Part B.2 of calibration_and_backlog_prd_v1.2) ----------
+//
+// One tool the segmenter returned as two shapes is joined as masks and traced
+// once, so the pocket is one loop with no seam. A rectified drawer is
+// fabricated directly, as the review test does: nothing here reasons about
+// the camera.
+
+console.log('\nMerging two candidates');
+
+const mergeTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const { mergeParts } = await import('/js/scan.js');
+  const before = {
+    reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] },
+    seg: { ...st.seg }, items: structuredClone(st.layout.items), container: structuredClone(st.layout.container),
+    rect: st.rect, diffMap: st.diffMap, rectDirty: st.rectDirty, image: st.image,
+  };
+  // 120 x 100 mm at 4 px/mm. A screwdriver whose light shaft segmented as
+  // liner: a 14 x 12 grip and a 14 x 12 tip 2.5 mm apart, in line. A second
+  // tool well away, and a wrench-like shape with a 6 mm jaw to show what a
+  // closing costs.
+  const PPM = 4, DW = 120, DH = 100;
+  const c = document.createElement('canvas');
+  c.width = DW * PPM; c.height = DH * PPM;
+  const g = c.getContext('2d');
+  g.fillStyle = '#b0b0b0'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#2c2c2c';
+  const rect = (x, y, w, h) => g.fillRect(Math.round(x * PPM), Math.round(y * PPM), Math.round(w * PPM), Math.round(h * PPM));
+  rect(12, 10, 14, 12); rect(28.5, 10, 14, 12);
+  rect(60, 44, 30, 16);
+  st.image = c;
+  st.rect = { canvas: c, pxPerMm: PPM };
+  st.rectDirty = false;
+  st.diffMap = null;
+  st.seg.autoThreshold = false; st.seg.threshold = 40;
+  app.traceEditor.setRectified(c, PPM);
+  st.reference = 'rect';
+  st.paper = { ...st.paper, size: 'custom', customW: DW, customH: DH };
+  st.scan = { on: true, active: false, parts: [], coin: null, rescale: null, multi: [], undo: [] };
+  if (app.scan.active) app.scan.exit();
+  const entered = app.scan.maybeReview();
+  await wait(100);
+  const found = app.scan.parts.map(p => ({ name: p.name, w: p.bbox.w, h: p.bbox.h, minX: p.bbox.minX, hasSrc: !!(p.src && p.src.mask) }));
+  const btn0 = { disabled: $('scanMergeBtn').disabled, text: $('scanMergeBtn').textContent, undoShown: !$('scanUndoMergeBtn').hidden };
+
+  // Choose the two halves: one from the list, one by Shift-clicking the photo.
+  app.scan.select(0, true);
+  const p1 = app.scan.parts[1];
+  app.scan.pick({ x: (p1.bbox.minX + p1.bbox.maxX) / 2, y: (p1.bbox.minY + p1.bbox.maxY) / 2 }, { shiftKey: true });
+  const chosen = { multi: app.scan.multi.slice(), ticked: app.scan.parts.filter(p => p.picked !== false).length,
+    btn: { disabled: $('scanMergeBtn').disabled, text: $('scanMergeBtn').textContent },
+    rings: $('scanList').querySelectorAll('.scan-row[style*="outline"]').length };
+
+  const merged = app.scan.merge();
+  await wait(50);
+  const afterMerge = {
+    n: app.scan.parts.length, names: app.scan.parts.map(p => p.name),
+    part: merged && { name: merged.name, w: merged.bbox.w, h: merged.bbox.h, minX: merged.bbox.minX, minY: merged.bbox.minY,
+      holes: merged.holes.length, area: merged.area, bridgedMm: merged.bridgedMm, pts: merged.outer.length,
+      thumb: !!(merged.thumb && /^data:image\/jpeg/.test(merged.thumb.dataUrl)), picked: merged.picked },
+    rows: $('scanList').querySelectorAll('.scan-row').length,
+    undoShown: !$('scanUndoMergeBtn').hidden, multi: app.scan.multi.length,
+    placeLabel: $('scanPlaceBtn').textContent,
+  };
+  // Undo puts the two back, as they were.
+  const undone = app.scan.undoMerge();
+  const afterUndo = { n: app.scan.parts.length, parts: app.scan.parts.map(p => ({ name: p.name, w: p.bbox.w, minX: p.bbox.minX })), undoShown: !$('scanUndoMergeBtn').hidden };
+
+  // Too far apart: the grip and the far tool. Refused, nothing changes.
+  app.scan.select(0, false); app.scan.select(2, true);
+  const farMerge = app.scan.merge();
+  const afterFar = { n: app.scan.parts.length, multi: app.scan.multi.length };
+
+  // Merge again and place: the merged tool lands, carries its picture, and
+  // round-trips the project with its outline intact.
+  app.scan.select(0, false); app.scan.select(1, true);
+  const merged2 = app.scan.merge();
+  const realConfirm = window.confirm;
+  window.confirm = () => true;
+  const placed = app.scan.accept();
+  window.confirm = realConfirm;
+  await wait(100);
+  const items = st.layout.items.map(it => ({ name: it.name, pts: it.outer.length, thumb: !!(it.thumb && it.thumb.dataUrl), source: it.source && it.source.kind }));
+  $('projectBtn').click();
+  const text = $('projText').value;
+  $('projCloseBtn').click();
+  st.layout.items.length = 0;
+  $('projectBtn').click();
+  $('projText').value = text;
+  $('projLoadTextBtn').click();
+  await wait(300);
+  $('projCloseBtn').click();
+  const reloaded = st.layout.items.map(it => ({ name: it.name, pts: it.outer.length }));
+
+  // The pure function: masks that touch merge with no bridge; a part without
+  // a mask cannot be merged.
+  const mk = (x0, y0, w, h) => ({ src: { mask: new Uint8Array(w * h).fill(1), w, h, x0, y0 } });
+  const touching = mergeParts([mk(0, 0, 40, 40), mk(40, 0, 40, 40)], 4, { minAreaMm2: 1 });
+  const noMask = mergeParts([{ outer: [] }, mk(0, 0, 40, 40)], 4);
+
+  if (app.scan.active) app.scan.exit();
+  st.layout.items = before.items; st.layout.container = before.container;
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.seg = before.seg;
+  st.rect = before.rect; st.diffMap = before.diffMap; st.rectDirty = before.rectDirty; st.image = before.image;
+  if (before.rect) app.traceEditor.setRectified(before.rect.canvas, before.rect.pxPerMm);
+  app.syncRefControls();
+  return { entered, found, btn0, chosen, afterMerge, undone, afterUndo, farMerge, afterFar, merged2: !!merged2, placed, items, reloaded,
+    touching: touching && { w: touching.bbox.w, h: touching.bbox.h, bridgedMm: touching.bridgedMm, pts: touching.outer.length }, noMask };
+});
+
+{
+  const r = mergeTest;
+  const near1 = (a, b, t) => Math.abs(a - b) <= t;
+  check('the split tool arrives as two candidates, each carrying its mask, with Merge disabled until two are chosen',
+    r.entered && r.found.length === 3 && r.found.every(p => p.hasSrc) && r.btn0.disabled && !r.btn0.undoShown,
+    r.found.map(p => `${p.name} ${p.w.toFixed(1)} × ${p.h.toFixed(1)}`).join(', '));
+  check('Shift-click chooses shapes for a merge, in the list or on the photo, without changing their ticks',
+    r.chosen.multi.length === 2 && r.chosen.multi.includes(0) && r.chosen.multi.includes(1) && r.chosen.ticked === 3 &&
+    !r.chosen.btn.disabled && /Merge these 2/.test(r.chosen.btn.text) && r.chosen.rings === 2,
+    `chosen ${JSON.stringify(r.chosen.multi)}, ${r.chosen.ticked} ticked, "${r.chosen.btn.text}", ${r.chosen.rings} rows ringed`);
+  check('Merge yields one part with one outline and no seam, bridging the gap, named for the first, with a picture',
+    r.afterMerge.n === 2 && r.afterMerge.part && r.afterMerge.part.holes === 0 && near1(r.afterMerge.part.w, 30.5, 1) &&
+    near1(r.afterMerge.part.h, 12, 1) && near1(r.afterMerge.part.minX, 12, 0.6) && near1(r.afterMerge.part.area, 30.5 * 12, 30) &&
+    r.afterMerge.part.bridgedMm > 2 && r.afterMerge.part.bridgedMm <= 4 && r.afterMerge.part.name === 'Tool 1' && r.afterMerge.part.thumb &&
+    r.afterMerge.part.picked && r.afterMerge.rows === 2 && r.afterMerge.undoShown && r.afterMerge.multi === 0 && /2 tools/.test(r.afterMerge.placeLabel),
+    r.afterMerge.part ? `${r.afterMerge.part.w.toFixed(1)} × ${r.afterMerge.part.h.toFixed(1)} at x ${r.afterMerge.part.minX.toFixed(1)}, area ${r.afterMerge.part.area.toFixed(0)}, bridged ${r.afterMerge.part.bridgedMm.toFixed(2)} mm, ${r.afterMerge.part.pts} points` : 'no merge');
+  check('undo restores the two candidates as they were',
+    r.undone && r.afterUndo.n === 3 && !r.afterUndo.undoShown &&
+    r.afterUndo.parts.every((p, i) => p.name === r.found[i].name && near1(p.w, r.found[i].w, 1e-9) && near1(p.minX, r.found[i].minX, 1e-9)),
+    r.afterUndo.parts.map(p => `${p.name} ${p.w.toFixed(1)}`).join(', '));
+  check('two shapes more than 12 mm apart are refused and nothing changes',
+    r.farMerge === null && r.afterFar.n === 3 && r.afterFar.multi === 2, `${r.afterFar.n} shapes, ${r.afterFar.multi} still chosen`);
+  check('a merged tool lands like any other, with its picture and provenance, and the project round-trips its outline',
+    r.merged2 && r.placed && r.placed.placed === 2 && r.items.length === 2 && r.items.every(it => it.thumb && it.source === 'scan') &&
+    r.reloaded.length === 2 && r.reloaded.every((it, i) => it.pts === r.items[i].pts && it.name === r.items[i].name),
+    `${r.items.map(it => `${it.name} (${it.pts} pts)`).join(', ')} -> ${r.reloaded.map(it => `${it.name} (${it.pts} pts)`).join(', ')}`);
+  check('masks that touch merge with no bridge, and a candidate without a mask cannot be merged',
+    r.touching && near1(r.touching.w, 20, 0.3) && near1(r.touching.h, 10, 0.3) && r.touching.bridgedMm === 0 && r.noMask === null,
+    r.touching ? `${r.touching.w.toFixed(2)} × ${r.touching.h.toFixed(2)}, bridged ${r.touching.bridgedMm}, ${r.touching.pts} points` : 'no merge');
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the
