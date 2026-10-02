@@ -1,19 +1,20 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2
+version: 1.2.1
 author: Sam Cao
 created: 2026-09-27
-last_updated: 2026-09-29
+last_updated: 2026-10-02
 description: PRD for printable calibration sheets that encode their paper, layout version, sheet and print job, check their print scale against the real paper edge, combine for large parts and drawers, and support a parallax correction; plus the outstanding backlog of drawer scale, scan review and nest speed.
 ai_update: Update last_updated and version. Rename file to match. Append changelog at bottom.
 ---
 
 # PRD: Calibration sheets, drawer scale, and the backlog
 
-Status: **DRAFT v1.2.** Part A phase 1 is ready for sign-off. Part A phases 2
-and 3 are sketched for a later sign-off, after phase 1's real-photo
-checkpoint. Part B items can be signed off one at a time. · 2026-09-29 ·
-target branch `claude/2.5d-photo-stl-s3-y0oodn`
+Status: **SIGNED OFF 2026-10-02: Part A phase 1 and Part B items B.1 to B.4,
+with open questions 1 to 15 settled on their recommendations. Build in
+progress.** Part A phases 2 and 3 wait for their own sign-off after phase 1's
+real-photo checkpoint. · 2026-09-29 · target branch
+`claude/2.5d-photo-stl-s3-y0oodn`
 
 Sam, 2026-09-27: is there a pattern or fiducial that could be printed on a
 sheet of paper that would help with accuracy, whether or not the print scale
@@ -1011,7 +1012,8 @@ twelve suggestions:
 - Sign-off is staged: phase 1 now, phases 2 and 3 after phase 1's checkpoint.
 - Drawer scan step 7 moves into phase 2.
 
-Still open:
+Still open as of v1.2, and **settled on 2026-10-02**: Sam approved v1.2, so
+every question below stands on its recommendation.
 
 1. **Is a window about 30 percent smaller worth it?** Recommendation: yes.
    Anything bigger than 178.9 × 226.4 mm on Letter goes between sheets in
@@ -1057,6 +1059,9 @@ Still open:
 
 ## Decision needed
 
+**Made 2026-10-02.** Sam approved Part A phase 1 with the payload as listed, and
+Part B items B.1 to B.4. What follows is kept for the record.
+
 - **Part A phase 1**: sign-off, including a last look at the payload fields.
 - **Part B**: B.1 (question 11), B.2, B.3 (question 14) and B.4 can each be
   signed off now. They are small and independent of Part A phase 1.
@@ -1084,3 +1089,6 @@ Still open:
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.1 (2026-10-02): Sam signed off Part A phase 1 and Part B items B.1 to B.4,
+  with every open question on its recommendation. Status flipped; filename kept
+  at _v1.2 because README, BURNDOWN and the drawer scan PRD cite it.

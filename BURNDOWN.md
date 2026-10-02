@@ -1,9 +1,9 @@
 ---
 file: BURNDOWN.md
-version: 1.22
+version: 1.23
 author: Sam Cao
 created: 2026-09-04
-last_updated: 2026-09-29
+last_updated: 2026-10-02
 description: Ledger for the 2026-09-04 token burndown on the 2.5D holders branch.
 ai_update: Update last_updated and version. Filename is fixed (the burndown skill expects BURNDOWN.md), so do not rename. Append a ledger line after every committed unit and keep the NEXT line current.
 ---
@@ -252,8 +252,16 @@ commit. No code changed.
     cheap-reject pass in `validAt`, which shipped in v1.27.5.
   - ⚠ Found reading `nestAngles`: the Rotation step control stays live when Free
     rotation is off, where it does nothing unless a tool is set free. Part B.4.
-- ▶ NEXT: Sam's sign-off on Part A phase 1 (a last look at the payload), and on
-  any of Part B's items, each of which stands alone.
+- ▶ NEXT: superseded by the 2026-10-02 section below.
+
+## 2026-10-02: building the calibration and backlog PRD
+Sam approved docs/calibration_and_backlog_prd_v1.2.md: Part A phase 1 with the
+payload as listed, Part B items B.1 to B.4, every open question on its
+recommendation. Phases 2 and 3 wait for their own sign-off after phase 1's
+real-photo checkpoint. Building in the PRD's suggested order.
+
+- ✅ Sign-off recorded; PRD status flipped.
+- ▶ NEXT: Part A step 1, edge-fitted corners and the wrong-paper check.
 - ⚠ The frontmatter said version 1.15 while the CHANGELOG stopped at v1.7. The
   entries for v1.8 through v1.15 were never written and cannot be reconstructed
   from the file, so they are recorded as a gap rather than invented. The bumps
@@ -403,11 +411,10 @@ as a full-width pocket hard against the wall that the build then refused.
 ## Needs Sam's call, still open
 Two items as of 2026-09-27.
 
-- **Sign-off on `docs/calibration_and_backlog_prd_v1.2.md`.** Part A phase 1
-  now, with a last look at the payload fields, which cannot change once a
-  sheet is printed. Part B items one at a time: B.1 the coin drawer check
-  (question 11), B.2 merge and thumbnails, B.3 nest speed (question 14), B.4
-  small fixes. Phases 2 and 3 after phase 1's real-photo checkpoint. Plan steps 1 and 4 each end in a checkpoint that needs real
+- ~~**Sign-off on `docs/calibration_and_backlog_prd_v1.2.md`.**~~ **Signed off
+  2026-10-02** for Part A phase 1 and Part B items B.1 to B.4. Still owed:
+  phases 2 and 3, after phase 1's real-photo checkpoint, which needs Sam's
+  photos. Plan steps 1 and 4 each end in a checkpoint that needs real
   photos from Sam, because a rendered paper edge is perfect and cannot show the
   frame beating it.
 
@@ -519,6 +526,7 @@ telemetry does not belong in a photo-to-STL repo. It is worth writing up as
 - v1.6 (2026-09-13): S6 shipped as v1.25.0. Records the spend-limit outage mid-review and the finding it nearly lost.
 - v1.7 (2026-09-14): Resume-editing PRD drafted. Retired the three sign-off asks that have since shipped.
 - v1.8 to v1.15: not recorded. The version was bumped through this span without changelog entries, and they could not be reconstructed on 2026-09-21. The ledger body above is the record for that period.
+- v1.23 (2026-10-02): Calibration and backlog PRD signed off for Part A phase 1 and Part B items B.1 to B.4; build started.
 - v1.22 (2026-09-29): Calibration PRD widened to docs/calibration_and_backlog_prd_v1.2.md with the twelve approved suggestions and the backlog; README Next up corrected.
 - v1.21 (2026-09-28): Calibration sheet PRD revised to v1.1 with encoding, multi-sheet and parallax phases.
 - v1.20 (2026-09-27): Calibration sheet PRD drafted; the unchecked paper size and the missing parallax correction recorded.
