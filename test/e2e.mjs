@@ -10,6 +10,13 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  listRealPhotos, loadBaselines, saveBaselines, measureRealPhoto, compareToBaseline,
+  baselineEntry, validateSidecar, formatResult,
+} from './realPhotos.mjs';
+import { exifSegment, spliceExif } from './mark-photo.js';
+import { readFocalLength } from '../js/exif.js';
+import { APP_VERSION } from '../js/version.js';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright-core');
@@ -14575,8 +14582,9 @@ await page.evaluate(() => document.getElementById('themeToggle').click()); // ba
 
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
-// Last on purpose: the end-to-end half loads its own photo through the real
-// file input, which replaces whatever the earlier blocks left on screen.
+// Near the end on purpose: the end-to-end half loads its own photo through the
+// real file input, which replaces whatever the earlier blocks left on screen.
+// Only the real-photo harness, which loads the same way, follows it.
 
 console.log('\nPaper proportions check');
 
@@ -14760,6 +14768,158 @@ check('a JPEG through the file input yields the phone\'s focal length for the ch
 check('an A4 photo with Letter selected is flagged, named as A4, and switched in one click',
   paperUi.before.shown && /A4/.test(paperUi.before.text) && paperUi.after.size === 'A4' && !paperUi.after.shown,
   `"${paperUi.before.text}" -> ${paperUi.after.size}, warning shown ${paperUi.after.shown}`);
+
+// ---------- Real photos (Part A step 2 of calibration_and_backlog_prd_v1.2) ----------
+//
+// test/realPhotos.mjs loads each photo in test/fixtures/real/ through the
+// file input, as the paper check above does, and measures a hand-marked span
+// on a steel rule. Before the folder, a self-test: a camera-rendered A4 with
+// a rule drawn on it goes through the marking page's own encoder and the same
+// measuring path, so the harness is exercised on every run whether or not
+// any real photo has been added yet.
+
+console.log('\nReal photos');
+
+const selfTest = await page.evaluate(async () => {
+  const { computeHomography, applyHomography } = await import('./js/homography.js');
+  const { encodeFixture } = await import('./test/mark-photo.js');
+  // A centred pinhole camera, 26 mm equivalent, 420 mm above an A4 sheet
+  // tilted 12 degrees about an in-plane axis and spun 6 degrees.
+  const W = 2400, H = 1800, f35 = 26, f = f35 / Math.hypot(36, 24) * Math.hypot(W, H);
+  const tilt = 12 * Math.PI / 180, axis = 35 * Math.PI / 180, spin = 6 * Math.PI / 180;
+  const rA = [Math.cos(axis), Math.sin(axis), 0];
+  const rP = [-Math.sin(axis) * Math.cos(tilt), Math.cos(axis) * Math.cos(tilt), Math.sin(tilt)];
+  const project = (xmm, ymm) => {
+    const u0 = xmm - 105, v0 = ymm - 148.5;
+    const u = u0 * Math.cos(spin) - v0 * Math.sin(spin), v = u0 * Math.sin(spin) + v0 * Math.cos(spin);
+    const cu = u * Math.cos(axis) + v * Math.sin(axis), cv = -u * Math.sin(axis) + v * Math.cos(axis);
+    const X = cu * rA[0] + cv * rP[0], Y = cu * rA[1] + cv * rP[1], Z = 420 + cu * rA[2] + cv * rP[2];
+    return { x: W / 2 + f * X / Z, y: H / 2 + f * Y / Z };
+  };
+  const paperMm = [[0, 0], [210, 0], [210, 297], [0, 297]];
+  const quad = paperMm.map(([x, y]) => project(x, y));
+  const Hm = computeHomography(paperMm.map(([x, y]) => ({ x, y })), quad);
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#3a352f'; ctx.fillRect(0, 0, W, H);
+  const path = pts => {
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => { const q = applyHomography(Hm, x, y); if (i) ctx.lineTo(q.x, q.y); else ctx.moveTo(q.x, q.y); });
+    ctx.closePath();
+  };
+  ctx.filter = 'blur(0.7px)';
+  path(paperMm); ctx.fillStyle = '#f3f1ea'; ctx.fill();
+  // A steel rule 170 x 25 mm across the sheet, graduated every millimetre
+  // along its top edge, and a dark part beside it so the scene has an object.
+  path([[20, 150], [190, 150], [190, 175], [20, 175]]); ctx.fillStyle = '#9a9ea3'; ctx.fill();
+  ctx.fillStyle = '#1e2024';
+  for (let k = 0; k <= 160; k++) {
+    const x = 25 + k, len = k % 10 === 0 ? 7 : k % 5 === 0 ? 5 : 3;
+    path([[x - 0.12, 150], [x + 0.12, 150], [x + 0.12, 150 + len], [x - 0.12, 150 + len]]); ctx.fill();
+  }
+  path([[60, 60], [150, 60], [150, 120], [60, 120]]); ctx.fillStyle = '#23364a'; ctx.fill();
+  ctx.filter = 'none';
+  // The two marks: the 5 and 155 mm graduations, 2 mm down their ticks, so
+  // 150.000 mm apart. Stored in rectify's convention, half a pixel under the
+  // drawn coordinate, as the marking page stores a click.
+  const mark = (x, y) => { const q = applyHomography(Hm, x, y); return { x: q.x - 0.5, y: q.y - 0.5 }; };
+  const bytes = await encodeFixture(c, { f35, focalMm: 5.7, trusted: true });
+  return {
+    bytes: Array.from(bytes), a: mark(30, 152), b: mark(180, 152),
+    corners: quad.map(q => ({ x: q.x - 0.5, y: q.y - 0.5 })),
+  };
+});
+
+const selfDir = path.join(shotDir, 'real-selftest');
+fs.mkdirSync(selfDir, { recursive: true });
+fs.writeFileSync(path.join(selfDir, 'synthetic-a4-rule.jpg'), Buffer.from(selfTest.bytes));
+fs.writeFileSync(path.join(selfDir, 'synthetic-a4-rule.json'), JSON.stringify({
+  paper: 'A4', rule: { a: selfTest.a, b: selfTest.b, mm: 150 }, corners: null, note: 'camera-rendered self-test',
+}));
+// The same photo with corners "dragged by hand" 3 px off, which is what the
+// sidecar's corners field is for. The scene is about 4.3 px/mm, a phone held
+// far enough back to get a large part in.
+fs.copyFileSync(path.join(selfDir, 'synthetic-a4-rule.jpg'), path.join(selfDir, 'synthetic-a4-rule-hand.jpg'));
+fs.writeFileSync(path.join(selfDir, 'synthetic-a4-rule-hand.json'), JSON.stringify({
+  paper: 'A4', rule: { a: selfTest.a, b: selfTest.b, mm: 150 },
+  corners: selfTest.corners.map((q, i) => ({ x: q.x + [3, -2, 3, -3][i], y: q.y + [-2, 3, 2, -3][i] })),
+}));
+
+const selfAuto = await measureRealPhoto(page, selfDir, 'synthetic-a4-rule.jpg');
+console.log('  ' + formatResult(selfAuto));
+check('self-test: a 150 mm span on a camera-rendered A4 is measured within 0.05 mm through the real load path',
+  selfAuto.ok && selfAuto.errorMm < 0.05, selfAuto.ok ? `${selfAuto.errorMm.toFixed(3)} mm` : selfAuto.reason);
+check('self-test: the corners came from the detector, edge-fitted',
+  selfAuto.ok && selfAuto.cornersFrom === 'auto, edge-fitted', selfAuto.cornersFrom || selfAuto.reason);
+check('self-test: the focal length written by the marking page\'s encoder is read back by the app',
+  selfAuto.ok && selfAuto.focal && selfAuto.focal.f35 === 26 && near(selfAuto.focal.focalMm, 5.7, 1e-3),
+  JSON.stringify(selfAuto.focal));
+check('self-test: the wrong-paper check stays quiet on the right size',
+  selfAuto.ok && selfAuto.paperCheck == null, selfAuto.paperCheck || 'quiet');
+const selfHand = await measureRealPhoto(page, selfDir, 'synthetic-a4-rule-hand.jpg');
+console.log('  ' + formatResult(selfHand));
+check('self-test: sidecar corners are used as dragged, and 3 px off at about 4 px/mm costs under 1 mm',
+  selfHand.ok && selfHand.cornersFrom === 'sidecar' && selfHand.errorMm < 1 && selfHand.errorMm > selfAuto.errorMm,
+  selfHand.ok ? `${selfHand.errorMm.toFixed(3)} mm` : selfHand.reason);
+
+{
+  const good = JSON.parse(fs.readFileSync(path.join(selfDir, 'synthetic-a4-rule.json'), 'utf8'));
+  const bad = validateSidecar({ paper: 'A9', rule: { a: { x: 1, y: 1 }, b: { x: 1, y: 1 } }, corners: [{ x: 0, y: 0 }] });
+  check('a sidecar is validated: a good one passes, and each fault in a bad one is named',
+    validateSidecar(good).length === 0 && bad.length === 4 &&
+    /paper/.test(bad[0]) && /same point/.test(bad[1]) && /rule\.mm/.test(bad[2]) && /corners/.test(bad[3]),
+    bad.join(' | '));
+  const r = { ok: true, errorMm: 0.100 };
+  const st = b => compareToBaseline(r, b).status;
+  check('a baseline comparison records, accepts within tolerance, and flags worse and better',
+    st(null) === 'recorded' && st({ errorMm: 0.09 }) === 'ok' && st({ errorMm: 0.11 }) === 'ok' &&
+    st({ errorMm: 0.07 }) === 'worse' && st({ errorMm: 0.13 }) === 'better' &&
+    compareToBaseline({ ok: false, reason: 'x' }, { errorMm: 1 }).status === 'failed',
+    [null, 0.09, 0.11, 0.07, 0.13].map(b => st(b == null ? null : { errorMm: b })).join(', '));
+  // The encoder's EXIF, read back by the app's reader in Node: the two focal
+  // tags and the pixel size, nothing else.
+  const seg = exifSegment({ f35: 26, focalMm: 5.7, w: 2400, h: 1800 });
+  const jpg = spliceExif(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), seg);
+  const rb = readFocalLength(jpg.buffer);
+  const minimal = readFocalLength(spliceExif(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]), exifSegment({ f35: 28 })).buffer);
+  check('the EXIF the marking page writes reads back as written, and a focal-only block reads too',
+    rb && rb.f35 === 26 && near(rb.focalMm, 5.7, 1e-9) && rb.w === 2400 && rb.h === 1800 &&
+    minimal && minimal.f35 === 28 && minimal.w == null,
+    JSON.stringify(rb));
+}
+
+// The real folder. Each photo is a check; a photo with no baseline yet is
+// recorded and passes, so adding one is: drop in the pair, run, commit.
+const realDir = path.join(root, 'test', 'fixtures', 'real');
+const realPhotos = listRealPhotos(realDir);
+{
+  const files = fs.readdirSync(realDir);
+  const jpgs = files.filter(f => /\.jpe?g$/i.test(f));
+  const jsons = files.filter(f => /\.json$/i.test(f) && f !== 'baselines.json');
+  const orphanJpg = jpgs.filter(f => !jsons.includes(f.replace(/\.jpe?g$/i, '.json')));
+  const orphanJson = jsons.filter(f => !jpgs.some(j => j.replace(/\.jpe?g$/i, '.json') === f));
+  check('every real photo has a sidecar and every sidecar a photo',
+    orphanJpg.length === 0 && orphanJson.length === 0,
+    orphanJpg.concat(orphanJson).join(', ') || `${jpgs.length} photo(s)`);
+}
+if (realPhotos.length === 0) {
+  console.log('  No real photos yet: add them with test/mark-photo.html (see test/fixtures/real/README.md).');
+} else {
+  const baselines = loadBaselines(realDir);
+  let recorded = 0;
+  for (const name of realPhotos) {
+    const r = await measureRealPhoto(page, realDir, name);
+    console.log('  ' + formatResult(r));
+    const cmp = compareToBaseline(r, baselines[name]);
+    if (cmp.status === 'recorded') { baselines[name] = baselineEntry(r, APP_VERSION); recorded++; }
+    check(`real photo ${name} measures no worse than when it was added`,
+      r.ok && cmp.status !== 'worse', cmp.detail);
+  }
+  if (recorded) {
+    saveBaselines(realDir, baselines);
+    console.log(`  ${recorded} baseline(s) recorded in test/fixtures/real/baselines.json; commit it with the photos.`);
+  }
+}
 
 console.log('\nConsole errors:', consoleErrors.length ? consoleErrors : 'none');
 if (consoleErrors.length) failures++;

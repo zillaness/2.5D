@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mark a real photo</title>
+<!-- Turns a phone photo into a fixture for test/fixtures/real/: downscaled,
+     the focal length kept and the rest of the EXIF dropped, two graduations
+     on a steel rule marked by hand with a loupe, the paper size named, and
+     the corners marked too when the app will not find them on its own.
+     Open from a local server (npm run serve, then /test/mark-photo.html):
+     the script is an ES module and imports from ../js/. -->
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: #1b1d21; color: #e6e4de; }
+  header { padding: 14px 20px; border-bottom: 1px solid #33363c; }
+  header h1 { margin: 0 0 4px; font-size: 18px; }
+  header p { margin: 0; color: #aaa69e; max-width: 80ch; }
+  main { display: grid; grid-template-columns: 300px 1fr; gap: 20px; padding: 16px 20px; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+  .field { margin: 0 0 10px; }
+  .field label { display: block; color: #aaa69e; font-size: 12px; margin-bottom: 2px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; box-sizing: border-box; background: #24272c; color: inherit; border: 1px solid #44474e;
+    border-radius: 4px; padding: 5px 7px; font: inherit;
+  }
+  textarea { height: 56px; resize: vertical; }
+  button { background: #2e3238; color: inherit; border: 1px solid #4a4e56; border-radius: 4px; padding: 6px 10px; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.on { background: #3a6ea5; border-color: #5b8fc6; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .readout { color: #aaa69e; font-size: 12px; white-space: pre-line; margin: 6px 0 12px; }
+  .warn { color: #e9b45a; }
+  #loupe { display: block; width: 192px; height: 192px; background: #000; border: 1px solid #44474e; image-rendering: pixelated; margin-bottom: 10px; }
+  #stage { position: relative; }
+  #view { display: block; width: 100%; height: auto; background: #111; cursor: crosshair; border: 1px solid #33363c; }
+  #hint { color: #aaa69e; font-size: 12px; margin: 6px 0 0; }
+  ol { padding-left: 20px; margin: 6px 0 0; color: #aaa69e; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mark a real photo for the test set</h1>
+  <p>Choose the photo straight from the phone. It is downscaled to about 2400 px, the location and everything else in its EXIF dropped and the focal length kept. Click two graduations on the rule, as far apart as it allows, type their distance, name the paper, and download both files into <code>test/fixtures/real/</code>. The first <code>npm test</code> records the baseline.</p>
+</header>
+<main>
+  <section>
+    <div class="field"><label for="file">Photo</label><input type="file" id="file" accept="image/jpeg,image/*"></div>
+    <div class="readout" id="fileInfo">No photo yet.</div>
+    <div class="field"><label for="name">Fixture name</label><input type="text" id="name" placeholder="plain-a4-oak-desk"></div>
+    <div class="field"><label for="paper">Paper size</label><select id="paper"></select></div>
+    <div class="row" id="customRow" hidden>
+      <input type="number" id="customW" placeholder="width mm" step="0.1" style="width:48%">
+      <input type="number" id="customH" placeholder="height mm" step="0.1" style="width:48%">
+    </div>
+    <div class="field"><label for="mm">Distance between the two marks, mm</label><input type="number" id="mm" step="0.01" min="1" placeholder="200"></div>
+    <div class="row">
+      <button id="modeA">Mark A</button>
+      <button id="modeB">Mark B</button>
+      <button id="modeC" title="Only when the app cannot find the sheet by itself, as on a pale desk">Mark corners</button>
+      <button id="clearC">Clear corners</button>
+    </div>
+    <canvas id="loupe" width="192" height="192"></canvas>
+    <div class="readout" id="marks">A: not yet. B: not yet.</div>
+    <div class="field"><label for="note">Note (desk, light, paper, printer)</label><textarea id="note"></textarea></div>
+    <div class="row">
+      <button id="dlPhoto" disabled>Download photo</button>
+      <button id="dlSidecar" disabled>Download sidecar</button>
+    </div>
+    <div class="readout" id="status"></div>
+  </section>
+  <section>
+    <div id="stage"><canvas id="view" width="16" height="9"></canvas></div>
+    <p id="hint">Click to place the active mark. Arrow keys nudge the last mark by a quarter pixel, Shift for two. The loupe shows eight times.</p>
+    <ol>
+      <li>A and B go on the rule's graduations, the long way along the rule. Two hundred millimetres apart beats fifty: a mark a pixel off is the same error either way, but a smaller share of the longer distance.</li>
+      <li>The paper size is the sheet's real size, whatever the app guesses.</li>
+      <li>Corners are only for a sheet the app cannot find on its own. Leave them unmarked otherwise, so the test measures the detector.</li>
+    </ol>
+  </section>
+</main>
+<script type="module">
+import { decodeImage, readPhotoFocal, downscale, encodeFixture, makeSidecar, DEFAULT_LONG_SIDE } from './mark-photo.js';
+import { PAPER_SIZES } from '../js/paperSizes.js';
+
+const $ = id => document.getElementById(id);
+const paperSel = $('paper');
+for (const [key, p] of Object.entries(PAPER_SIZES)) {
+  const o = document.createElement('option');
+  o.value = key; o.textContent = p.name;
+  paperSel.appendChild(o);
+}
+paperSel.value = 'A4';
+paperSel.addEventListener('change', () => { $('customRow').hidden = paperSel.value !== 'custom'; refresh(); });
+
+let photo = null;      // the downscaled canvas
+let focal = null;      // from the original's EXIF
+let source = null;     // note on the original
+let jpegBytes = null;  // the encoded fixture
+const marks = { a: null, b: null, corners: [] };
+let mode = 'a';        // 'a', 'b', 'c' (next corner index in marks.corners.length)
+let last = null;       // the mark the arrow keys move: 'a', 'b', or a corner index
+const view = $('view'), vctx = view.getContext('2d');
+const loupe = $('loupe'), lctx = loupe.getContext('2d');
+let hover = null;
+
+$('file').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $('status').textContent = 'Decoding…';
+  try {
+    const img = await decodeImage(f);
+    focal = await readPhotoFocal(f, img);
+    photo = downscale(img, DEFAULT_LONG_SIDE);
+    source = { width: img.naturalWidth, height: img.naturalHeight, file: f.name,
+      f35: focal ? focal.f35 : null, focalMm: focal ? focal.focalMm : null };
+    jpegBytes = await encodeFixture(photo, focal);
+    marks.a = marks.b = null; marks.corners = []; last = null; mode = 'a';
+    if (!$('name').value) $('name').value = f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const fl = !focal ? 'no focal length in the EXIF; the app will treat it as unknown'
+      : focal.trusted ? `focal length kept: ${focal.f35 ? focal.f35 + ' mm (35 mm equivalent)' : ''}${focal.focalMm ? `, ${focal.focalMm} mm actual` : ''}`
+      : `focal length found but the photo is not the size the camera wrote (${focal.w} × ${focal.h}); it is dropped, since the app would distrust it`;
+    $('fileInfo').textContent = `${f.name}: ${img.naturalWidth} × ${img.naturalHeight}, downscaled to ${photo.width} × ${photo.height}, ${(jpegBytes.length / 1024).toFixed(0)} KB.\n${fl}`;
+    $('status').textContent = '';
+    sizeView();
+  } catch (err) {
+    $('status').textContent = String(err);
+  }
+  refresh();
+});
+
+function sizeView() {
+  if (!photo) return;
+  const w = Math.max(200, $('stage').clientWidth);
+  const dpr = window.devicePixelRatio || 1;
+  view.width = Math.round(w * dpr);
+  view.height = Math.round(w * dpr * photo.height / photo.width);
+  draw();
+}
+window.addEventListener('resize', sizeView);
+
+const scale = () => view.width / photo.width;    // canvas px per photo px
+
+function draw() {
+  if (!photo) return;
+  const s = scale();
+  vctx.imageSmoothingEnabled = true;
+  vctx.drawImage(photo, 0, 0, view.width, view.height);
+  const dot = (p, label, color) => {
+    const x = (p.x + 0.5) * s, y = (p.y + 0.5) * s, r = 14 * (view.width / view.clientWidth);
+    vctx.strokeStyle = color; vctx.lineWidth = Math.max(1, r / 10);
+    vctx.beginPath(); vctx.moveTo(x - r, y); vctx.lineTo(x + r, y); vctx.moveTo(x, y - r); vctx.lineTo(x, y + r); vctx.stroke();
+    vctx.beginPath(); vctx.arc(x, y, r * 0.6, 0, Math.PI * 2); vctx.stroke();
+    vctx.fillStyle = color; vctx.font = `${r * 1.2}px system-ui`; vctx.fillText(label, x + r * 0.8, y - r * 0.8);
+  };
+  if (marks.corners.length) {
+    vctx.strokeStyle = '#e9b45a'; vctx.lineWidth = 2;
+    vctx.beginPath();
+    marks.corners.forEach((c, i) => { const x = (c.x + 0.5) * s, y = (c.y + 0.5) * s; if (i) vctx.lineTo(x, y); else vctx.moveTo(x, y); });
+    if (marks.corners.length === 4) vctx.closePath();
+    vctx.stroke();
+    marks.corners.forEach((c, i) => dot(c, ['TL', 'TR', 'BR', 'BL'][i], '#e9b45a'));
+  }
+  if (marks.a) dot(marks.a, 'A', '#6fd3ff');
+  if (marks.b) dot(marks.b, 'B', '#ff8ad8');
+  if (marks.a && marks.b) {
+    vctx.strokeStyle = 'rgba(255,255,255,.5)'; vctx.lineWidth = 1;
+    vctx.beginPath(); vctx.moveTo((marks.a.x + 0.5) * s, (marks.a.y + 0.5) * s); vctx.lineTo((marks.b.x + 0.5) * s, (marks.b.y + 0.5) * s); vctx.stroke();
+  }
+}
+
+function drawLoupe(p) {
+  if (!photo || !p) return;
+  const Z = 8, n = loupe.width / Z;
+  lctx.imageSmoothingEnabled = false;
+  lctx.fillStyle = '#000'; lctx.fillRect(0, 0, loupe.width, loupe.height);
+  // p is in rectify's convention; pixel k spans [k, k + 1) on the canvas.
+  const cx = p.x + 0.5, cy = p.y + 0.5;
+  lctx.drawImage(photo, cx - n / 2, cy - n / 2, n, n, 0, 0, loupe.width, loupe.height);
+  lctx.strokeStyle = 'rgba(111,211,255,.9)'; lctx.lineWidth = 1;
+  const m = loupe.width / 2;
+  lctx.beginPath(); lctx.moveTo(m, 0); lctx.lineTo(m, m - 6); lctx.moveTo(m, m + 6); lctx.lineTo(m, loupe.height);
+  lctx.moveTo(0, m); lctx.lineTo(m - 6, m); lctx.moveTo(m + 6, m); lctx.lineTo(loupe.width, m); lctx.stroke();
+}
+
+// Canvas coordinates to rectify's convention: a click at the centre of pixel
+// k lands at k + 0.5 here, and the sidecar stores k.
+function toPhoto(e) {
+  const r = view.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * photo.width - 0.5;
+  const y = (e.clientY - r.top) / r.height * photo.height - 0.5;
+  return { x: Math.round(x * 4) / 4, y: Math.round(y * 4) / 4 };
+}
+
+view.addEventListener('mousemove', e => { if (photo) { hover = toPhoto(e); drawLoupe(hover); } });
+view.addEventListener('click', e => {
+  if (!photo) return;
+  const p = toPhoto(e);
+  if (mode === 'a') { marks.a = p; last = 'a'; mode = marks.b ? 'a' : 'b'; }
+  else if (mode === 'b') { marks.b = p; last = 'b'; }
+  else if (mode === 'c') {
+    if (marks.corners.length >= 4) marks.corners = [];
+    marks.corners.push(p); last = marks.corners.length - 1;
+    if (marks.corners.length === 4) mode = 'a';
+  }
+  drawLoupe(p);
+  refresh();
+});
+
+window.addEventListener('keydown', e => {
+  if (!photo || last == null || !/^Arrow/.test(e.key) || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  e.preventDefault();
+  const d = e.shiftKey ? 2 : 0.25;
+  const p = last === 'a' ? marks.a : last === 'b' ? marks.b : marks.corners[last];
+  if (!p) return;
+  if (e.key === 'ArrowLeft') p.x -= d; if (e.key === 'ArrowRight') p.x += d;
+  if (e.key === 'ArrowUp') p.y -= d; if (e.key === 'ArrowDown') p.y += d;
+  drawLoupe(p);
+  refresh();
+});
+
+$('modeA').addEventListener('click', () => { mode = 'a'; refresh(); });
+$('modeB').addEventListener('click', () => { mode = 'b'; refresh(); });
+$('modeC').addEventListener('click', () => { mode = 'c'; marks.corners = []; refresh(); });
+$('clearC').addEventListener('click', () => { marks.corners = []; if (typeof last === 'number') last = null; if (mode === 'c') mode = 'a'; refresh(); });
+for (const id of ['mm', 'name', 'customW', 'customH']) $(id).addEventListener('input', refresh);
+
+function ready() {
+  const mm = Number($('mm').value);
+  const custom = paperSel.value === 'custom';
+  return !!(photo && jpegBytes && marks.a && marks.b && mm > 0 && $('name').value.trim() &&
+    (marks.corners.length === 0 || marks.corners.length === 4) &&
+    (!custom || (Number($('customW').value) > 0 && Number($('customH').value) > 0)));
+}
+
+function refresh() {
+  $('modeA').classList.toggle('on', mode === 'a');
+  $('modeB').classList.toggle('on', mode === 'b');
+  $('modeC').classList.toggle('on', mode === 'c');
+  const f = p => p ? `${p.x.toFixed(2)}, ${p.y.toFixed(2)}` : 'not yet';
+  let s = `A: ${f(marks.a)}. B: ${f(marks.b)}.`;
+  if (marks.a && marks.b) {
+    const px = Math.hypot(marks.a.x - marks.b.x, marks.a.y - marks.b.y);
+    const mm = Number($('mm').value);
+    s += ` ${px.toFixed(1)} px apart${mm > 0 ? `, about ${(px / mm).toFixed(2)} px/mm` : ''}.`;
+    if (mm > 0 && px / mm < 4) s += ' Under 4 px/mm: the app would ask for a closer photo.';
+  }
+  s += marks.corners.length ? ` Corners: ${marks.corners.length} of 4.` : ' Corners: not marked (the app finds them).';
+  $('marks').textContent = s;
+  const ok = ready();
+  $('dlPhoto').disabled = !ok; $('dlSidecar').disabled = !ok;
+  draw();
+}
+
+function download(name, blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const slug = () => $('name').value.trim().replace(/\.(jpe?g|json)$/i, '');
+$('dlPhoto').addEventListener('click', () => {
+  download(`${slug()}.jpg`, new Blob([jpegBytes], { type: 'image/jpeg' }));
+  $('status').textContent = `${slug()}.jpg saved; now the sidecar.`;
+});
+$('dlSidecar').addEventListener('click', () => {
+  const sc = makeSidecar({
+    paper: paperSel.value, customW: $('customW').value, customH: $('customH').value,
+    rule: { a: marks.a, b: marks.b, mm: $('mm').value },
+    corners: marks.corners.length === 4 ? marks.corners : null,
+    note: $('note').value.trim(), source,
+  });
+  download(`${slug()}.json`, new Blob([JSON.stringify(sc, null, 2) + '\n'], { type: 'application/json' }));
+  $('status').textContent = `${slug()}.json saved. Put both in test/fixtures/real/ and run npm test.`;
+});
+refresh();
+</script>
+</body>
+</html>

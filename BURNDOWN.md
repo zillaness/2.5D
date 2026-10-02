@@ -294,8 +294,33 @@ real-photo checkpoint. Building in the PRD's suggested order.
     placed by hand, not by a camera. Step 1 now shows "looks like Legal" on it.
     Harmless, nothing switches, and the trace tests use exact corners; the UI
     test renders a camera-made photo instead.
-- ▶ NEXT: Part A step 2, the real-photo harness, then B.1, the coin drawer
-  check. Work moves to a fresh session from here; see the handoff below.
+- ✅ Part A step 2, the real-photo harness: `test/realPhotos.mjs` (the
+  measuring module, shared), `test/real-photos.mjs` (`npm run real`, with
+  `--record`), `test/fixtures/real/` (README, sidecar format, baselines) and
+  `test/mark-photo.html` with `test/mark-photo.js` (downscale to 2400 px, a
+  fresh EXIF carrying only the focal length and the new pixel size, a loupe,
+  optional corners for a pale desk). Each photo loads through the app's own
+  file input, so detection, edge fit, EXIF and the wrong-paper check all run
+  as they do for a person; the two rule marks go through rectify's own
+  homography construction. A camera-rendered A4 with a graduated rule drawn
+  on it is the self-test, through the marking page's encoder and the same
+  path: 150 mm measures 150.004 mm. 717 checks, all passing, no
+  console errors; dist rebuilt and smoke-tested — v1.28.2.
+  - ⚠ **The auto lens estimate is too coarse to apply blind.** On the
+    distortion-free self-test, `estimateDistortion` picks k1 = -0.011, which
+    turns the 0.004 mm error into 0.360 mm over 150 mm. The harness reports
+    the lens-fit figure without asserting it, so this is visible on every run.
+    Open question 3 (apply the lens fit automatically in sheet mode) stands,
+    but step 7 must show its printed-line fit beats this floor by an order
+    of magnitude before it is switched on, and plain-paper mode should keep
+    the slider as the only way in.
+  - ⚠ A photo at 2400 px of an A4 from 420 mm is about 4.3 px/mm, not the
+    8 px/mm the rectifier caps at. The fixture budget (open question 15) was
+    chosen for size; it also means the real set measures the app at the
+    resolution a phone held back for a large part gives, which is the
+    harder case and the right one to pin.
+- ▶ NEXT: B.1, the coin drawer check with its one-click rescale; then B.2
+  thumbnails and merge, B.4, the rest of Part A phase 1, B.3.
 
 ### Handoff to a fresh session, 2026-10-02
 

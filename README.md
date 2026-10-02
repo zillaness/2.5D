@@ -973,6 +973,27 @@ npm run build        # regenerate dist/2.5d-local.html
 The run ends with its own check total (`244 checks run. All 244 checks
 passed ✔`) so the number quoted in a commit message can be copied from the
 output rather than counted by hand.
+
+### Real photos
+
+Synthetic photos prove the geometry; real ones prove the camera, the paper
+and the light. `test/fixtures/real/` holds photos of a sheet with a steel
+rule lying on it, each with a sidecar naming two graduations marked once by
+hand and their true distance. The suite loads every photo through the app's
+own file input, so detection, edge fitting, the EXIF focal length and the
+wrong-paper check all run as they do for a person, then measures that
+distance. The error recorded when a photo was added is its baseline, and no
+later change may make it worse. A camera-rendered self-test runs the same
+path on every run, so the harness is exercised before any photo exists.
+
+To add a photo, open `test/mark-photo.html` from a local server
+(`npm run serve`, then `/test/mark-photo.html`): it downscales the phone's
+JPEG to about 2400 px, keeps the focal length and drops the rest of the EXIF,
+and gives you a loupe to mark the two points. Put both files in the folder,
+run `npm test`, and commit the baseline it records. `npm run real` prints a
+line per photo, with what the lens fit would make of it and whether the
+wrong-paper check fired; `--record` rewrites the baselines after a change
+that made them better.
 ## Roadmap
 
 ### Shipped

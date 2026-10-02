@@ -9,7 +9,8 @@
     "build": "node build.mjs",
     "test": "node test/e2e.mjs",
     "shots": "node test/shots.mjs",
-    "smoke": "node build.mjs && node test/dist-smoke.mjs"
+    "smoke": "node build.mjs && node test/dist-smoke.mjs",
+    "real": "node test/real-photos.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
