@@ -15472,6 +15472,113 @@ const recog = await page.evaluate(async () => {
     !r.plain.ok && /no frame/.test(r.plain.reason), r.plain.reason);
 }
 
+// ---------- Calibration sheet: the fit (Part A step 7 of calibration_and_backlog_prd_v1.2) ----------
+//
+// Shape from the frame, scale from the paper: a lens term and a least-squares
+// homography over every clock cell with the frame lines as constraints
+// (js/calibFit.js). Criteria 6, 7 and 8. Accuracy is read through the
+// renderer's truth: design points in the window go to the photo through the
+// truth and back through the fit, and the difference is in millimetres.
+
+console.log('\nCalibration sheet: the fit');
+
+const fitTest = await page.evaluate(async () => {
+  const { renderSheetPhoto, stockDims } = await import('./test/sheetPhoto.js');
+  const { recogniseSheet } = await import('./js/calibDetect.js');
+  const { fitSheet } = await import('./js/calibFit.js');
+  const { applyHomography } = await import('./js/homography.js');
+  const paper = stockDims('letter');
+  const rough = (truth, offMm = 0) => {
+    const dirs = [[1, 1], [-1, 1], [-1, -1], [1, -1]];
+    return truth.corners.map((c, i) => {
+      if (!offMm) return { x: c.x, y: c.y };
+      const mm = [[0, 0], [paper.w, 0], [paper.w, paper.h], [0, paper.h]][i];
+      const q = applyHomography(truth.Hp, mm[0] + dirs[i][0] * offMm, mm[1] + dirs[i][1] * offMm);
+      return { x: q.x - 0.5, y: q.y - 0.5 };
+    });
+  };
+  const grid = [];
+  for (let x = 30; x <= 180; x += 30) for (let y = 30; y <= 240; y += 30) grid.push({ x, y });
+  // Through the truth to the photo (rectify's convention) and back through
+  // the fit: the error in design millimetres.
+  const gridError = (fit, truth, pts = grid) => {
+    let sum = 0, max = 0, n = 0;
+    for (const p of pts) {
+      const q = truth.designToPhoto(p);
+      if (q.x < 5 || q.y < 5 || q.x > truth.quad && 0) continue;
+      const d = fit.photoToDesign({ x: q.x - 0.5, y: q.y - 0.5 });
+      const e = Math.hypot(d.x - p.x, d.y - p.y);
+      sum += e * e; max = Math.max(max, e); n++;
+    }
+    return { rms: Math.sqrt(sum / n), max, n };
+  };
+  // Two fits against each other over the same photo points.
+  const fitDiff = (fa, fb, truth, pts = grid) => {
+    let max = 0;
+    for (const p of pts) {
+      const q = truth.designToPhoto(p);
+      const a = fa.photoToDesign({ x: q.x - 0.5, y: q.y - 0.5 }), b = fb.photoToDesign({ x: q.x - 0.5, y: q.y - 0.5 });
+      max = Math.max(max, Math.hypot(a.x - b.x, a.y - b.y));
+    }
+    return max;
+  };
+  const base = { paper: 'letter', sheet: 2, count: 4, job: 0x7f, W: 2400, H: 1800, pose: { height: 330, tilt: 8, axis: 30, spin: 4 } };
+  const run = async (opts, roughOff = 0, fitOpts = {}, detectOpts = {}) => {
+    const r = await renderSheetPhoto({ ...base, ...opts });
+    const rec = recogniseSheet(r.canvas, rough(r.truth, roughOff), paper, detectOpts);
+    const t0 = performance.now();
+    const fit = fitSheet(rec, r.canvas.width, r.canvas.height, fitOpts);
+    return { truth: r.truth, rec, fit, ms: performance.now() - t0 };
+  };
+  const out = {};
+  const full = await run({});
+  out.full = { ok: full.fit.ok, k1: full.fit.k1, fit: full.fit.fit, err: gridError(full.fit, full.truth), ms: full.ms };
+  const covered = await run({ objects: [{ x: 4, y: -5, w: 20, h: 290, color: '#2a2622' }] });
+  out.covered = { ok: covered.fit.ok, lines: covered.fit.fit.lines, err: gridError(covered.fit, covered.truth), diff: fitDiff(covered.fit, full.fit, full.truth), fit: covered.fit.fit };
+  const clipped = await run({ bottomMargin: 20 });
+  out.clipped = { ok: clipped.fit.ok, err: gridError(clipped.fit, clipped.truth), diff: fitDiff(clipped.fit, full.fit, full.truth), fit: clipped.fit.fit };
+  const off5 = await run({}, 5);
+  out.off5 = { ok: off5.fit.ok, err: gridError(off5.fit, off5.truth), diff: fitDiff(off5.fit, full.fit, full.truth), fit: off5.fit.fit };
+  const lens = await run({ k1: 0.1 });
+  const withheld = await run({ k1: 0.1 }, 0, { k1: 0 });
+  out.lens = { k1: lens.fit.k1, err: gridError(lens.fit, lens.truth), fit: lens.fit.fit, withheld: { k1: withheld.fit.k1, err: gridError(withheld.fit, withheld.truth), fit: withheld.fit.fit } };
+  const bent = await run({ bend: 1.2 });
+  out.bent = { ok: bent.fit.ok, fit: bent.fit.fit, k1: bent.fit.k1 };
+  const scaled = await run({ scale: 0.96 });
+  out.scaled = { ok: scaled.fit.ok, err: gridError(scaled.fit, scaled.truth), fit: scaled.fit.fit };
+  const partial = await run({ pose: { height: 280, ppx: 2400 * 0.78, ppy: 1800 * 0.8 } });
+  const visible = grid.filter(p => { const q = partial.truth.designToPhoto(p); return q.x > 5 && q.y > 5 && q.x < 2395 && q.y < 1795; });
+  out.partial = { ok: partial.fit.ok, err: gridError(partial.fit, partial.truth, visible), fit: partial.fit.fit, visible: visible.length };
+  const noisy = await run({ blur: 1.5, noise: 8 });
+  out.noisy = { ok: noisy.fit.ok, err: gridError(noisy.fit, noisy.truth), fit: noisy.fit.fit, k1: noisy.fit.k1 };
+  return out;
+});
+{
+  const r = fitTest;
+  const f = x => `${x.fit.rmsMm.toFixed(3)} mm fit figure (${x.fit.points} points, ${x.fit.lines} line dips, ${x.fit.trimmed} trimmed)`;
+  check('the fit maps the window to within 0.05 mm RMS on a 1:1 sheet, with a lens term near zero',
+    r.full.ok && r.full.err.rms < 0.05 && r.full.err.max < 0.1 && Math.abs(r.full.k1) < 0.01 && r.full.fit.rmsMm < 0.06,
+    `${r.full.err.rms.toFixed(4)} mm RMS, ${r.full.err.max.toFixed(4)} max over ${r.full.err.n} points; k1 ${r.full.k1}; ${f(r.full)}; ${r.full.ms.toFixed(0)} ms`);
+  check('one frame side covered: the fit from the other three is within 0.1 mm of the full fit (criterion 6)',
+    r.covered.ok && r.covered.diff < 0.1 && r.covered.err.rms < 0.06, `${r.covered.diff.toFixed(4)} mm from the full fit; ${r.covered.err.rms.toFixed(4)} mm RMS; ${f(r.covered)}`);
+  check('the bottom side lost to a printer margin fits the same way',
+    r.clipped.ok && r.clipped.diff < 0.1 && r.clipped.err.rms < 0.06, `${r.clipped.diff.toFixed(4)} mm from the full fit; ${f(r.clipped)}`);
+  check('rough corners 5 mm off produce the same fit to within 0.05 mm (criterion 7)',
+    r.off5.ok && r.off5.diff < 0.05, `${r.off5.diff.toFixed(4)} mm from the full fit; ${f(r.off5)}`);
+  check('the lens term is recovered from the frame lines, and withholding it raises the fit figure measurably (criterion 8)',
+    Math.abs(r.lens.k1 - 0.1) < 0.015 && r.lens.err.rms < 0.08 && r.lens.withheld.fit.rmsMm > 3 * r.lens.fit.rmsMm && r.lens.withheld.err.rms > 3 * r.lens.err.rms,
+    `k1 ${r.lens.k1} for 0.1, ${r.lens.err.rms.toFixed(4)} mm RMS, ${f(r.lens)}; withheld: ${r.lens.withheld.err.rms.toFixed(3)} mm RMS, ${f(r.lens.withheld)}`);
+  check('a bent sheet raises the fit figure several times over, with every cell still counted (criterion 8)',
+    r.bent.ok && r.bent.fit.rmsMm > 0.1 && r.bent.fit.rmsMm > 3 * r.full.fit.rmsMm && r.bent.fit.points >= 200,
+    `${f(r.bent)} against ${r.full.fit.rmsMm.toFixed(3)} flat, k1 ${r.bent.k1}`);
+  check('a 96 percent print fits its scaled ink to within 0.05 mm',
+    r.scaled.ok && r.scaled.err.rms < 0.05, `${r.scaled.err.rms.toFixed(4)} mm RMS; ${f(r.scaled)}`);
+  check('40 percent out of frame: fitted from two sides to within 0.1 mm over the visible window',
+    r.partial.ok && r.partial.err.rms < 0.1 && r.partial.visible >= 10, `${r.partial.err.rms.toFixed(4)} mm RMS over ${r.partial.visible} visible points; ${f(r.partial)}`);
+  check('blurred and noisy, the window still maps to within 0.1 mm RMS',
+    r.noisy.ok && r.noisy.err.rms < 0.1, `${r.noisy.err.rms.toFixed(4)} mm RMS; k1 ${r.noisy.k1}; ${f(r.noisy)}`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.8
+version: 1.2.9
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -811,7 +811,10 @@ checkpoint that needs a person.
    dip; a side counts as a frame line only with an unbroken 15 mm run of dips,
    which is what keeps the ruler's digits from passing for one.*
 7. **The fit.** Least-squares homography with normalisation, lens, the fit
-   figure. Tests: criteria 6, 7 and 8.
+   figure. Tests: criteria 6, 7 and 8. *Shipped v1.30.4, 2026-10-02:
+   `js/calibFit.js`, fitted photo-to-design so line constraints are linear;
+   the lens term by golden section on the whole fit's residual; the figure
+   reported over everything recognised, trimmed or not.*
 8. **The double check, the verdict, the print check.** The five-parameter
    rectangle, stock identification, the verdict table, the print check and its
    record, the four-corner output, the Step 1 overlay and panel. Tests:
@@ -1128,6 +1131,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.9 (2026-10-02): Part A step 7 shipped in v1.30.4.
 - v1.2.8 (2026-10-02): Part A steps 5 and 6 shipped in v1.30.2 and v1.30.3.
 - v1.2.7 (2026-10-02): Part A step 4 shipped in v1.30.1.
 - v1.2.6 (2026-10-02): Part A step 3 shipped in v1.30.0; layout v1 frozen.

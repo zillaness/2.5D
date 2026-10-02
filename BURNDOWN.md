@@ -449,8 +449,36 @@ real-photo checkpoint. Building in the PRD's suggested order.
     sample just past a chunk's last profile fell outside that chunk's region.
     Every bracketing region is now tried. Worth remembering for anything else
     that reads a photo in chunks.
-- ▶ NEXT: Part A step 7, the fit (`js/calibFit.js`); then 8 to 13; B.3 at any
-  point.
+- ✅ Part A step 7, the fit: `js/calibFit.js`, `fitSheet(rec, w, h, {k1})`.
+  The homography is fitted photo-to-design (G), where a frame dip's "lies on
+  design line y = 11" and a clock cell's position are both linear in G's
+  entries, by the 8 x 8 normal equations after Hartley normalisation of both
+  sides; H is G's inverse. The lens term is a golden section over k1 with the
+  homography re-fitted at every trial, so the figure minimised is the figure
+  reported. Trimming drops gross misreads only, points and lines against
+  their own spread and never more than a tenth of either, and the fit figure
+  is the RMS over everything recognised, trimmed or not. On the renderer: the
+  window maps to 0.003 mm RMS at 1:1 with k1 0.0003; one side covered is
+  0.033 mm from the full fit and the bottom swallowed 0.029 (criterion 6,
+  0.1); rough corners 5 mm off are 0.0025 mm from it (criterion 7, 0.05); k1
+  0.1 is recovered as 0.1005 and withholding it takes the figure from 0.014
+  to 0.56 mm (criterion 8); a 1.2 mm bend takes it several times over with
+  every cell kept; a 96 percent print fits to 0.0035 mm; two sides fit the
+  visible window to 0.076 mm; blur and noise to 0.025 mm. 36 ms. 779
+  checks, all passing, no console errors; dist rebuilt and smoke-tested —
+  v1.30.4.
+  - ⚠ **A trimmed fit hid a bent sheet.** The first draft trimmed points and
+    dips against one shared spread; 891 precise dips made the spread tiny,
+    every clock cell that disagreed was dropped (151 of 224 on the bent
+    sheet, 212 on the noisy one), and the figure read 0.03 mm for a sheet
+    that was not flat. Now per class, capped, and reported untrimmed. The
+    renderer gained a `bend` option for this.
+  - ⚠ The lens term absorbs part of a bend (k1 read -0.024 on a flat lens
+    with a 1.2 mm hump). The guidance in step 9 should say "flatten the
+    sheet" before "the lens is wrong" when the figure is high and the frame
+    lines disagree with each other.
+- ▶ NEXT: Part A step 8, the double check, the verdict, the print check and
+  the Step 1 integration; then 9 to 13; B.3 at any point.
 
 ### Handoff to a fresh session, 2026-10-02
 

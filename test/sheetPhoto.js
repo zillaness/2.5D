@@ -116,7 +116,7 @@ export async function renderSheetPhoto(opts = {}) {
     scale: 1, anchor: 'centre', offset: { x: 0, y: 0 }, skewDeg: 0, bottomMargin: 0,
     W: 2400, H: 1800, pose: null, quad: null, k1: 0, blur: 0, noise: 0, seed: 1,
     desk: '#3a352f', deskGradient: null, paperTint: '#f6f4ee', objects: [], flatPxPerMm: 8, supersample: 2,
-    jpeg: null, ...opts,
+    jpeg: null, bend: 0, ...opts,
   };
   const design = stockDims(o.paper);
   const stock = stockDims(o.stock || o.paper);
@@ -193,7 +193,14 @@ export async function renderSheetPhoto(opts = {}) {
         let X = u + dx, Y = v + dy;
         if (o.k1) { const p = undistortPixel({ x: X, y: Y }, o.k1, 0, lp); X = p.x; Y = p.y; }
         const w = Hinv[6] * X + Hinv[7] * Y + Hinv[8];
-        const mx = (Hinv[0] * X + Hinv[1] * Y + Hinv[2]) / w, my = (Hinv[3] * X + Hinv[4] * Y + Hinv[5]) / w;
+        let mx = (Hinv[0] * X + Hinv[1] * Y + Hinv[2]) / w, my = (Hinv[3] * X + Hinv[4] * Y + Hinv[5]) / w;
+        if (o.bend) {
+          // A sheet that is not flat: a smooth in-plane displacement of up
+          // to `bend` mm, one hump across and one down, which no homography
+          // can absorb. Not a true curl, but what one looks like to a fit.
+          mx += o.bend * Math.sin(Math.PI * my / stock.h) * Math.cos(Math.PI * mx / stock.w);
+          my += o.bend * Math.sin(Math.PI * mx / stock.w) * Math.cos(Math.PI * my / stock.h);
+        }
         if (mx >= 0 && my >= 0 && mx <= stock.w && my <= stock.h && sample(mx, my, acc)) inside++;
         else {
           const g = gradTo ? u / (o.W - 1) : 0;
