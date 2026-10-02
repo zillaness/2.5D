@@ -109,6 +109,11 @@
         <!-- Filled by updatePaperCheck when the sheet's proportions do not
              match the size picked above (js/paperAspect.js). -->
         <p class="warn" id="paperCheck" hidden style="margin:2px 0 8px"></p>
+        <!-- Calibration sheets (calibration_and_backlog_prd_v1.2, Part A):
+             a printed frame the app measures instead of trusting. -->
+        <div class="btn-row" style="margin:0 0 8px">
+          <button id="calibPrintBtn" class="btn small" title="Print a sheet whose frame and code the app measures the print scale from, instead of trusting the paper's size">🖨 Print calibration sheets</button>
+        </div>
         <div class="field">
           <label for="paperOrient">Orientation in photo</label>
           <select id="paperOrient">
@@ -1312,6 +1317,39 @@
     </div>
   </section>
 </main>
+
+<div id="calibModal" class="modal-overlay" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>Calibration sheets</h3>
+      <button id="calibCloseBtn" class="btn small">✕</button>
+    </div>
+    <p class="hint" style="margin:0">A sheet with a printed frame and a code track around its edge. The app reads the code, measures the print scale against the paper's real edges, and corrects for it, so a print that came out at 96 percent still traces true. Keep the part inside the frame's window.</p>
+    <div class="field-row">
+      <div class="field">
+        <label for="calibPaper">Paper</label>
+        <select id="calibPaper">
+          <option value="letter">US Letter (8.5 × 11 in)</option>
+          <option value="A4">A4 (210 × 297 mm)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="calibCount">Sheets</label>
+        <select id="calibCount">
+          <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+          <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
+        </select>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button id="calibPrintGoBtn" class="btn primary">🖨 Print</button>
+      <button id="calibDownloadBtn" class="btn" title="The same sheets as SVG files, for printing elsewhere">⬇ Download SVG</button>
+    </div>
+    <p class="hint" style="margin:0">Choose <b>Actual size</b> or <b>100 percent</b> if the print dialog offers it. If it doesn't, print anyway: the app measures whatever scale comes out.</p>
+    <p class="hint" style="margin:0">Cardstock or heavier paper lies flatter than copy paper; a curled sheet shows up as a worse fit figure. Matte paper and soft light work best: laser toner has a slight sheen, and under a lamp at the wrong angle black cells can read as white.</p>
+    <p class="hint" id="calibRecords" style="margin:0"></p>
+  </div>
+</div>
 
 <div id="projModal" class="modal-overlay" hidden>
   <div class="modal-box">

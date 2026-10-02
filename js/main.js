@@ -11,6 +11,7 @@ import { checkPaperAspect } from './paperAspect.js';
 import { readFocalLength, focalPixels } from './exif.js';
 import { computeDiffMap, otsuThreshold, segmentObject, segmentObjects } from './segment.js';
 import { scanParts, SCAN_DEFAULTS, fitCircle, findCoinCandidate, coinScaleCheck, rescaleParts, mergeParts } from './scan.js';
+import { sheetSetSVG, printPageHTML, drawJob, jobHex, paperLabel as calibPaperLabel, LAYOUT_VERSION as CALIB_LAYOUT } from './calibSheet.js';
 import {
   traceBoundaries, signedArea, collapseCollinear, simplifyClosed,
   chaikinClosed, pointInPolygon,
@@ -7227,6 +7228,107 @@ function refreshProjectText() {
   $('projPhotoNote').textContent = projPhotoNote(text);
 }
 
+// ---------- calibration sheets: printing from the app (calibration_and_backlog_prd_v1.2, Part A step 4) ----------
+//
+// The sheets print through the browser's own dialog from a hidden iframe
+// carrying one page per sheet with @page set to the stock, which works where
+// a popup would be blocked. Each print is recorded in this browser, job code
+// and all, so the print check and the Step 1 panel can name a set later. The
+// job is drawn from a clock that is injected, the way autosave's is, so tests
+// can fix it.
+
+const CALIB_PRINTS_KEY = '2p5d.calibprints.v1';
+const CALIB_MAX_RECORDS = 20;
+let calibClock = () => Date.now();
+
+function calibRecords() {
+  try { return JSON.parse(localStorage.getItem(CALIB_PRINTS_KEY) || '[]').filter(r => r && Number.isFinite(r.job)); }
+  catch { return []; }
+}
+function calibRemember(rec) {
+  const list = [rec, ...calibRecords().filter(r => r.job !== rec.job)].slice(0, CALIB_MAX_RECORDS);
+  try { localStorage.setItem(CALIB_PRINTS_KEY, JSON.stringify(list)); } catch { /* storage blocked: the sheets still print */ }
+  return list;
+}
+
+function calibChoice() {
+  const paper = $('calibPaper').value;
+  const count = Math.max(1, Math.min(8, parseInt($('calibCount').value, 10) || 1));
+  return { paper, count };
+}
+
+function calibSyncRecords() {
+  const el = $('calibRecords');
+  const list = calibRecords();
+  if (!list.length) { el.textContent = 'No set printed from this browser yet.'; return; }
+  const when = r => { try { return new Date(r.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return ''; } };
+  el.textContent = 'Your sets, newest first: ' + list.map(r =>
+    `${jobHex(r.job)} (${r.count} ${calibPaperLabel(r.paper).replace(/ \(.*\)$/, '')} sheet${r.count === 1 ? '' : 's'}, ${when(r)})`).join('; ') + '.';
+}
+
+function openCalibPanel() {
+  // The paper picker's choice, when it is one of the two stocks laid out.
+  if (state.paper.size === 'letter' || state.paper.size === 'A4') $('calibPaper').value = state.paper.size;
+  calibSyncRecords();
+  $('calibModal').hidden = false;
+}
+
+// Print: one job for the set, recorded, then the browser's dialog.
+function calibPrint() {
+  const { paper, count } = calibChoice();
+  const job = drawJob(calibClock(), calibRecords().map(r => r.job));
+  const html = printPageHTML(paper, count, job);
+  const rec = { job, at: calibClock(), paper, count, layout: CALIB_LAYOUT };
+  calibRemember(rec);
+  calibSyncRecords();
+  let frame = $('calibPrintFrame');
+  if (!frame) {
+    frame = document.createElement('iframe');
+    frame.id = 'calibPrintFrame';
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed; width:0; height:0; border:0; opacity:0; pointer-events:none';
+    document.body.appendChild(frame);
+  }
+  frame.onload = () => {
+    try { frame.contentWindow.focus(); frame.contentWindow.print(); }
+    catch { toast('The browser would not open its print dialog. Download the SVG and print that instead.', 6000); }
+  };
+  frame.srcdoc = html;
+  toast(`Set ${jobHex(job)}: ${count} ${calibPaperLabel(paper)} sheet${count === 1 ? '' : 's'}. Choose Actual size in the print dialog.`, 6000);
+  return rec;
+}
+
+// Download: the same sheets as SVG files, one per sheet, under the same job
+// as a print would draw, and recorded the same way: a sheet printed from
+// the file is still a sheet of this set.
+function calibDownload() {
+  const { paper, count } = calibChoice();
+  const job = drawJob(calibClock(), calibRecords().map(r => r.job));
+  const rec = { job, at: calibClock(), paper, count, layout: CALIB_LAYOUT };
+  calibRemember(rec);
+  calibSyncRecords();
+  const sheets = sheetSetSVG(paper, count, job);
+  sheets.forEach((svg, i) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+    a.download = `2p5d-calibration-${paper}-set${jobHex(job)}-sheet${i + 1}of${count}.svg`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  });
+  toast(`Set ${jobHex(job)}: ${count} SVG file${count === 1 ? '' : 's'}. Print at Actual size.`, 6000);
+  return rec;
+}
+
+$('calibPrintBtn').addEventListener('click', openCalibPanel);
+$('calibCloseBtn').addEventListener('click', () => { $('calibModal').hidden = true; });
+$('calibModal').addEventListener('pointerdown', e => {
+  if (e.target === $('calibModal')) $('calibModal').hidden = true;
+});
+$('calibPrintGoBtn').addEventListener('click', () => { calibPrint(); });
+$('calibDownloadBtn').addEventListener('click', () => { calibDownload(); });
+
 $('projectBtn').addEventListener('click', () => {
   refreshProjectText();
   refreshLibList();
@@ -7898,6 +8000,16 @@ window.__app = {
     get coin() { return state.scan && state.scan.coin; },
     get coinCheck() { return state.scan && state.scan.coinCheck; },
     get rescale() { return state.scan && state.scan.rescale; },
+  },
+  // Calibration sheets: the panel, the print and the download with their
+  // record, and the clock the job is drawn from.
+  calib: {
+    open: () => openCalibPanel(),
+    print: () => calibPrint(),
+    download: () => calibDownload(),
+    records: () => calibRecords(),
+    clear: () => { try { localStorage.removeItem(CALIB_PRINTS_KEY); } catch { /* blocked */ } },
+    set clock(fn) { calibClock = typeof fn === 'function' ? fn : (() => Date.now()); },
   },
   // The autosave slot: its clock, so a test can hold it still, and the three
   // acts that touch it.

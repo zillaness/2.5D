@@ -294,3 +294,49 @@ export function sheetSetSVG(paperKey, count, job) {
   for (let s = 1; s <= n; s++) out.push(sheetSVG(paperKey, s, n, job));
   return out;
 }
+
+// ---------- printing ----------
+
+// The print job: eight bits drawn from a clock the caller injects, stepped
+// past any job already on record in this browser so two of one person's sets
+// never share a code while the record lasts. Deterministic for a given clock
+// and record.
+export function drawJob(clockMs, taken = []) {
+  const t = Math.floor(Number(clockMs) / 1000) || 0;
+  // Knuth's multiplicative hash in 32-bit arithmetic; the high byte mixes
+  // best. Plain multiplication would overflow double precision and zero the
+  // low bits for any clock reading in milliseconds.
+  let job = (Math.imul(t, 0x9E3779B1) >>> 24) & 0xff;
+  const used = new Set((taken || []).map(Number));
+  for (let i = 0; i < 256 && used.has(job); i++) job = (job + 1) & 0xff;
+  return job;
+}
+
+export function jobHex(job) {
+  return (Number(job) & 0xff).toString(16).toUpperCase().padStart(2, '0');
+}
+
+// One HTML document carrying every sheet of a set as inline SVG, one per
+// page, with @page set to the stock's size and no margin, so the browser's
+// own print dialog prints it. The sheets are the same strings sheetSVG
+// returns, so what is printed is what the suite renders its synthetic
+// photos from.
+export function printPageHTML(paperKey, count, job) {
+  const sheets = sheetSetSVG(paperKey, count, job);
+  const g = layoutGeometry(paperKey);
+  const size = `${f(g.w)}mm ${f(g.h)}mm`;
+  const title = `2.5D calibration sheets, ${paperLabel(paperKey)}, set ${jobHex(job)}`;
+  return [
+    '<!doctype html>',
+    '<html lang="en"><head><meta charset="utf-8">',
+    `<title>${esc(title)}</title>`,
+    '<style>',
+    `@page { size: ${size}; margin: 0; }`,
+    'html, body { margin: 0; padding: 0; background: #fff; }',
+    `svg { display: block; width: ${f(g.w)}mm; height: ${f(g.h)}mm; page-break-after: always; break-after: page; }`,
+    'svg:last-child { page-break-after: auto; break-after: auto; }',
+    '</style></head><body>',
+    ...sheets,
+    '</body></html>',
+  ].join('\n');
+}

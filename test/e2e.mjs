@@ -17,7 +17,7 @@ import {
 import { exifSegment, spliceExif } from './mark-photo.js';
 import { readFocalLength } from '../js/exif.js';
 import { APP_VERSION } from '../js/version.js';
-import { encodeWord, decodeWord, sheetCells } from '../js/calibSheet.js';
+import { encodeWord, decodeWord, sheetCells, printPageHTML, drawJob, jobHex } from '../js/calibSheet.js';
 import { FIXTURE, FROZEN_MESSAGE, referenceLayout } from './freeze-layout.mjs';
 
 const require = createRequire(import.meta.url);
@@ -6871,8 +6871,8 @@ check('every layout control id survives the move out of the modal',
   cold.missing.length === 0 && cold.inPanel4 && cold.inStage4,
   cold.missing.length ? `missing ${cold.missing.join(', ')}` : 'all layout ids resolve');
 check('the layout modal overlay and its close button are gone',
-  cold.overlayGone && cold.overlays === 2,
-  `${cold.overlays} overlays left (project + CAD), close button ${cold.overlayGone}`);
+  cold.overlayGone && cold.overlays === 3,
+  `${cold.overlays} overlays left (project, CAD, calibration sheets), close button ${cold.overlayGone}`);
 check('an empty Step 4 prompts for the library or a folder of traces',
   cold.hintShown && /Add tools from your library, or open a folder of traces\./.test(cold.hint),
   cold.hint);
@@ -15164,6 +15164,97 @@ check('a set is numbered 1 to N under one job, sheets differ only in their data 
   svgCheck.set === 3 && svgCheck.setLabels.every((l, i) => new RegExp(`sheet ${i + 1} of 3`).test(l) && /set 10/.test(l)) &&
   svgCheck.otherCells === svgCheck.otherBlack && svgCheck.otherCells !== svgCheck.cells && svgCheck.same,
   `${svgCheck.set} sheets; sheet 2 has ${svgCheck.cells} black cells, sheet 3 ${svgCheck.otherCells}`);
+
+// ---------- Calibration sheet: printing from the app (Part A step 4 of calibration_and_backlog_prd_v1.2) ----------
+
+console.log('\nCalibration sheet: printing from the app');
+
+{
+  const html = printPageHTML('A4', 3, 0x5c);
+  const pages = (html.match(/<svg /g) || []).length;
+  check('the print page carries one SVG sheet per page with @page set to the stock and no margin',
+    /@page \{ size: 210mm 297mm; margin: 0; \}/.test(html) && pages === 3 && /data-sheet="3"/.test(html) && /data-job="92"/.test(html) &&
+    /page-break-after: always/.test(html) && /<title>2\.5D calibration sheets, A4 \(210 × 297 mm\), set 5C<\/title>/.test(html),
+    `${pages} pages, ${html.length} bytes`);
+  const taken = [drawJob(1700000000000)];
+  check('the print job is drawn from the clock, deterministic, and stepped past jobs already on record',
+    drawJob(1700000000000) === drawJob(1700000000000) && drawJob(1700000000000, taken) === ((taken[0] + 1) & 0xff) &&
+    drawJob(1700000000000) !== drawJob(1700000300000) && jobHex(10) === '0A',
+    `job ${jobHex(taken[0])}, next ${jobHex(drawJob(1700000000000, taken))}`);
+}
+
+const printPanel = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const $ = id => document.getElementById(id);
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.calib.clear();
+  const sel = $('paperSize');
+  const paperBefore = st.paper.size;
+  sel.value = 'A4'; sel.dispatchEvent(new Event('change'));
+  $('calibPrintBtn').click();
+  const opened = { shown: !$('calibModal').hidden, paper: $('calibPaper').value, records: $('calibRecords').textContent };
+  $('calibCount').value = '3';
+  app.calib.clock = () => 1764633600000;   // a fixed instant, 2025-12-02
+  $('calibPrintGoBtn').click();
+  await wait(50);
+  const frame = $('calibPrintFrame');
+  const frameDoc = frame && frame.srcdoc;
+  // Wait for the srcdoc to load, then count what it holds.
+  for (let i = 0; i < 40 && !(frame.contentDocument && frame.contentDocument.querySelector('svg')); i++) await wait(50);
+  const fd = frame.contentDocument;
+  const svgs = fd ? Array.from(fd.querySelectorAll('svg')) : [];
+  const rec1 = app.calib.records();
+  const first = {
+    frame: !!frame, hidden: frame && frame.style.width === '0px', pages: svgs.length,
+    sheets: svgs.map(s => s.getAttribute('data-sheet')).join(','), jobs: [...new Set(svgs.map(s => s.getAttribute('data-job')))],
+    papers: [...new Set(svgs.map(s => s.getAttribute('data-paper')))],
+    pageRule: /@page \{ size: 210mm 297mm; margin: 0; \}/.test(frameDoc || ''),
+    counts: [...new Set(svgs.map(s => s.getAttribute('data-count')))],
+    records: rec1.map(r => ({ job: r.job, paper: r.paper, count: r.count, at: r.at, layout: r.layout })),
+    panel: $('calibRecords').textContent,
+  };
+  // The same clock again: a different job, because the first is on record.
+  $('calibCount').value = '2';
+  $('calibPaper').value = 'letter';
+  $('calibPrintGoBtn').click();
+  await wait(50);
+  const rec2 = app.calib.records();
+  // Download: one file per sheet under one job, counted through the anchor.
+  let clicks = 0; const names = [];
+  const realClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { clicks++; names.push(this.download); };
+  $('calibCount').value = '4';
+  const dl = app.calib.download();
+  HTMLAnchorElement.prototype.click = realClick;
+  const rec3 = app.calib.records();
+  $('calibCloseBtn').click();
+  const closed = $('calibModal').hidden;
+  app.calib.clear();
+  app.calib.clock = null;
+  sel.value = paperBefore; sel.dispatchEvent(new Event('change'));
+  return { opened, first, second: { jobs: rec2.map(r => r.job), papers: rec2.map(r => r.paper), counts: rec2.map(r => r.count) },
+    download: { clicks, names, job: dl.job, records: rec3.length, newest: rec3[0] && rec3[0].job }, closed };
+});
+check('Print calibration sheets opens a panel defaulting to the paper picker\'s stock, with no record yet',
+  printPanel.opened.shown && printPanel.opened.paper === 'A4' && /No set printed/.test(printPanel.opened.records),
+  `paper ${printPanel.opened.paper}; "${printPanel.opened.records}"`);
+check('Print lays out every sheet the panel asked for, numbered 1 to 3 under one job on A4, in a hidden frame with the stock\'s @page',
+  printPanel.first.frame && printPanel.first.hidden && printPanel.first.pages === 3 && printPanel.first.sheets === '1,2,3' &&
+  printPanel.first.jobs.length === 1 && printPanel.first.papers.join() === 'A4' && printPanel.first.counts.join() === '3' && printPanel.first.pageRule,
+  `${printPanel.first.pages} pages, sheets ${printPanel.first.sheets}, job ${printPanel.first.jobs.join()}, @page ${printPanel.first.pageRule}`);
+check('the print is recorded in this browser with job, date, paper, count and layout, and the panel names it',
+  printPanel.first.records.length === 1 && String(printPanel.first.records[0].job) === printPanel.first.jobs[0] &&
+  printPanel.first.records[0].paper === 'A4' && printPanel.first.records[0].count === 3 && printPanel.first.records[0].at === 1764633600000 &&
+  printPanel.first.records[0].layout === 1 && /Your sets/.test(printPanel.first.panel) && /3 A4 sheets/.test(printPanel.first.panel),
+  `${JSON.stringify(printPanel.first.records[0])}; "${printPanel.first.panel}"`);
+check('a second print at the same instant draws a different job, and the record keeps both, newest first',
+  printPanel.second.jobs.length === 2 && printPanel.second.jobs[0] !== printPanel.second.jobs[1] &&
+  printPanel.second.papers.join() === 'letter,A4' && printPanel.second.counts.join() === '2,3',
+  `jobs ${printPanel.second.jobs.join(', ')}`);
+check('Download writes one SVG file per sheet under one recorded job, and the panel closes',
+  printPanel.download.clicks === 4 && printPanel.download.names.every((n, i) => new RegExp(`set[0-9A-F]{2}-sheet${i + 1}of4\\.svg$`).test(n)) &&
+  printPanel.download.records === 3 && printPanel.download.newest === printPanel.download.job && printPanel.closed,
+  `${printPanel.download.clicks} files: ${printPanel.download.names.join(', ')}`);
 
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //

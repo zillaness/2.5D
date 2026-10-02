@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.6
+version: 1.2.7
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -798,7 +798,9 @@ checkpoint that needs a person.
 4. **Printing from the app.** The Step 1 panel, the print page, the SVG
    download, the print record, the paper and lighting advice. Test: the page's
    `@page` size and every sheet's number, job and paper are what the panel
-   asked for.
+   asked for. *Shipped v1.30.1, 2026-10-02: the print goes through a hidden
+   iframe rather than a popup, so it works where popups are blocked; the
+   record is per browser under `2p5d.calibprints.v1`.*
 5. **SVG-rendered synthetic photos.** The renderer the remaining steps test
    against.
 6. **Recognition.** Profiles, dips, line fits, code reading, the line-only
@@ -1122,6 +1124,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.7 (2026-10-02): Part A step 4 shipped in v1.30.1.
 - v1.2.6 (2026-10-02): Part A step 3 shipped in v1.30.0; layout v1 frozen.
 - v1.2.5 (2026-10-02): B.4 shipped in v1.29.3.
 - v1.2.4 (2026-10-02): B.2 shipped, thumbnails in v1.29.1 and merge in v1.29.2.

@@ -385,8 +385,29 @@ real-photo checkpoint. Building in the PRD's suggested order.
     a v2 layout is added beside it. Sam has not printed a sheet yet, so if the
     first real print shows a flaw in the layout, the freeze can be lifted
     with `--force` before anything is in the field; after that it cannot.
-- ▶ NEXT: Part A step 4, printing from the app; then 5 to 13; B.3 at any
-  point.
+- ✅ Part A step 4, printing from the app. A "Print calibration sheets"
+  button under Step 1's paper size opens a panel: paper (Letter or A4,
+  defaulting to the picker's), 1 to 8 sheets, Print, Download SVG, the
+  Actual-size, cardstock and matte-paper advice, and the sets printed from
+  this browser. `printPageHTML` (pure, in `js/calibSheet.js`) is one
+  document with a sheet per page and `@page` at the stock's size with no
+  margin; it prints from a hidden iframe, which works where a popup would be
+  blocked. The job is `drawJob(clock, taken)`, Knuth's hash of the injected
+  clock stepped past jobs on record, so two of one person's sets never share
+  a code while the record lasts; each print and download is recorded
+  (`2p5d.calibprints.v1`: job, date, paper, count, layout). 754
+  checks, all passing, no console errors; dist rebuilt and smoke-tested —
+  v1.30.1.
+  - ⚠ The first draft of the job hash multiplied a millisecond clock by
+    2654435761 in doubles, which overflows 2^53 and zeroes the low byte:
+    every job was 00. Caught by the test; now `Math.imul` and the high byte,
+    256 distinct jobs over 2000 consecutive seconds.
+  - ⚠ Inserting a test block with `String.replace` duplicated the suite's
+    first 15,000 lines: the block contained a `$\`` sequence, which a string
+    replacement reads as "the text before the match". Restored from git;
+    every splice now passes a function as the replacement.
+- ▶ NEXT: Part A step 5, SVG-rendered synthetic photos; then 6 to 13; B.3 at
+  any point.
 
 ### Handoff to a fresh session, 2026-10-02
 
