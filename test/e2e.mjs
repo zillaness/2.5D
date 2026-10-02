@@ -15952,6 +15952,71 @@ const viaInput = await page.evaluate(() => {
 check('a sheet photo through the file input, as the queue loads them, is recognised on load',
   viaInput && viaInput.sheet === 2 && viaInput.job === 0x7f && viaInput.source === 'edges', JSON.stringify(viaInput));
 
+// ---------- Calibration sheet: the lighting model (Part A step 11 of calibration_and_backlog_prd_v1.2) ----------
+//
+// Criterion 12: a sheet lit with a 30 percent brightness gradient segments
+// the part correctly, where the single-colour model marks the dark side as
+// object. The clean ring around the window gives the paper on every side,
+// and a smooth surface fitted to it predicts the paper under the part.
+
+console.log('\nCalibration sheet: the lighting model');
+
+const lightTest = await page.evaluate(async () => {
+  const app = window.__app, st = app.state;
+  const { renderSheetPhoto } = await import('./test/sheetPhoto.js');
+  const { computeDiffMap, segmentObject } = await import('./js/segment.js');
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  app.sheet.clearChecks();
+  app.sheet.fitOn = true;
+  const before = { reference: st.reference, paper: { ...st.paper }, scan: st.scan && { ...st.scan, parts: [] }, lens: { ...st.lens }, captureFrac: st.captureFrac };
+  st.reference = 'rect';
+  st.scan = { ...st.scan, on: false, active: false, parts: [] };
+  st.captureFrac = 0;
+  app.syncRefControls();
+  const sel = document.getElementById('paperSize'); sel.value = 'letter'; sel.dispatchEvent(new Event('change'));
+  const bboxOf = pts => { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const p of pts) { a = Math.min(a, p.x); c = Math.max(c, p.x); b = Math.min(b, p.y); d = Math.max(d, p.y); } return { w: c - a, h: d - b }; };
+  const base = { paper: 'letter', sheet: 2, count: 4, job: 0x7f, W: 2400, H: 1800, pose: { height: 330, tilt: 6, axis: 20, spin: 3 },
+    objects: [{ x: 65, y: 115, w: 80, h: 50, r: 8, color: '#23364a' }], light: 0.3 };
+  const lit = await renderSheetPhoto(base);
+  await new Promise(res => app.loadImageFromURL(lit.canvas.toDataURL('image/png'), res));
+  await wait(50);
+  app.goStep(2);
+  await wait(100);
+  const withModel = { bbox: bboxOf(app.traceEditor.getTrace().outer), lighting: app.sheet.lighting, threshold: st.seg.threshold };
+  // The same rectified sheet through the single-colour model: the window
+  // still masks the band, but the paper is one median colour.
+  const dmFlat = computeDiffMap(st.rect.canvas, { window: st.sheetWindow.px, lighting: false });
+  const maskFlat = segmentObject(dmFlat, { threshold: st.seg.threshold, cleanupRadius: st.seg.cleanup, marginPx: Math.max(2, Math.round(st.seg.marginMm * st.rect.pxPerMm)) });
+  let flatArea = 0;
+  if (maskFlat) for (let i = 0; i < maskFlat.length; i++) flatArea += maskFlat[i];
+  const ppm = st.rect.pxPerMm;
+  const objectAreaMm2 = 80 * 50 - (4 - Math.PI) * 64;
+  // The diff on bare paper at the dark end of the gradient, both ways.
+  const win = st.sheetWindow.px;
+  const darkPaper = { x: Math.round(win[1].x - 8 * ppm), y: Math.round((win[1].y + win[2].y) / 2 + 60 * ppm) };
+  const dAt = (dm, p) => dm.diff[p.y * dm.w + p.x];
+  const paperDiff = { model: dAt(st.diffMap, darkPaper), flat: dAt(dmFlat, darkPaper) };
+  app.goStep(1);
+  app.sheet.clearChecks();
+  st.reference = before.reference; st.paper = before.paper; st.scan = before.scan; st.lens = before.lens; st.captureFrac = before.captureFrac;
+  app.syncRefControls();
+  return { withModel, flatAreaMm2: flatArea / (ppm * ppm), objectAreaMm2, paperDiff };
+});
+{
+  const r = lightTest;
+  check('under a 30 percent brightness gradient the part is traced correctly with the lighting model (criterion 12)',
+    r.withModel.lighting && Math.abs(r.withModel.bbox.w - 80) < 0.5 && Math.abs(r.withModel.bbox.h - 50) < 0.5,
+    `${r.withModel.bbox.w.toFixed(2)} × ${r.withModel.bbox.h.toFixed(2)} mm, model on ${r.withModel.lighting}, threshold ${r.withModel.threshold}`);
+  // Criterion 12 expected the single-colour model to mark the dark side as
+  // object. It does not: the diff score weights brightness at 0.7 against
+  // chroma at 1.6, which tolerates a 30 percent gradient and breaks only
+  // past about 80. What the surface model delivers is margin: bare paper at
+  // the dark end reads near zero instead of tens, so the threshold has room.
+  check('the single-colour score already tolerates a 30 percent gradient, and the surface model widens the margin at the dark end',
+    Math.abs(r.flatAreaMm2 - r.objectAreaMm2) < 0.15 * r.objectAreaMm2 && r.paperDiff.flat >= 15 && r.paperDiff.model <= 4 && r.paperDiff.model < r.paperDiff.flat / 4,
+    `single colour: ${r.flatAreaMm2.toFixed(0)} mm² of object for a ${r.objectAreaMm2.toFixed(0)} mm² part, bare paper at the dark end reads ${r.paperDiff.flat}; with the surface ${r.paperDiff.model} (threshold ${r.withModel.threshold})`);
+}
+
 // ---------- Paper proportions check (Part A step 1 of calibration_and_backlog_prd_v1.2) ----------
 //
 // Near the end on purpose: the end-to-end half loads its own photo through the

@@ -567,9 +567,24 @@ real-photo checkpoint. Building in the PRD's suggested order.
     records their baselines; the ledger's figures for the sheet so far are
     all synthetic, and the PRD's constraints say exactly why that is not
     enough: a rendered paper edge has no curl, shadow or pale desk.
-- ▶ NEXT: Part A step 11, the lighting model (droppable); step 12, ruler
-  verification (droppable); step 13, README and the PRD's status line; B.3
-  at any point.
+- ✅ Part A step 11, the lighting model. `computeDiffMap` with a window now
+  fits a quadratic surface per channel to the clean ring inside it, one
+  trimming pass against the fit, and scores each pixel against the paper
+  predicted at that spot (`lighting: false` keeps the single median). The
+  renderer gained a `light` option, a brightness gradient across the sheet.
+  Under 30 percent the part traces at 80.11 x 49.94 mm. 803 checks,
+  all passing, no console errors; dist rebuilt and smoke-tested — v1.30.8.
+  - ⚠ **Criterion 12's premise did not hold.** It expected the single-colour
+    model to mark the dark side as object under a 30 percent gradient. It
+    does not: the diff score weights brightness at 0.7 against chroma at 1.6,
+    which was the point of that weighting, and tolerates 30 percent with
+    room; it breaks only past about 80. What the surface model delivers is
+    margin, bare paper at the dark end reading 0 instead of 26, so the Otsu
+    threshold has room on a lamp-lit sheet. The test asserts that and says
+    so. A sharp shadow across the sheet, which a quadratic cannot follow, is
+    the lighting case the real photos should include.
+- ▶ NEXT: Part A step 12, ruler verification (droppable, drafted); step 13,
+  README and the PRD's status line; B.3 at any point.
 
 ### Handoff to a fresh session, 2026-10-02
 

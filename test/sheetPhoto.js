@@ -116,7 +116,7 @@ export async function renderSheetPhoto(opts = {}) {
     scale: 1, anchor: 'centre', offset: { x: 0, y: 0 }, skewDeg: 0, bottomMargin: 0,
     W: 2400, H: 1800, pose: null, quad: null, k1: 0, blur: 0, noise: 0, seed: 1,
     desk: '#3a352f', deskGradient: null, paperTint: '#f6f4ee', objects: [], flatPxPerMm: 8, supersample: 2,
-    jpeg: null, bend: 0, ...opts,
+    jpeg: null, bend: 0, light: 0, ...opts,
   };
   const design = stockDims(o.paper);
   const stock = stockDims(o.stock || o.paper);
@@ -158,6 +158,17 @@ export async function renderSheetPhoto(opts = {}) {
   const Hp = computeHomography(paperQuad, quad);      // paper mm -> continuous photo (undistorted)
   const Hinv = computeHomography(quad, paperQuad);    // back
   const lp = lensParams(o.W, o.H);
+  if (o.light) {
+    // Uneven light: brightness falls by `light` (a fraction) from the
+    // sheet's left edge to its right, over paper, ink and objects alike.
+    const d = fc.getImageData(0, 0, flat.width, flat.height);
+    const p = d.data, fw0 = flat.width;
+    for (let i = 0; i < p.length; i += 4) {
+      const g = 1 - o.light * ((i / 4) % fw0) / (fw0 - 1);
+      p[i] *= g; p[i + 1] *= g; p[i + 2] *= g;
+    }
+    fc.putImageData(d, 0, 0);
+  }
   const flatData = fc.getImageData(0, 0, flat.width, flat.height).data;
   const fw = flat.width, fh = flat.height;
   const deskRGB = hexRGB(o.desk);

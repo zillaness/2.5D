@@ -1,6 +1,6 @@
 ---
 file: calibration_and_backlog_prd_v1.2.md
-version: 1.2.12
+version: 1.2.13
 author: Sam Cao
 created: 2026-09-27
 last_updated: 2026-10-02
@@ -838,7 +838,13 @@ checkpoint that needs a person.
     window is carried into the rectified image through the same construction
     rectify used and `computeDiffMap` takes it as a polygon, sampling the
     paper just inside it and making everything outside it background.*
-11. **Lighting model.** Criterion 12. Droppable.
+11. **Lighting model.** Criterion 12. Droppable. *Shipped v1.30.8,
+    2026-10-02: a quadratic surface per channel fitted to the ring inside the
+    window, in `computeDiffMap` whenever a window is given. Criterion 12's
+    premise did not hold: the single-colour score, brightness at 0.7 against
+    chroma at 1.6, already tolerates a 30 percent gradient and breaks only
+    past about 80; the model's gain is margin, bare paper at the dark end
+    reading near zero instead of tens.*
 12. **Ruler verification.** Droppable.
 13. **README** and this PRD's status line.
 
@@ -1143,6 +1149,7 @@ Part B items B.1 to B.4. What follows is kept for the record.
   Part B adds the backlog: the drawer scale check with a coin, drawer scan
   merge and thumbnails, nest speed and the overfull drawer, two small fixes,
   and housekeeping.
+- v1.2.13 (2026-10-02): Part A step 11 shipped in v1.30.8, with criterion 12's premise corrected.
 - v1.2.12 (2026-10-02): Part A step 10 shipped in v1.30.7; the real-photo checkpoint waits on Sam's prints.
 - v1.2.11 (2026-10-02): Part A step 9 shipped in v1.30.6.
 - v1.2.10 (2026-10-02): Part A step 8 shipped in v1.30.5.

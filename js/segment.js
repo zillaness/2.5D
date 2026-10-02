@@ -43,6 +43,12 @@ export function computeDiffMap(canvas, opts = {}) {
     }
   }
   const inWin = (x, y) => !rowRange || (rowRange[2 * y] >= 0 && x >= rowRange[2 * y] && x <= rowRange[2 * y + 1]);
+  // opts.lighting (default true with a window): the paper is not one colour
+  // under a lamp. The clean ring around the window is sampled on every side
+  // and a smooth low-order surface, per channel, is fitted to it, so each
+  // pixel is compared against the paper predicted at that spot rather than
+  // one median for the whole sheet. Off, the window still masks the band.
+  const lighting = win && (typeof opts !== 'object' || opts.lighting !== false);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const { data } = ctx.getImageData(0, 0, w, h);
   const band = Math.max(2, Math.round(Math.min(w, h) * borderPct));
@@ -63,11 +69,13 @@ export function computeDiffMap(canvas, opts = {}) {
     return rs.length >= 20 ? [median(rs), median(gs), median(bs)] : null;
   };
 
-  let paper, bg = null;
+  let paper, bg = null, surface = null;
   if (win) {
     // A ring just inside the window: clean paper all the way round the part.
-    paper = sampleColor((x, y) => inWin(x, y) &&
-      (x < rowRange[2 * y] + band || x > rowRange[2 * y + 1] - band || y < winTop + band || y > winBot - band));
+    const ring = (x, y) => inWin(x, y) &&
+      (x < rowRange[2 * y] + band || x > rowRange[2 * y + 1] - band || y < winTop + band || y > winBot - band);
+    paper = sampleColor(ring);
+    if (lighting && paper) surface = fitPaperSurface(data, w, h, ring, paper);
     if (paperRect) {
       const R = paperRect;
       const inside = (x, y) => x >= R.x && x < R.x + R.w && y >= R.y && y < R.y + R.h;
@@ -99,14 +107,86 @@ export function computeDiffMap(canvas, opts = {}) {
   };
 
   const diff = new Uint8ClampedArray(w * h);
+  const ref = [0, 0, 0];
   for (let i = 0, p = 0; i < w * h; i++, p += 4) {
     if (data[p + 3] < 128) { diff[i] = 0; continue; } // no-data → background
     if (rowRange && !inWin(i % w, (i / w) | 0)) { diff[i] = 0; continue; } // the printed band and beyond
-    let d = score(p, paper);
+    let d;
+    if (surface) {
+      const x = i % w, y = (i / w) | 0;
+      for (let c = 0; c < 3; c++) ref[c] = surface.at(c, x, y);
+      d = score(p, ref);
+    } else {
+      d = score(p, paper);
+    }
     if (bg) d = Math.min(d, score(p, bg));            // background if near either
     diff[i] = Math.min(255, d);
   }
-  return { diff, w, h, paperColor: paper, bgColor: bg, window: win || null };
+  return { diff, w, h, paperColor: paper, bgColor: bg, window: win || null, lighting: !!surface };
+}
+
+// A quadratic surface per channel, a + b x + c y + d x y + e x^2 + f y^2 in
+// coordinates normalised to the image, fitted by least squares to the paper
+// pixels a predicate selects, with one trimming pass against the fit so a
+// speck or a shadow on the ring does not bend it. Returns { at(c, x, y) } or
+// null when there is too little to fit.
+function fitPaperSurface(data, w, h, pred, fallback) {
+  const xs = [], ys = [], ch = [[], [], []];
+  for (let y = 0; y < h; y += 3) {
+    for (let x = 0; x < w; x += 3) {
+      const p = (y * w + x) * 4;
+      if (data[p + 3] < 128 || !pred(x, y)) continue;
+      xs.push(x / w); ys.push(y / h);
+      ch[0].push(data[p]); ch[1].push(data[p + 1]); ch[2].push(data[p + 2]);
+    }
+  }
+  if (xs.length < 60) return null;
+  const rowOf = i => [1, xs[i], ys[i], xs[i] * ys[i], xs[i] * xs[i], ys[i] * ys[i]];
+  const solve6 = (idx, v) => {
+    const A = Array.from({ length: 6 }, () => new Array(7).fill(0));
+    for (const i of idx) {
+      const r = rowOf(i);
+      for (let a = 0; a < 6; a++) {
+        A[a][6] += r[a] * v[i];
+        for (let b = 0; b < 6; b++) A[a][b] += r[a] * r[b];
+      }
+    }
+    for (let col = 0; col < 6; col++) {
+      let piv = col;
+      for (let r = col + 1; r < 6; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+      if (Math.abs(A[piv][col]) < 1e-12) return null;
+      [A[col], A[piv]] = [A[piv], A[col]];
+      for (let r = 0; r < 6; r++) {
+        if (r === col) continue;
+        const f = A[r][col] / A[col][col];
+        for (let k = col; k <= 6; k++) A[r][k] -= f * A[col][k];
+      }
+    }
+    return A.map((row, i) => row[6] / row[i]);
+  };
+  const coef = [];
+  for (let c = 0; c < 3; c++) {
+    let idx = xs.map((_, i) => i);
+    let k = solve6(idx, ch[c]);
+    if (!k) return null;
+    // Trim: drop samples far from the fit (a mark on the ring, the object
+    // touching it), refit once.
+    const res = idx.map(i => { const r = rowOf(i); let v = 0; for (let a = 0; a < 6; a++) v += r[a] * k[a]; return Math.abs(ch[c][i] - v); });
+    const sorted = res.slice().sort((a, b) => a - b);
+    const med = sorted[sorted.length >> 1] || 0;
+    const thr = Math.max(6, 3 * 1.4826 * med);
+    const keep = idx.filter((i, j) => res[j] <= thr);
+    if (keep.length >= 60 && keep.length < idx.length) { const k2 = solve6(keep, ch[c]); if (k2) k = k2; }
+    coef.push(k);
+  }
+  return {
+    at: (c, x, y) => {
+      const u = x / w, v = y / h, k = coef[c];
+      const val = k[0] + k[1] * u + k[2] * v + k[3] * u * v + k[4] * u * u + k[5] * v * v;
+      return val < 0 ? 0 : val > 255 ? 255 : val;
+    },
+    fallback,
+  };
 }
 
 export function otsuThreshold(diff) {

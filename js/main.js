@@ -8278,6 +8278,7 @@ window.__app = {
     set fitOn(v) { state.sheetFit = !!v; },
     checks: () => calibChecks(),
     get window() { return state.sheetWindow; },
+    get lighting() { return !!(state.diffMap && state.diffMap.lighting); },
     get warn() { return state.sheetWindowWarn; },
     get saved() { return state.sheetSaved; },
     clearChecks: () => { try { localStorage.removeItem(CALIB_CHECKS_KEY); } catch { /* blocked */ } },
