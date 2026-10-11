@@ -1,9 +1,9 @@
 ---
 file: README.md
-version: 1.7
+version: 1.8
 author: Sam Cao
 created: 2026-07-20
-last_updated: 2026-09-29
+last_updated: 2026-10-11
 description: User-facing guide to 2.5D, covering the four-step pipeline from photo to traced outline to printable solid to drawer layout.
 ai_update: Update last_updated and bump version. The filename is fixed, so do not rename this file. Record what shipped under Roadmap, Shipped, which is this document's changelog; do not add a second one.
 ---
@@ -1269,9 +1269,13 @@ All of this is planned in `docs/calibration_and_backlog_prd_v1.2.md`.
   large pieces is a laser and router concern in practice, and the printed
   case is better served by Gridfinity, which never needs big pieces joined.
 - **3MF export** — colours and per-object metadata that STL cannot carry.
-- **Keys** — trace your own key's blade profile and pick a keyway/blank
-  (Schlage C, Kwikset KW1/4, …), optionally auto-detecting the type. Keys are
-  small, so the coin or card reference is the right scale.
+- **Keys** — built, and moved out: photograph a key on a credit card, read the
+  bitting, print a spare. It forked from this codebase in July 2026 and is its
+  own project now, [**Funny Looking Rock**](https://github.com/zillaness/Funny-Looking-Rock)
+  (live at https://zillaness.github.io/Funny-Looking-Rock/). The two no longer
+  share code at runtime; improvements move between them by porting (its
+  text-to-loops module became `js/text.js` here; it took `edgeFit.js` and the
+  paper-aspect check from here).
 - **Full 3D from multi-view drawings** — reconstruct a solid from top/front/
   side by extruding each view and intersecting (needs a 3D boolean kernel).
   The Phase 1 view detection is the groundwork; see `docs/cad-import-spec.md`.
