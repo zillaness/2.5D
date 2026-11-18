@@ -32,6 +32,9 @@ export class TraceEditor {
     this.maskOverlay = null; // canvas tinting segmented pixels
     this.showMask = false;
     this.pxPerMm = 4;
+    // Optional hooks (unset = no effect; used by claudeBridge.js):
+    this.imageFilter = '';   // canvas filter for the photo layer only, e.g. 'brightness(2)'
+    this.overlayHook = null; // (ctx, mmToScreen) => void, drawn over the photo, under the trace
 
     this.outer = [];         // [{x,y}] mm
     this.holes = [];         // [[{x,y}]] mm (traced holes)
@@ -1897,9 +1900,17 @@ export class TraceEditor {
     ctx.translate(this.vp.ox, this.vp.oy);
     ctx.scale(s, s);
     ctx.imageSmoothingEnabled = s < 4;
+    if (this.imageFilter) ctx.filter = this.imageFilter;
     ctx.drawImage(this.rectified, 0, 0);
+    if (this.imageFilter) ctx.filter = 'none';
     if (this.showMask && this.maskOverlay) ctx.drawImage(this.maskOverlay, 0, 0);
     ctx.restore();
+
+    if (this.overlayHook) {
+      ctx.save();
+      this.overlayHook(ctx, p => this._mmToScreen(p));
+      ctx.restore();
+    }
 
     const drawLoop = (pts, loopIdx, stroke, fill) => {
       if (pts.length < 2) return;

@@ -42,6 +42,18 @@ export class Viewport {
     this.oy = (vh - this.contentH * this.scale) / 2;
   }
 
+  // Zoom so the world-space box (x0,y0)-(x1,y1) fills the view, centred,
+  // with `pad` CSS px around it. No-op while the canvas is hidden (0×0).
+  fitBox(x0, y0, x1, y1, pad = 20) {
+    const { w: vw, h: vh } = this.viewSize();
+    if (vw <= pad * 2 || vh <= pad * 2) return;
+    const bw = Math.max(1e-6, Math.abs(x1 - x0)), bh = Math.max(1e-6, Math.abs(y1 - y0));
+    const s = Math.min((vw - pad * 2) / bw, (vh - pad * 2) / bh);
+    this.scale = Math.max(this.minScale, Math.min(this.maxScale, s));
+    this.ox = vw / 2 - ((x0 + x1) / 2) * this.scale;
+    this.oy = vh / 2 - ((y0 + y1) / 2) * this.scale;
+  }
+
   zoomAt(sx, sy, factor) {
     const ns = Math.max(this.minScale, Math.min(this.maxScale, this.scale * factor));
     const f = ns / this.scale;

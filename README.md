@@ -309,6 +309,64 @@ button also has an **outline library** that saves drawer/toolbox/tray outlines
 to this browser for reuse (foundation for the upcoming foam/Gridfinity
 exports).
 
+## Claude bridge
+
+A review loop with Claude (`js/claudeBridge.js`): Claude pre-traces an outline
+from a photo, hands it over as a project, you correct the doubtful stretches in
+step 2, and the corrected trace goes back.
+
+**In.** On start the app looks for `project.json` beside `index.html` (or
+`?project=<same-origin url>`; an empty `?project=` switches the lookup off).
+If there is none, nothing changes. If there is one it is loaded straight into
+step 2. It is an ordinary 2.5D project — `rectified` (JPEG data URL) +
+`pxPerMm` + `trace` are enough — with an optional `review` block. All
+coordinates are millimetres, origin top-left of the rectified image, y down:
+
+```json
+"review": {
+  "id": "a5-side-2026-11-12",
+  "title": "Side wall",
+  "spans": [{ "id": "s1", "label": "Latch finger", "status": "unsure",
+              "note": "Edge is dark-on-dark here.",
+              "pts": [[61.2, 18.4], [62.0, 24.9]],
+              "view": [55, 14, 68, 30] }],
+  "ghosts": [{ "label": "Far wall", "color": "#ff6a1a",
+               "pts": [[56, 18], [60.5, 20]], "closed": false }]
+}
+```
+
+Each span is a stretch Claude is unsure about: `pts` is the open polyline as
+Claude traced it (drawn as a dashed yellow band that stays put while you edit,
+thin green once you mark it **Fixed** or **OK as is**), `view` the box its
+**Go** button zooms to. Ghosts are reference lines in their own colour. The
+**Claude review** panel at the top of step 2 lists the spans with a status and
+a short note back; **Lift shadows** brightens the photo only, for dark-on-dark
+edges. The `review` block round-trips through the 💾 Project copy/paste.
+
+**Out.** **Send to Claude** writes the document below to `traces/current` in
+the artifact's `db` store (only available when the app runs as a Claude
+artifact); **Copy for Claude** puts the same JSON on the clipboard to paste
+into the chat. It never contains the image:
+
+```json
+{ "app": "2.5D", "kind": "trace-return", "projectId": "a5-side-2026-11-12",
+  "sentAt": "2026-11-12T18:30:00.000Z", "pxPerMm": 16.5,
+  "trace": { "outer": [{ "x": 12.5, "y": 8.1 }], "holes": [], "circles": [] },
+  "sections": [{ "name": "Cover front face", "pts": [{ "x": 3.1, "y": 9.6 }] }],
+  "arcs": [], "lines": [], "measurements": [], "constraints": [],
+  "spans": [{ "id": "s1", "status": "fixed", "userNote": "" }] }
+```
+
+`sections` carries every drawn section's footprint by name. Claude can hand over
+a second loop to correct (for example a face beside the main outline) as a
+section in the project's `regions`; the user edits it with the same tools as
+the outline.
+
+Numbers are rounded to 0.0001 mm. Unsent edits are kept in this browser
+(`localStorage`, key `2p5d-bridge-draft:<projectId>`) and restored on the next
+start; **Reset to Claude's trace** discards them. Rotating the view is disabled
+while a hand-off is open, so the trace stays in the image frame Claude sent.
+
 ## Tips for good photos
 
 - Shoot from directly above, with the object roughly centred over the paper.
@@ -350,6 +408,7 @@ of a millimetre with a careful photo.
   would split or empty the shape (treatment bigger than a feature), it clamps
   and flattens there instead of producing a broken mesh.
 - `js/exporters.js` — binary STL and true-scale SVG.
+- `js/claudeBridge.js` — the review hand-off with Claude (see *Claude bridge*).
 - Rendering: three.js; polygon clipping: clipper-lib; triangulation: earcut —
   all vendored in `vendor/` (MIT / ISC / Boost licences, see the files).
 

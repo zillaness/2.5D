@@ -19,6 +19,7 @@ import { measureInfo, loopStats, REGION_LOOP_BASE } from './measure.js';
 import { suggestRegions } from './regions.js';
 import { toBinarySTL, toSVG, toDXF, downloadBlob } from './exporters.js';
 import { APP_VERSION } from './version.js';
+import { initClaudeBridge } from './claudeBridge.js';
 
 // Export quality presets: chord tolerance (mm) for round features and the
 // arc-segment count for chamfer/fillet curves. Smaller = smoother + more tris.
@@ -66,6 +67,7 @@ const state = {
   meshData: null,
   step: 1,
   units: 'mm', // display unit; inputs accept both (12.7 / 1/2" / 0.5 in)
+  review: null, // Claude review block of the loaded project, if any (see claudeBridge.js)
 };
 
 const fmtDim = mm => formatLength(mm, state.units);
@@ -1608,6 +1610,7 @@ function serializeProject(includePhoto) {
     arcs: traceEditor.arcs,
     lines: traceEditor.lines,
     holeTemplate: traceEditor.holeTemplate,
+    review: state.review || undefined,
     pxPerMm: state.rect ? state.rect.pxPerMm : null,
     rectified: state.rect ? state.rect.canvas.toDataURL('image/jpeg', 0.85) : null,
     photo: includePhoto && state.image ? imageToDataURL(state.image) : null,
@@ -1700,6 +1703,7 @@ function loadProject(p) {
     toast('Project loaded.');
     const hasTrace = p.trace && p.trace.outer && p.trace.outer.length >= 3;
     goStep(hasTrace ? (state.rect ? 2 : 3) : 1);
+    claudeBridge.projectLoaded(p);
   };
 
   const restoreRect = () => {
@@ -2091,12 +2095,17 @@ $('themeToggle').addEventListener('click', () => {
 
 updateStepButtons();
 
+// ---------- Claude bridge ----------
+// Review hand-off with Claude: loads a project.json beside the page, if there
+// is one, and sends the corrected trace back. Inert otherwise.
+const claudeBridge = initClaudeBridge({ state, traceEditor, loadProject, toast });
+
 $('appVersion').textContent = `v${APP_VERSION}`;
 document.title = `2.5D v${APP_VERSION} — photo to printable solid`;
 
 // Test hook (used by the headless test-suite; harmless in normal use).
 window.__app = {
   state, goStep, retrace, rebuildMesh, loadImageFromURL, autoDetect, doRectify,
-  cornerEditor, traceEditor, syncHolePanel, APP_VERSION,
+  cornerEditor, traceEditor, syncHolePanel, claudeBridge, APP_VERSION,
   get viewer() { return viewer; },
 };

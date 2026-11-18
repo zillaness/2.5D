@@ -221,6 +221,48 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .anno-row .anno-del:hover { color: var(--warn); }
 
+/* Claude bridge (js/claudeBridge.js): review hand-off panel at the top of step 2 */
+.bridge-panel {
+  border: 1px solid var(--accent2);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+.bridge-panel h3 { margin-top: 0; }
+.bridge-title { font-size: 13px; font-weight: 600; }
+.bridge-spans { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.bridge-span {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent2);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.bridge-span[data-status="fixed"], .bridge-span[data-status="ok"] { border-left-color: var(--good); }
+.bridge-span.active { border-color: var(--accent); border-left-color: var(--accent2); }
+.bridge-span.active[data-status="fixed"], .bridge-span.active[data-status="ok"] { border-left-color: var(--good); }
+.bridge-span-head { display: flex; align-items: center; gap: 6px; }
+.bridge-span-label { flex: 1; font-weight: 600; }
+.bridge-span-head .btn { margin: 0; }
+.bridge-span .hint { margin: 4px 0 6px; }
+.bridge-span-ctl { display: flex; gap: 6px; margin-top: 6px; }
+.bridge-span-ctl select { width: auto; padding: 4px 6px; font-size: 12px; background: var(--bg2); }
+.bridge-span-ctl input[type="text"] { flex: 1; min-width: 0; padding: 4px 8px; font-size: 12px; background: var(--bg2); }
+.bridge-panel .btn-row .btn { flex: 1; padding: 5px 4px; white-space: nowrap; }
+#bridgeStatus.info { color: var(--good); }
+#bridgeStatus.warn { color: var(--warn); }
+#bridgeCopyText {
+  width: 100%;
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: 11px/1.4 ui-monospace, monospace;
+  padding: 8px;
+  resize: vertical;
+}
+
 #stage { flex: 1; position: relative; background: var(--bg); }
 .stage-view { position: absolute; inset: 0; }
 .stage-view canvas { width: 100%; height: 100%; display: block; touch-action: none; }

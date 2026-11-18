@@ -81,7 +81,9 @@ const consoleErrors = [];
 page.on('console', m => { if (m.type() === 'error') consoleErrors.push(m.text()); });
 page.on('pageerror', e => consoleErrors.push(String(e)));
 
-await page.goto(`http://127.0.0.1:${port}/`);
+// `?project=` switches off the Claude-bridge lookup of project.json (its 404
+// would count as a console error, and a stray local one would hijack the run).
+await page.goto(`http://127.0.0.1:${port}/?project=`);
 await page.waitForFunction(() => window.__app && window.ClipperLib);
 
 // ---------- 1. Build the synthetic photo & feed it in ----------

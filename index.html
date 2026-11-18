@@ -130,6 +130,32 @@
     <section id="panel2" class="panel" hidden>
       <h2>Trace &amp; holes</h2>
 
+      <!-- Claude bridge (js/claudeBridge.js): a pre-traced project handed over
+           for review. Hidden unless a project.json / review block is loaded. -->
+      <div id="bridgePanel" class="bridge-panel" hidden>
+        <h3>Claude review <span id="bridgeProgress" class="val"></span></h3>
+        <p id="bridgeTitle" class="bridge-title"></p>
+        <p id="bridgeHint" class="hint"></p>
+        <div id="bridgeSpans" class="bridge-spans"></div>
+        <div id="bridgeShowRow" class="field-row">
+          <label class="check"><input type="checkbox" id="bridgeShowMarks" checked> Show marks</label>
+          <label class="check"><input type="checkbox" id="bridgeShowGhosts" checked> Show ghosts</label>
+        </div>
+        <div class="btn-row">
+          <button id="bridgeSendBtn" class="btn small primary" title="Save the corrected trace where Claude can read it">Send to Claude</button>
+          <button id="bridgeCopyBtn" class="btn small" title="Copy the corrected trace as JSON to paste into the chat">Copy for Claude</button>
+        </div>
+        <p id="bridgeSendNote" class="hint" hidden>Send only works inside the Claude artifact — here, use Copy for Claude and paste it into the chat.</p>
+        <p id="bridgeStatus" class="hint" hidden></p>
+        <textarea id="bridgeCopyText" rows="4" readonly spellcheck="false" hidden></textarea>
+        <button id="bridgeResetBtn" class="btn small ghost" title="Discard your edits and reload the trace as Claude sent it">↺ Reset to Claude's trace</button>
+      </div>
+
+      <div class="field" id="liftField">
+        <label>Lift shadows <span id="liftVal" class="val"></span></label>
+        <input type="range" id="liftSlider" min="1" max="4" step="0.1" value="1" title="Brighten the photo only (not the outline) to see dark-on-dark edges">
+      </div>
+
       <div class="field">
         <label>Detection threshold <span id="threshVal" class="val"></span></label>
         <div class="slider-row">
