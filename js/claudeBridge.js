@@ -607,6 +607,20 @@ export function initClaudeBridge({ state, traceEditor, loadProject, toast }) {
   // Keep Delete/Backspace etc. in the copy box from hitting the canvas shortcuts.
   el.copyText.addEventListener('keydown', e => e.stopPropagation());
 
+  // A project embedded in the page itself: a single-file editor made for one
+  // hand-off (Claude chats hand these out as a download). It carries the
+  // project as JSON in <script type="application/json" id="claude-project">,
+  // which works from file:// where fetching does not.
+  const embedded = document.getElementById('claude-project');
+  if (embedded && embedded.textContent.trim()) {
+    const text = embedded.textContent;
+    setTimeout(() => {
+      if (state.image || state.rect) return;
+      openProject(text, { restoreDraft: true });
+    }, 0);
+    return { projectLoaded, buildPayload };
+  }
+
   // Fetch the hand-off project. Any failure — 404, network, file:// — is
   // silent and leaves the app as it is.
   (async () => {
